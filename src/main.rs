@@ -32,6 +32,10 @@ struct Args {
     /// 最大ファイルサイズ (MB)
     #[arg(long, default_value = "8")]
     max_size: usize,
+
+    /// 出力先フォルダー
+    #[arg(short, long, default_value = "./")]
+    output: PathBuf,
 }
 
 #[derive(Debug, Clone, Copy, clap::ValueEnum)]
@@ -58,7 +62,6 @@ impl BackgroundColor {
 
 /// 画像処理の結果
 struct ProcessResult {
-    input_path: PathBuf,
     output_path: PathBuf,
     final_size_mb: f64,
     final_quality: Option<u8>,
@@ -80,7 +83,17 @@ fn main() -> Result<()> {
         anyhow::bail!("Input path is not a directory: {}", args.input.display());
     }
 
+    // 出力フォルダーの検証と作成
+    if !args.output.exists() {
+        fs::create_dir_all(&args.output)
+            .with_context(|| format!("Failed to create output folder: {}", args.output.display()))?;
+        println!("Created output folder: {}", args.output.display());
+    } else if !args.output.is_dir() {
+        anyhow::bail!("Output path is not a directory: {}", args.output.display());
+    }
+
     println!("Processing images in: {}", args.input.display());
+    println!("Output folder: {}", args.output.display());
 
     // 画像ファイルを収集
     let image_files = collect_image_files(&args.input)?;
@@ -104,7 +117,7 @@ fn main() -> Result<()> {
         .filter_map(|path| {
             let current = processed_count.fetch_add(1, Ordering::SeqCst) + 1;
 
-            match process_image(path, &args) {
+            match process_image(path, &args.output, &args) {
                 Ok(result) => {
                     success_count.fetch_add(1, Ordering::SeqCst);
 
@@ -180,7 +193,7 @@ fn is_supported_image(path: &Path) -> bool {
 }
 
 /// 画像を処理
-fn process_image(input_path: &Path, args: &Args) -> Result<ProcessResult> {
+fn process_image(input_path: &Path, output_folder: &Path, args: &Args) -> Result<ProcessResult> {
     // 画像を読み込む
     let img = image::open(input_path)
         .with_context(|| format!("Failed to open image: {}", input_path.display()))?;
@@ -193,7 +206,7 @@ fn process_image(input_path: &Path, args: &Args) -> Result<ProcessResult> {
     };
 
     // 出力パスを生成
-    let output_path = generate_output_path(input_path)?;
+    let output_path = generate_output_path(input_path, output_folder)?;
 
     // 最大ファイルサイズ (バイト)
     let max_size_bytes = args.max_size * 1024 * 1024;
@@ -205,7 +218,6 @@ fn process_image(input_path: &Path, args: &Args) -> Result<ProcessResult> {
     let final_size_mb = final_size as f64 / (1024.0 * 1024.0);
 
     Ok(ProcessResult {
-        input_path: input_path.to_path_buf(),
         output_path,
         final_size_mb,
         final_quality: if final_quality < args.quality {
@@ -274,20 +286,25 @@ fn convert_aspect_ratio_pad(img: DynamicImage, bg_color: BackgroundColor) -> Dyn
     DynamicImage::ImageRgba8(canvas)
 }
 
-/// 出力パスを生成
-fn generate_output_path(input_path: &Path) -> Result<PathBuf> {
-    let parent = input_path
-        .parent()
-        .context("Failed to get parent directory")?;
-
+/// 出力パスを生成（重複時は連番を追加）
+fn generate_output_path(input_path: &Path, output_folder: &Path) -> Result<PathBuf> {
     let stem = input_path
         .file_stem()
         .context("Failed to get file stem")?
         .to_string_lossy();
 
     let output_filename = format!("{}_processed.jpg", stem);
+    let mut output_path = output_folder.join(&output_filename);
 
-    Ok(parent.join(output_filename))
+    // ファイル名が重複する場合は連番を追加
+    let mut counter = 1;
+    while output_path.exists() {
+        let numbered_filename = format!("{}_processed_{}.jpg", stem, counter);
+        output_path = output_folder.join(numbered_filename);
+        counter += 1;
+    }
+
+    Ok(output_path)
 }
 
 /// サイズ制限付きで画像を保存
