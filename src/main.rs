@@ -38,6 +38,7 @@ struct Args {
 enum ConversionMode {
     Crop,
     Pad,
+    Quality,
 }
 
 #[derive(Debug, Clone, Copy, clap::ValueEnum)]
@@ -144,10 +145,7 @@ fn main() -> Result<()> {
     let success = success_count.load(Ordering::SeqCst);
     let failed = failed_count.load(Ordering::SeqCst);
 
-    println!(
-        "\nCompleted: {} successful, {} failed",
-        success, failed
-    );
+    println!("\nCompleted: {} successful, {} failed", success, failed);
     println!("Total time: {:.1}s", duration.as_secs_f64());
 
     Ok(())
@@ -187,10 +185,11 @@ fn process_image(input_path: &Path, args: &Args) -> Result<ProcessResult> {
     let img = image::open(input_path)
         .with_context(|| format!("Failed to open image: {}", input_path.display()))?;
 
-    // 4:5のアスペクト比に変換
+    // 4:5のアスペクト比に変換（Qualityモードの場合は変換しない）
     let converted = match args.mode {
         ConversionMode::Crop => convert_aspect_ratio_crop(img),
         ConversionMode::Pad => convert_aspect_ratio_pad(img, args.bg_color),
+        ConversionMode::Quality => img, // 元の画像をそのまま使用
     };
 
     // 出力パスを生成
@@ -328,8 +327,8 @@ fn save_with_size_limit(
 
 /// JPEG形式で画像を保存
 fn save_jpeg(img: &DynamicImage, path: &Path, quality: u8) -> Result<()> {
-    let file = File::create(path)
-        .with_context(|| format!("Failed to create file: {}", path.display()))?;
+    let file =
+        File::create(path).with_context(|| format!("Failed to create file: {}", path.display()))?;
 
     let mut writer = BufWriter::new(file);
 
