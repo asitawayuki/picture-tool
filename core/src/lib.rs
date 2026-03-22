@@ -328,7 +328,9 @@ fn save_jpeg(img: &DynamicImage, path: &Path, quality: u8) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use image::{ImageBuffer, Rgb};
     use std::fs;
+    use std::sync::atomic::AtomicUsize;
 
     fn test_config() -> ProcessingConfig {
         ProcessingConfig {
@@ -340,50 +342,489 @@ mod tests {
         }
     }
 
+    /// テスト用のRGB画像を指定サイズで生成しJPEGとして保存
+    fn create_test_image(path: &Path, width: u32, height: u32) {
+        let img = ImageBuffer::from_fn(width, height, |x, y| {
+            Rgb([(x % 256) as u8, (y % 256) as u8, ((x + y) % 256) as u8])
+        });
+        img.save(path).unwrap();
+    }
+
+    // =========================================================
+    // バリデーション
+    // =========================================================
+
     #[test]
-    fn test_validate_config_valid() {
-        let config = test_config();
+    fn validate_config_accepts_boundary_values() {
+        let mut config = test_config();
+        config.quality = 1;
+        assert!(validate_config(&config).is_ok());
+        config.quality = 100;
         assert!(validate_config(&config).is_ok());
     }
 
     #[test]
-    fn test_validate_config_quality_zero() {
+    fn validate_config_rejects_zero_and_over_100() {
         let mut config = test_config();
         config.quality = 0;
         assert!(validate_config(&config).is_err());
-    }
-
-    #[test]
-    fn test_validate_config_quality_over_100() {
-        let mut config = test_config();
         config.quality = 101;
         assert!(validate_config(&config).is_err());
     }
 
+    // =========================================================
+    // 画像形式判定
+    // =========================================================
+
     #[test]
-    fn test_is_supported_image() {
-        assert!(is_supported_image(Path::new("photo.jpg")));
-        assert!(is_supported_image(Path::new("photo.JPEG")));
-        assert!(is_supported_image(Path::new("photo.png")));
-        assert!(is_supported_image(Path::new("photo.webp")));
-        assert!(!is_supported_image(Path::new("doc.pdf")));
-        assert!(!is_supported_image(Path::new("noext")));
+    fn is_supported_image_recognizes_all_formats() {
+        for ext in &["jpg", "jpeg", "JPG", "JPEG", "png", "PNG", "webp", "WEBP"] {
+            assert!(
+                is_supported_image(Path::new(&format!("photo.{}", ext))),
+                "should accept .{}",
+                ext
+            );
+        }
     }
 
     #[test]
-    fn test_collect_image_files_empty_dir() {
+    fn is_supported_image_rejects_non_image_formats() {
+        for ext in &["pdf", "txt", "mp4", "gif", "bmp", "tiff", ""] {
+            let path = if ext.is_empty() {
+                "noext".to_string()
+            } else {
+                format!("file.{}", ext)
+            };
+            assert!(
+                !is_supported_image(Path::new(&path)),
+                "should reject .{}",
+                ext
+            );
+        }
+    }
+
+    // =========================================================
+    // ファイル収集
+    // =========================================================
+
+    #[test]
+    fn collect_image_files_finds_images_in_subdirectories() {
+        let dir = tempfile::tempdir().unwrap();
+        let sub = dir.path().join("subdir");
+        fs::create_dir(&sub).unwrap();
+
+        create_test_image(&dir.path().join("root.jpg"), 10, 10);
+        create_test_image(&sub.join("nested.png"), 10, 10);
+        fs::write(dir.path().join("readme.txt"), b"text").unwrap();
+
+        let files = collect_image_files(dir.path()).unwrap();
+        assert_eq!(files.len(), 2);
+    }
+
+    #[test]
+    fn collect_image_files_returns_empty_for_empty_dir() {
         let dir = tempfile::tempdir().unwrap();
         let files = collect_image_files(dir.path()).unwrap();
         assert!(files.is_empty());
     }
 
+    // =========================================================
+    // Cropモード: 実際の画像でアスペクト比を検証
+    // =========================================================
+
     #[test]
-    fn test_collect_image_files_with_images() {
+    fn crop_mode_produces_4_5_aspect_ratio_from_landscape() {
         let dir = tempfile::tempdir().unwrap();
-        fs::write(dir.path().join("a.jpg"), b"fake").unwrap();
-        fs::write(dir.path().join("b.png"), b"fake").unwrap();
-        fs::write(dir.path().join("c.txt"), b"fake").unwrap();
-        let files = collect_image_files(dir.path()).unwrap();
-        assert_eq!(files.len(), 2);
+        let out = tempfile::tempdir().unwrap();
+        let input = dir.path().join("landscape.jpg");
+        // 横長画像 (1000x600, ratio=1.67)
+        create_test_image(&input, 1000, 600);
+
+        let config = ProcessingConfig {
+            mode: ConversionMode::Crop,
+            ..test_config()
+        };
+        let result = process_image(&input, out.path(), &config).unwrap();
+
+        let output_img = image::open(&result.output_path).unwrap();
+        let (w, h) = output_img.dimensions();
+        let ratio = w as f64 / h as f64;
+        assert!(
+            (ratio - 0.8).abs() < 0.02,
+            "crop結果のアスペクト比が4:5でない: {}x{} (ratio={})",
+            w, h, ratio
+        );
+    }
+
+    #[test]
+    fn crop_mode_produces_4_5_aspect_ratio_from_portrait() {
+        let dir = tempfile::tempdir().unwrap();
+        let out = tempfile::tempdir().unwrap();
+        let input = dir.path().join("portrait.jpg");
+        // 縦長画像 (600x1200, ratio=0.5)
+        create_test_image(&input, 600, 1200);
+
+        let config = ProcessingConfig {
+            mode: ConversionMode::Crop,
+            ..test_config()
+        };
+        let result = process_image(&input, out.path(), &config).unwrap();
+
+        let output_img = image::open(&result.output_path).unwrap();
+        let (w, h) = output_img.dimensions();
+        let ratio = w as f64 / h as f64;
+        assert!(
+            (ratio - 0.8).abs() < 0.02,
+            "crop結果のアスペクト比が4:5でない: {}x{} (ratio={})",
+            w, h, ratio
+        );
+    }
+
+    // =========================================================
+    // Padモード: アスペクト比とサイズが元画像以上であることを検証
+    // =========================================================
+
+    #[test]
+    fn pad_mode_produces_4_5_and_preserves_original_content() {
+        let dir = tempfile::tempdir().unwrap();
+        let out = tempfile::tempdir().unwrap();
+        let input = dir.path().join("wide.jpg");
+        // 横長画像
+        create_test_image(&input, 800, 400);
+
+        let config = ProcessingConfig {
+            mode: ConversionMode::Pad,
+            bg_color: BackgroundColor::White,
+            ..test_config()
+        };
+        let result = process_image(&input, out.path(), &config).unwrap();
+
+        let output_img = image::open(&result.output_path).unwrap();
+        let (w, h) = output_img.dimensions();
+        let ratio = w as f64 / h as f64;
+        assert!(
+            (ratio - 0.8).abs() < 0.02,
+            "pad結果のアスペクト比が4:5でない: {}x{} (ratio={})",
+            w, h, ratio
+        );
+        // パディングは元画像以上のサイズになる
+        assert!(w >= 800, "幅が元画像より小さい");
+        assert!(h >= 400, "高さが元画像より小さい");
+    }
+
+    #[test]
+    fn pad_mode_with_black_background() {
+        let dir = tempfile::tempdir().unwrap();
+        let out = tempfile::tempdir().unwrap();
+        let input = dir.path().join("tall.jpg");
+        create_test_image(&input, 400, 800);
+
+        let config = ProcessingConfig {
+            mode: ConversionMode::Pad,
+            bg_color: BackgroundColor::Black,
+            ..test_config()
+        };
+        let result = process_image(&input, out.path(), &config).unwrap();
+        assert!(Path::new(&result.output_path).exists());
+
+        let output_img = image::open(&result.output_path).unwrap();
+        let (w, h) = output_img.dimensions();
+        let ratio = w as f64 / h as f64;
+        assert!((ratio - 0.8).abs() < 0.02);
+    }
+
+    // =========================================================
+    // Qualityモード: アスペクト比は変わらない
+    // =========================================================
+
+    #[test]
+    fn quality_mode_preserves_original_aspect_ratio() {
+        let dir = tempfile::tempdir().unwrap();
+        let out = tempfile::tempdir().unwrap();
+        let input = dir.path().join("original.jpg");
+        create_test_image(&input, 1600, 900);
+
+        let config = ProcessingConfig {
+            mode: ConversionMode::Quality,
+            ..test_config()
+        };
+        let result = process_image(&input, out.path(), &config).unwrap();
+
+        let output_img = image::open(&result.output_path).unwrap();
+        let (w, h) = output_img.dimensions();
+        let original_ratio = 1600.0 / 900.0;
+        let output_ratio = w as f64 / h as f64;
+        assert!(
+            (output_ratio - original_ratio).abs() < 0.02,
+            "quality modeでアスペクト比が変わった: original={}, output={}",
+            original_ratio,
+            output_ratio
+        );
+    }
+
+    // =========================================================
+    // 出力ファイル: 命名規則と重複回避
+    // =========================================================
+
+    #[test]
+    fn output_file_naming_adds_processed_suffix() {
+        let dir = tempfile::tempdir().unwrap();
+        let out = tempfile::tempdir().unwrap();
+        let input = dir.path().join("photo.jpg");
+        create_test_image(&input, 400, 500);
+
+        let result = process_image(&input, out.path(), &test_config()).unwrap();
+        assert!(
+            result.output_path.ends_with("photo_processed.jpg"),
+            "出力ファイル名が不正: {}",
+            result.output_path
+        );
+    }
+
+    #[test]
+    fn output_file_naming_handles_duplicate_names() {
+        let dir = tempfile::tempdir().unwrap();
+        let out = tempfile::tempdir().unwrap();
+        let input = dir.path().join("dup.jpg");
+        create_test_image(&input, 400, 500);
+
+        // 1回目
+        let r1 = process_image(&input, out.path(), &test_config()).unwrap();
+        assert!(r1.output_path.ends_with("dup_processed.jpg"));
+
+        // 2回目 — 同じ入力で重複
+        let r2 = process_image(&input, out.path(), &test_config()).unwrap();
+        assert!(
+            r2.output_path.ends_with("dup_processed_1.jpg"),
+            "重複時の連番が不正: {}",
+            r2.output_path
+        );
+    }
+
+    // =========================================================
+    // delete_originals: 成功時に削除、失敗時は保持
+    // =========================================================
+
+    #[test]
+    fn delete_originals_removes_source_on_success() {
+        let dir = tempfile::tempdir().unwrap();
+        let out = tempfile::tempdir().unwrap();
+        let input = dir.path().join("to_delete.jpg");
+        create_test_image(&input, 400, 500);
+
+        let config = ProcessingConfig {
+            delete_originals: true,
+            ..test_config()
+        };
+        let result = process_image(&input, out.path(), &config);
+        assert!(result.is_ok());
+        assert!(
+            !input.exists(),
+            "delete_originals=trueなのに元ファイルが残っている"
+        );
+    }
+
+    #[test]
+    fn delete_originals_false_keeps_source() {
+        let dir = tempfile::tempdir().unwrap();
+        let out = tempfile::tempdir().unwrap();
+        let input = dir.path().join("keep.jpg");
+        create_test_image(&input, 400, 500);
+
+        let config = ProcessingConfig {
+            delete_originals: false,
+            ..test_config()
+        };
+        process_image(&input, out.path(), &config).unwrap();
+        assert!(
+            input.exists(),
+            "delete_originals=falseなのに元ファイルが削除された"
+        );
+    }
+
+    // =========================================================
+    // process_batch: 並列処理と進捗コールバック
+    // =========================================================
+
+    #[test]
+    fn process_batch_processes_all_files() {
+        let dir = tempfile::tempdir().unwrap();
+        let out = tempfile::tempdir().unwrap();
+
+        let files: Vec<PathBuf> = (0..5)
+            .map(|i| {
+                let p = dir.path().join(format!("img_{}.jpg", i));
+                create_test_image(&p, 400, 500);
+                p
+            })
+            .collect();
+
+        let results = process_batch(&files, out.path(), &test_config(), None);
+        let success_count = results.iter().filter(|r| r.is_ok()).count();
+        assert_eq!(success_count, 5, "5枚すべて処理成功すべき");
+    }
+
+    #[test]
+    fn process_batch_progress_callback_receives_correct_counts() {
+        let dir = tempfile::tempdir().unwrap();
+        let out = tempfile::tempdir().unwrap();
+
+        let files: Vec<PathBuf> = (0..3)
+            .map(|i| {
+                let p = dir.path().join(format!("cb_{}.jpg", i));
+                create_test_image(&p, 400, 500);
+                p
+            })
+            .collect();
+
+        let max_seen = Arc::new(AtomicUsize::new(0));
+        let max_clone = Arc::clone(&max_seen);
+        let total_seen = Arc::new(AtomicUsize::new(0));
+        let total_clone = Arc::clone(&total_seen);
+
+        let cb: ProgressCallback = Box::new(move |current, total| {
+            max_clone.fetch_max(current, Ordering::SeqCst);
+            total_clone.store(total, Ordering::SeqCst);
+            true
+        });
+
+        process_batch(&files, out.path(), &test_config(), Some(cb));
+
+        assert_eq!(
+            max_seen.load(Ordering::SeqCst),
+            3,
+            "最大currentは3であるべき"
+        );
+        assert_eq!(
+            total_seen.load(Ordering::SeqCst),
+            3,
+            "totalは3であるべき"
+        );
+    }
+
+    #[test]
+    fn process_batch_cancellation_stops_remaining_items() {
+        let dir = tempfile::tempdir().unwrap();
+        let out = tempfile::tempdir().unwrap();
+
+        // 多めの画像を作成（rayon並列でもキャンセルが効くように）
+        let count = 100;
+        let files: Vec<PathBuf> = (0..count)
+            .map(|i| {
+                let p = dir.path().join(format!("cancel_{}.jpg", i));
+                create_test_image(&p, 400, 500);
+                p
+            })
+            .collect();
+
+        // 1枚処理完了後にキャンセル
+        let cb: ProgressCallback = Box::new(|current, _total| current < 1);
+
+        let results = process_batch(&files, out.path(), &test_config(), Some(cb));
+        let cancelled_count = results
+            .iter()
+            .filter(|r| {
+                r.as_ref()
+                    .err()
+                    .map_or(false, |e| e.to_string().contains("cancelled"))
+            })
+            .count();
+
+        // キャンセルされた結果が少なくとも1つ存在する
+        assert!(
+            cancelled_count > 0,
+            "キャンセルされた処理が1つもない（success={}, cancelled={}, total={}）",
+            results.iter().filter(|r| r.is_ok()).count(),
+            cancelled_count,
+            count
+        );
+    }
+
+    // =========================================================
+    // サムネイル生成
+    // =========================================================
+
+    #[test]
+    fn generate_thumbnail_returns_valid_base64_jpeg() {
+        let dir = tempfile::tempdir().unwrap();
+        let input = dir.path().join("thumb_src.jpg");
+        create_test_image(&input, 2000, 2500);
+
+        let base64_str = generate_thumbnail_base64(&input, 200).unwrap();
+
+        // base64デコードしてJPEGとして読めることを確認
+        use base64::Engine as _;
+        let bytes = base64::engine::general_purpose::STANDARD
+            .decode(&base64_str)
+            .expect("base64デコード失敗");
+
+        let cursor = std::io::Cursor::new(bytes);
+        let thumb = image::load(cursor, image::ImageFormat::Jpeg)
+            .expect("サムネイルがJPEGとして読めない");
+
+        let (w, h) = thumb.dimensions();
+        assert!(
+            w <= 200 && h <= 200,
+            "サムネイルが200px以内に収まっていない: {}x{}",
+            w,
+            h
+        );
+    }
+
+    #[test]
+    fn generate_thumbnail_for_nonexistent_file_returns_error() {
+        let result = generate_thumbnail_base64(Path::new("/nonexistent/image.jpg"), 200);
+        assert!(result.is_err());
+    }
+
+    // =========================================================
+    // ファイルサイズ制限
+    // =========================================================
+
+    #[test]
+    fn output_file_is_valid_jpeg() {
+        let dir = tempfile::tempdir().unwrap();
+        let out = tempfile::tempdir().unwrap();
+        let input = dir.path().join("valid.jpg");
+        create_test_image(&input, 800, 1000);
+
+        let result = process_image(&input, out.path(), &test_config()).unwrap();
+        let output_img = image::open(&result.output_path);
+        assert!(
+            output_img.is_ok(),
+            "出力ファイルが有効な画像として開けない"
+        );
+        assert!(result.final_size_mb > 0.0, "ファイルサイズが0");
+    }
+
+    // =========================================================
+    // serde: JSON直列化がTauriと互換
+    // =========================================================
+
+    #[test]
+    fn processing_config_serializes_to_expected_json() {
+        let config = test_config();
+        let json = serde_json::to_value(&config).unwrap();
+        assert_eq!(json["mode"], "crop");
+        assert_eq!(json["bg_color"], "white");
+        assert_eq!(json["quality"], 90);
+        assert_eq!(json["delete_originals"], false);
+    }
+
+    #[test]
+    fn processing_config_deserializes_from_frontend_json() {
+        // フロントエンドから送られてくるJSON形式
+        let json = r#"{
+            "mode": "pad",
+            "bg_color": "black",
+            "quality": 75,
+            "max_size_mb": 4,
+            "delete_originals": true
+        }"#;
+        let config: ProcessingConfig = serde_json::from_str(json).unwrap();
+        assert_eq!(config.mode, ConversionMode::Pad);
+        assert_eq!(config.bg_color, BackgroundColor::Black);
+        assert_eq!(config.quality, 75);
+        assert!(config.delete_originals);
     }
 }
