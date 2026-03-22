@@ -2,3 +2,4 @@
 gui-frontend/node_modules/
 gui-frontend/dist/
 gui/gen/
+.superpowers/
