@@ -120,9 +120,29 @@ pub async fn list_images(path: String) -> Result<Vec<ImageEntry>, String> {
 }
 
 #[tauri::command]
-pub async fn get_thumbnail(path: String) -> Result<String, String> {
-    core::generate_thumbnail_base64(Path::new(&path), 200)
-        .map_err(|e| e.to_string())
+pub async fn get_thumbnail(
+    state: tauri::State<'_, ProcessingState>,
+    path: String,
+) -> Result<String, String> {
+    // キャッシュ確認
+    {
+        let mut cache = state.thumbnail_cache.lock().unwrap();
+        if let Some(cached) = cache.get(&path) {
+            return Ok(cached.clone());
+        }
+    }
+
+    // キャッシュミス: 生成
+    let result = core::generate_thumbnail_base64(Path::new(&path), 200)
+        .map_err(|e| e.to_string())?;
+
+    // キャッシュに保存
+    {
+        let mut cache = state.thumbnail_cache.lock().unwrap();
+        cache.put(path, result.clone());
+    }
+
+    Ok(result)
 }
 
 #[tauri::command]
