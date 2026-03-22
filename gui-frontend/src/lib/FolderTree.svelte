@@ -65,9 +65,7 @@
   function selectFolder(node: TreeNode) {
     selectedPath = node.entry.path;
     onSelectFolder(node.entry.path);
-    if (!node.expanded) {
-      toggleNode(node);
-    }
+    toggleNode(node);
   }
 
   $effect(() => {
