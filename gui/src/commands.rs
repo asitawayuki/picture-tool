@@ -3,6 +3,9 @@ use crate::types::*;
 use picture_tool_core as core;
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::Ordering;
+use std::sync::Arc;
+use tauri::Emitter;
 
 #[tauri::command]
 pub fn list_directory(path: String) -> Result<Vec<FileEntry>, String> {
@@ -130,12 +133,68 @@ pub async fn process_images(
     output_folder: String,
     config: core::ProcessingConfig,
 ) -> Result<Vec<core::ProcessResult>, String> {
-    Err("Not implemented".to_string()) // Task 6で実装
+    core::validate_config(&config).map_err(|e| e.to_string())?;
+
+    // 出力フォルダーを作成
+    let output = output_folder.clone();
+    let output_path = Path::new(&output);
+    if !output_path.exists() {
+        fs::create_dir_all(output_path).map_err(|e| e.to_string())?;
+    }
+
+    // キャンセルフラグをリセット
+    state.cancel_flag.store(false, Ordering::Relaxed);
+
+    let file_paths: Vec<PathBuf> = files.iter().map(PathBuf::from).collect();
+    let cancel_flag = Arc::clone(&state.cancel_flag);
+    let files_clone = files.clone();
+    let app_handle_clone = app_handle.clone();
+
+    // process_batchはrayonで並列処理するためブロッキング。
+    // Tauriのasync runtimeをブロックしないようspawn_blockingでオフロード。
+    let results = tokio::task::spawn_blocking(move || {
+        let on_progress: core::ProgressCallback = Box::new(move |current, total| -> bool {
+            let file_name = files_clone
+                .get(current.saturating_sub(1))
+                .cloned()
+                .unwrap_or_default();
+
+            let file_name_short = Path::new(&file_name)
+                .file_name()
+                .unwrap_or_default()
+                .to_string_lossy()
+                .to_string();
+
+            let _ = app_handle_clone.emit(
+                "processing-progress",
+                ProgressPayload {
+                    current,
+                    total,
+                    file_name: file_name_short,
+                },
+            );
+
+            !cancel_flag.load(Ordering::Relaxed)
+        });
+
+        let output_path = PathBuf::from(&output);
+        core::process_batch(&file_paths, &output_path, &config, Some(on_progress))
+    })
+    .await
+    .map_err(|e| e.to_string())?;
+
+    let successes: Vec<core::ProcessResult> = results
+        .into_iter()
+        .filter_map(|r| r.ok())
+        .collect();
+
+    Ok(successes)
 }
 
 #[tauri::command]
 pub fn cancel_processing(state: tauri::State<'_, ProcessingState>) -> Result<(), String> {
-    Ok(()) // Task 6で実装
+    state.cancel_flag.store(true, Ordering::Relaxed);
+    Ok(())
 }
 
 // 注: pick_folderはTauriコマンドとしては実装しない。
