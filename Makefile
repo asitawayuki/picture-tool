@@ -33,7 +33,7 @@ install:
 # リリースビルド（フロントエンド埋め込み済みバイナリ）
 release: build-frontend
 	cargo build --release -p picture-tool
-	cargo build --release -p picture-tool-gui
+	cargo build --release -p picture-tool-gui --features tauri/custom-protocol
 
 # クリーンアップ
 clean:
