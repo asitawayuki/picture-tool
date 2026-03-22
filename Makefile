@@ -7,9 +7,9 @@ build: build-cli build-gui
 build-cli:
 	cargo build -p picture-tool
 
-# GUIアプリのビルド（フロントエンド含む）
-build-gui: build-frontend
-	cargo build -p picture-tool-gui
+# GUIアプリのビルド（フロントエンド埋め込み）
+build-gui:
+	cd gui && bunx @tauri-apps/cli build
 
 # フロントエンドのビルド
 build-frontend:
@@ -17,7 +17,7 @@ build-frontend:
 
 # GUI開発サーバー起動
 dev:
-	cd gui && cargo tauri dev
+	cd gui && bunx @tauri-apps/cli dev
 
 # 全テスト実行
 test: test-core
@@ -31,9 +31,9 @@ install:
 	cd gui-frontend && bun install
 
 # リリースビルド
-release: build-frontend
+release:
 	cargo build --release -p picture-tool
-	cargo build --release -p picture-tool-gui
+	cd gui && bunx @tauri-apps/cli build
 
 # クリーンアップ
 clean:
