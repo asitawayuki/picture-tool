@@ -1,132 +1,124 @@
-# Picture Tool - 画像バッチ処理ツール
+# Picture Tool
 
-画像ファイルを一括で4:5のアスペクト比に変換し、指定サイズ以下に圧縮するRust製のコマンドラインツールです。
+Instagram投稿用の画像一括変換ツール。写真を4:5アスペクト比に変換し、ファイルサイズを制限します。CLI/GUIの2つのインターフェースを提供。
 
-## 特徴
+## 機能
 
-- **4:5アスペクト比変換**: Instagram等のSNSに最適なアスペクト比に自動変換
-- **自動サイズ圧縮**: 8MB（デフォルト）を超える画像を自動的に圧縮
-- **高速並列処理**: rayonによるマルチスレッド処理で大量の画像を高速処理
-- **柔軟な変換モード**: クロップまたはパディングを選択可能
-- **対応フォーマット**: JPEG, PNG, WebP
+- **4:5アスペクト比変換** — クロップ / パディング / サイズのみの3モード
+- **ファイルサイズ制限** — 品質を自動調整して指定サイズ以下に圧縮
+- **並列処理** — rayonによる高速バッチ処理
+- **GUIアプリ** — フォルダー参照 → 写真選択 → プレビュー → 変換の一連のフロー
+- **元ファイル削除オプション** — 変換完了後に元ファイルを自動削除可能
+- **対応フォーマット** — JPEG, PNG, WebP（出力は常にJPEG）
 
-## インストール
+## セットアップ
 
-### ビルド要件
-- Rust 1.70以降
+### 前提条件
 
-### ビルド方法
+- [Rust](https://rustup.rs/) 1.70以降
+- [Bun](https://bun.sh/)（フロントエンドビルド用）
+- Tauri v2の[システム依存](https://v2.tauri.app/start/prerequisites/)（GUI使用時）
+
+### インストール
 
 ```bash
-cargo build --release
+make install   # フロントエンド依存のインストール
+make build     # CLI + GUI ビルド
 ```
-
-実行ファイルは `target/release/picture-tool` に生成されます。
 
 ## 使い方
 
-### 基本的な使い方
+### CLI
 
 ```bash
-# 指定フォルダー内の全画像を処理（クロップモード）
-./target/release/picture-tool --input ./photos
+# 基本（4:5にクロップ）
+cargo run -p picture-tool -- -i ./photos -o ./output
 
-# 短縮形
-./target/release/picture-tool -i ./photos
+# パディングモード（黒背景）
+cargo run -p picture-tool -- -i ./photos -o ./output -m pad -b black
+
+# サイズ制限のみ（アスペクト比変更なし）
+cargo run -p picture-tool -- -i ./photos -o ./output -m quality
+
+# 変換後に元ファイルを削除
+cargo run -p picture-tool -- -i ./photos -o ./output --delete-originals
+
+# 品質とサイズ上限を指定
+cargo run -p picture-tool -- -i ./photos -o ./output -q 95 --max-size 10
 ```
 
-### 変換モード
-
-#### クロップモード（デフォルト）
-元の画像を中央から4:5にクロップします。
+### GUI
 
 ```bash
-./target/release/picture-tool -i ./photos -m crop
+make dev
 ```
 
-#### パディングモード
-元の画像を保持し、余白を追加して4:5にします。
+3カラムのデスクトップアプリが起動します：
+
+- **左パネル** — フォルダーツリーで写真を探す
+- **中央パネル** — サムネイルグリッドで写真をクリック選択
+- **右パネル** — 選択した写真の確認、変換設定、実行
+
+### CLIオプション一覧
+
+| オプション | 短縮 | デフォルト | 説明 |
+|-----------|------|-----------|------|
+| `--input` | `-i` | (必須) | 入力フォルダーパス |
+| `--output` | `-o` | `./` | 出力フォルダー（自動作成） |
+| `--mode` | `-m` | `crop` | `crop`, `pad`, `quality` |
+| `--bg-color` | `-b` | `white` | `white`, `black` |
+| `--quality` | `-q` | `90` | 初期JPEG品質 (1-100) |
+| `--max-size` | | `8` | 最大ファイルサイズ (MB) |
+| `--delete-originals` | | `false` | 変換後に元ファイルを削除 |
+
+## 開発コマンド
 
 ```bash
-# 背景色: 白（デフォルト）
-./target/release/picture-tool -i ./photos -m pad
-
-# 背景色: 黒
-./target/release/picture-tool -i ./photos -m pad -b black
+make build          # CLI + GUI ビルド
+make build-cli      # CLIのみ
+make build-gui      # GUIのみ（フロントエンド含む）
+make test           # テスト実行（23件）
+make dev            # GUI開発サーバー
+make release        # リリースビルド
+make clean          # クリーンアップ
 ```
 
-### 品質・サイズ設定
-
-```bash
-# 初期JPEG品質を95%に設定
-./target/release/picture-tool -i ./photos -q 95
-
-# 最大ファイルサイズを10MBに設定
-./target/release/picture-tool -i ./photos --max-size 10
-
-# 組み合わせ
-./target/release/picture-tool -i ./photos -q 95 --max-size 10 -m pad -b white
-```
-
-## オプション一覧
-
-| オプション | 短縮 | 説明 | デフォルト |
-|----------|------|------|-----------|
-| `--input` | `-i` | 入力フォルダーパス（必須） | - |
-| `--mode` | `-m` | 変換モード (`crop` または `pad`) | `crop` |
-| `--bg-color` | `-b` | パディング時の背景色 (`white` または `black`) | `white` |
-| `--quality` | `-q` | 初期JPEG品質 (1-100) | `90` |
-| `--max-size` | - | 最大ファイルサイズ (MB) | `8` |
-
-## 出力形式
-
-- 処理済み画像は元のフォルダーに保存されます
-- ファイル名: `元のファイル名_processed.jpg`
-- フォーマット: JPEG
-
-### 出力例
+## プロジェクト構成
 
 ```
-Processing images in: ./photos
-Found 150 images
-
-[1/150] cat.jpg → cat_processed.jpg (3.2 MB) ✓
-[2/150] dog.png → dog_processed.jpg (7.8 MB) ✓
-[3/150] landscape.jpg → landscape_processed.jpg (7.9 MB, quality: 85%) ✓
-...
-
-Completed: 148 successful, 2 failed
-Total time: 12.3s
+picture-tool-rust/
+├── core/           # 画像処理ライブラリ（CLI/GUI共有）
+├── cli/            # CLIバイナリ
+├── gui/            # Tauri v2 バックエンド
+├── gui-frontend/   # Svelte 5 フロントエンド
+└── Makefile
 ```
+
+## 技術スタック
+
+- **Rust** — image, rayon, clap, anyhow, serde
+- **Tauri v2** — デスクトップGUIフレームワーク
+- **Svelte 5** — フロントエンドUI（runes構文）
+- **Bun + Vite** — フロントエンドビルド
 
 ## 動作仕様
 
-### アスペクト比変換
+### 変換モード
 
-**クロップモード:**
-- 横長画像: 幅を削って4:5に
-- 縦長画像: 高さを削って4:5に
-- 常に中央を基準に切り取り
-
-**パディングモード:**
-- 横長画像: 上下に余白を追加
-- 縦長画像: 左右に余白を追加
-- 元の画像は完全に保持
+| モード | 動作 |
+|--------|------|
+| **crop** | 中央を基準に4:5にクロップ |
+| **pad** | 余白を追加して4:5に（背景色指定可） |
+| **quality** | アスペクト比変更なし、サイズ制限のみ |
 
 ### サイズ圧縮
 
 1. 初期品質で保存を試行
-2. サイズが制限を超える場合、品質を5%ずつ下げて再試行
-3. 最低品質60%まで下げても制限を超える場合、その状態で保存
+2. サイズ超過の場合、品質を5%ずつ下げて再試行
+3. 最低品質60%まで下げても超過の場合はそのまま保存
 
-## エラーハンドリング
+### 出力
 
-- 読み込みに失敗した画像はスキップして処理を継続
-- エラーメッセージには失敗した画像のファイル名と理由を表示
-- 最終的な成功/失敗件数をサマリーで表示
-
-## 注意事項
-
-- 元の画像ファイルは上書きされません
-- 処理済みファイルが既に存在する場合は上書きされます
-- サブフォルダー内の画像も再帰的に処理されます
+- ファイル名: `{元のファイル名}_processed.jpg`（重複時は連番追加）
+- 元の画像ファイルは上書きしない（`--delete-originals`で明示的に削除）
+- 読み込み失敗した画像はスキップして継続
