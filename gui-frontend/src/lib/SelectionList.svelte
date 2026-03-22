@@ -5,9 +5,18 @@
     selectedImages: ImageEntry[];
     thumbnailCache: Map<string, string>;
     onRemove: (image: ImageEntry) => void;
+    onRequestThumbnail: (path: string) => void;
   }
 
-  let { selectedImages, thumbnailCache, onRemove }: Props = $props();
+  let { selectedImages, thumbnailCache, onRemove, onRequestThumbnail }: Props = $props();
+
+  $effect(() => {
+    for (const img of selectedImages) {
+      if (!thumbnailCache.has(img.path)) {
+        onRequestThumbnail(img.path);
+      }
+    }
+  });
 </script>
 
 <div class="selection-list">

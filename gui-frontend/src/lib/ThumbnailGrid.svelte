@@ -1,14 +1,15 @@
 <script lang="ts">
-  import { getThumbnail } from "./api";
   import type { ImageEntry } from "./types";
 
   interface Props {
     images: ImageEntry[];
     selectedPaths: Set<string>;
+    thumbnailCache: Map<string, string>;
     onToggleSelect: (image: ImageEntry) => void;
+    onRequestThumbnail: (path: string) => void;
   }
 
-  let { images, selectedPaths, onToggleSelect }: Props = $props();
+  let { images, selectedPaths, thumbnailCache, onToggleSelect, onRequestThumbnail }: Props = $props();
 
   const PAGE_SIZE = 50;
   let currentPage = $state(0);
@@ -18,34 +19,28 @@
   );
   let totalPages = $derived(Math.ceil(images.length / PAGE_SIZE));
 
-  // サムネイル遅延読み込み
-  let thumbnailCache = $state<Map<string, string>>(new Map());
-
-  async function loadThumbnail(path: string) {
-    if (thumbnailCache.has(path)) return;
-    try {
-      const base64 = await getThumbnail(path);
-      thumbnailCache.set(path, base64);
-      thumbnailCache = new Map(thumbnailCache); // reactivity trigger
-    } catch {
-      // プレースホルダーを維持
-    }
-  }
-
-  // ページが変わったらキャッシュ済み以外をロード
   $effect(() => {
-    pagedImages.forEach((img) => {
-      if (!thumbnailCache.has(img.path)) {
-        loadThumbnail(img.path);
-      }
-    });
-  });
-
-  // フォルダー変更時にページリセット
-  $effect(() => {
-    images; // dependency
+    images;
     currentPage = 0;
   });
+
+  function observeThumbnail(node: HTMLElement, path: string) {
+    const observer = new IntersectionObserver(
+      (entries) => {
+        if (entries[0].isIntersecting) {
+          onRequestThumbnail(path);
+          observer.disconnect();
+        }
+      },
+      { rootMargin: "200px" }
+    );
+    observer.observe(node);
+    return {
+      destroy() {
+        observer.disconnect();
+      },
+    };
+  }
 </script>
 
 <div class="thumbnail-grid">
@@ -70,13 +65,13 @@
         class="grid-item"
         class:selected={selectedPaths.has(image.path)}
         onclick={() => onToggleSelect(image)}
+        use:observeThumbnail={image.path}
       >
         <div class="thumb-wrapper">
           {#if thumbnailCache.has(image.path)}
             <img
               src="data:image/jpeg;base64,{thumbnailCache.get(image.path)}"
               alt={image.name}
-              loading="lazy"
             />
           {:else}
             <div class="placeholder">📷</div>

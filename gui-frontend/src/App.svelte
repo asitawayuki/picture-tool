@@ -7,7 +7,7 @@
   import SelectionList from "./lib/SelectionList.svelte";
   import SettingsPanel from "./lib/SettingsPanel.svelte";
   import ProgressOverlay from "./lib/ProgressOverlay.svelte";
-  import { listImages, processImages, cancelProcessing } from "./lib/api";
+  import { listImages, processImages, cancelProcessing, getThumbnail } from "./lib/api";
   import type { ImageEntry, ProcessingConfig, ProgressPayload } from "./lib/types";
 
   // --- 状態 ---
@@ -24,6 +24,37 @@
   let processing = $state(false);
   let progress = $state<ProgressPayload | null>(null);
   let thumbnailCache = $state<Map<string, string>>(new Map());
+
+  // --- サムネイルロード（並列制限キュー） ---
+  let activeRequests = 0;
+  const MAX_CONCURRENT = 3;
+  const pendingQueue: string[] = [];
+
+  function processQueue() {
+    while (activeRequests < MAX_CONCURRENT && pendingQueue.length > 0) {
+      const path = pendingQueue.shift()!;
+      if (thumbnailCache.has(path)) continue;
+      activeRequests++;
+      getThumbnail(path)
+        .then((base64) => {
+          thumbnailCache.set(path, base64);
+          thumbnailCache = new Map(thumbnailCache);
+        })
+        .catch(() => {})
+        .finally(() => {
+          activeRequests--;
+          processQueue();
+        });
+    }
+  }
+
+  function handleRequestThumbnail(path: string) {
+    if (thumbnailCache.has(path)) return;
+    if (!pendingQueue.includes(path)) {
+      pendingQueue.push(path);
+    }
+    processQueue();
+  }
 
   // --- 派生状態 ---
   let selectedPaths = $derived(new Set(selectedImages.map((img) => img.path)));
@@ -47,7 +78,10 @@
   });
 
   // --- ハンドラー ---
+  let currentFolder = $state("");
+
   async function handleSelectFolder(path: string) {
+    currentFolder = path;
     try {
       images = await listImages(path);
     } catch (e) {
@@ -107,7 +141,9 @@
     <ThumbnailGrid
       {images}
       {selectedPaths}
+      {thumbnailCache}
       onToggleSelect={handleToggleSelect}
+      onRequestThumbnail={handleRequestThumbnail}
     />
   </div>
 
@@ -116,11 +152,13 @@
       {selectedImages}
       {thumbnailCache}
       onRemove={handleRemove}
+      onRequestThumbnail={handleRequestThumbnail}
     />
     <SettingsPanel
       bind:config
       {outputFolder}
       {canProcess}
+      {currentFolder}
       onPickOutputFolder={handlePickOutputFolder}
       onProcess={handleProcess}
     />
