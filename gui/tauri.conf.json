@@ -1,0 +1,26 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "Picture Tool",
+  "version": "0.1.0",
+  "identifier": "com.picture-tool.app",
+  "build": {
+    "frontendDist": "../gui-frontend/dist",
+    "devUrl": "http://localhost:5173",
+    "beforeDevCommand": "cd ../gui-frontend && npm run dev",
+    "beforeBuildCommand": "cd ../gui-frontend && npm run build"
+  },
+  "app": {
+    "windows": [
+      {
+        "title": "Picture Tool",
+        "width": 1200,
+        "height": 800,
+        "minWidth": 900,
+        "minHeight": 600
+      }
+    ]
+  },
+  "plugins": {
+    "dialog": {}
+  }
+}
