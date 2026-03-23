@@ -56,8 +56,9 @@
 ### 実装方式
 - 状態: `zoomed: boolean`
 - Fit時: `object-fit: contain`
-- 100%時: `transform: scale(N)` でFitサイズから等倍へ拡大。Nは元画像サイズ÷表示サイズから算出
-- マウス追従: `onmousemove`で`transform-origin`を`${x}% ${y}%`に更新
+- 100%時: 画像の元ピクセルサイズ（`image.width`, `image.height`）と表示中の`<img>`要素のレンダリングサイズ（`getBoundingClientRect()`）からスケール倍率`N = naturalWidth / renderedWidth`を算出。`transform: scale(N)`で拡大
+- コンテナに`overflow: hidden`を設定し、拡大した画像がモーダル外にはみ出さないようにする
+- マウス追従: `onmousemove`で画像要素内の相対座標を算出し、`transform-origin: ${x}% ${y}%`を更新
 - カーソル: Fit時は`zoom-in`、100%時は`zoom-out`
 
 ### 既存機能との共存
@@ -76,6 +77,7 @@
 
 **新規構造体（core）:**
 ```rust
+#[derive(Debug, Clone, Default, Serialize)]
 pub struct ExifInfo {
     pub camera_make: Option<String>,    // "SONY"
     pub camera_model: Option<String>,   // "ILCE-7M4"
@@ -89,8 +91,24 @@ pub struct ExifInfo {
 ```
 
 **新規関数（core）:** `read_exif_info(path: &Path) -> Result<ExifInfo>`
+- EXIF非対応形式（PNG等）やEXIFデータなしの画像 → `ExifInfo::default()`（全フィールドNone）を返す。エラーではない
 
 **新規Tauriコマンド（gui）:** `get_exif_info(path: String) -> ExifInfo`
+- gui/src/main.rsの`invoke_handler`にも登録が必要
+
+**TypeScript側の型:**
+```typescript
+export interface ExifInfo {
+  camera_make: string | null;
+  camera_model: string | null;
+  lens_model: string | null;
+  focal_length: string | null;
+  f_number: string | null;
+  shutter_speed: string | null;
+  iso: number | null;
+  date_taken: string | null;
+}
+```
 
 ### フロントエンド
 
@@ -127,7 +145,8 @@ IMG_1234.jpg | 6000×4000 · 12.3MB · 2024-12-25 14:30 | 3 / 25
 - 現在: `max_dimension: 200` 固定
 - 変更: フロントエンドから列数に応じたサムネイルサイズを渡す
 - `get_thumbnail(path, max_dimension)` — 引数にサイズを追加
-- フロントエンド: `Math.ceil(viewportWidth / columnCount)` で算出
+- フロントエンド: グリッドコンテナの`clientWidth`を基準に`Math.ceil(containerWidth / columnCount)`で算出
+- Rustキャッシュキー: `"${path}:${max_dimension}"` に変更（同じ画像でもサイズ違いを区別）
 - 列数変更時にキャッシュミスしたサムネイルを再取得
 
 ## 新規依存
@@ -151,4 +170,5 @@ IMG_1234.jpg | 6000×4000 · 12.3MB · 2024-12-25 14:30 | 3 / 25
 | `gui-frontend/src/lib/FolderTree.svelte` | 1 |
 | `gui-frontend/src/lib/SettingsPanel.svelte` | 2 |
 | `gui-frontend/src/lib/ThumbnailGrid.svelte` | 2, 5 |
+| `gui/src/main.rs` | 4 |
 | `gui-frontend/src/lib/ImagePreview.svelte` | 3, 4 |
