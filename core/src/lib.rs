@@ -123,7 +123,11 @@ pub fn read_exif_info(path: &Path) -> Result<ExifInfo> {
         .get_field(exif::Tag::FNumber, exif::In::PRIMARY)
         .map(|f| {
             let s = f.display_value().to_string();
-            format!("f/{s}")
+            if s.starts_with("f/") {
+                s
+            } else {
+                format!("f/{s}")
+            }
         });
 
     Ok(ExifInfo {
