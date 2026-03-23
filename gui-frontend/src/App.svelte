@@ -29,14 +29,14 @@
   // --- サムネイルロード（並列制限キュー） ---
   let activeRequests = 0;
   const MAX_CONCURRENT = 3;
-  const pendingQueue: string[] = [];
+  const pendingQueue: { path: string; maxDimension: number }[] = [];
 
   function processQueue() {
     while (activeRequests < MAX_CONCURRENT && pendingQueue.length > 0) {
-      const path = pendingQueue.shift()!;
+      const { path, maxDimension } = pendingQueue.shift()!;
       if (thumbnailCache.has(path)) continue;
       activeRequests++;
-      getThumbnail(path)
+      getThumbnail(path, maxDimension)
         .then((base64) => {
           thumbnailCache.set(path, base64);
           thumbnailCache = new Map(thumbnailCache);
@@ -49,10 +49,10 @@
     }
   }
 
-  function handleRequestThumbnail(path: string) {
+  function handleRequestThumbnail(path: string, maxDimension: number) {
     if (thumbnailCache.has(path)) return;
-    if (!pendingQueue.includes(path)) {
-      pendingQueue.push(path);
+    if (!pendingQueue.some(item => item.path === path)) {
+      pendingQueue.push({ path, maxDimension });
     }
     processQueue();
   }

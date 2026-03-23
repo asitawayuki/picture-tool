@@ -22,13 +22,25 @@
 
   let contextMenu = $state<{ x: number; y: number; path: string; isFavorite: boolean } | null>(null);
 
+  let favoriteNodes = $state<TreeNode[]>([]);
+
   let store: Awaited<ReturnType<typeof load>> | null = null;
+
+  function buildFavoriteNodes(paths: string[]): TreeNode[] {
+    return paths.map((path) => ({
+      entry: { name: getFolderName(path), path, is_dir: true, is_image: false },
+      children: null,
+      expanded: false,
+      loading: false,
+    }));
+  }
 
   async function initStore() {
     store = await load("favorites.json", { autoSave: false });
     const saved = await store.get<string[]>("favorites");
     if (saved) {
       favorites = saved;
+      favoriteNodes = buildFavoriteNodes(saved);
     }
   }
 
@@ -42,12 +54,14 @@
   async function addFavorite(path: string) {
     if (!favorites.includes(path)) {
       favorites = [...favorites, path];
+      favoriteNodes = buildFavoriteNodes(favorites);
       await saveFavorites();
     }
   }
 
   async function removeFavorite(path: string) {
     favorites = favorites.filter((f) => f !== path);
+    favoriteNodes = buildFavoriteNodes(favorites);
     await saveFavorites();
   }
 
@@ -119,11 +133,6 @@
     toggleNode(node);
   }
 
-  function selectFavorite(path: string) {
-    selectedPath = path;
-    onSelectFolder(path);
-  }
-
   function getFolderName(path: string): string {
     const parts = path.replace(/[/\\]+$/, "").split(/[/\\]/);
     return parts[parts.length - 1] || path;
@@ -141,17 +150,8 @@
   {#if favorites.length > 0}
     <div class="section-header">⭐ お気に入り</div>
     <div class="favorites">
-      {#each favorites as fav}
-        <button
-          class="tree-item"
-          class:selected={selectedPath === fav}
-          onclick={() => selectFavorite(fav)}
-          oncontextmenu={(e) => handleContextMenu(e, fav, true)}
-          title={fav}
-        >
-          <span class="icon">📁</span>
-          <span class="name">{getFolderName(fav)}</span>
-        </button>
+      {#each favoriteNodes as node}
+        {@render treeNode(node, 0)}
       {/each}
     </div>
   {/if}
@@ -226,6 +226,8 @@
 
   .favorites {
     border-bottom: 1px solid var(--border-color);
+    max-height: 40vh;
+    overflow-y: auto;
   }
 
   .tree-content {

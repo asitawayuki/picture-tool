@@ -17,6 +17,7 @@ fn main() {
             commands::get_full_image,
             commands::process_images,
             commands::cancel_processing,
+            commands::get_exif_info,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
