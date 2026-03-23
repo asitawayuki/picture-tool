@@ -1,6 +1,6 @@
 <script lang="ts">
-  import { getFullImage } from "./api";
-  import type { ImageEntry } from "./types";
+  import { getFullImage, getExifInfo } from "./api";
+  import type { ImageEntry, ExifInfo } from "./types";
 
   interface Props {
     image: ImageEntry;
@@ -15,6 +15,7 @@
 
   let fullImageData = $state<string | null>(null);
   let loading = $state(false);
+  let exifInfo = $state<ExifInfo | null>(null);
 
   let currentIndex = $derived(images.findIndex((img) => img.path === image.path));
   let hasPrev = $derived(currentIndex > 0);
@@ -23,6 +24,7 @@
 
   $effect(() => {
     loadFullImage(image.path);
+    loadExifInfo(image.path);
   });
 
   async function loadFullImage(path: string) {
@@ -37,6 +39,32 @@
     } finally {
       loading = false;
     }
+  }
+
+  async function loadExifInfo(path: string) {
+    exifInfo = null;
+    try {
+      exifInfo = await getExifInfo(path);
+    } catch (e) {
+      console.error("Failed to load EXIF info:", e);
+    }
+  }
+
+  function formatExifLine1(info: ExifInfo): string | null {
+    const parts: string[] = [];
+    const camera = [info.camera_make, info.camera_model].filter(Boolean).join(" ");
+    if (camera) parts.push(camera);
+    if (info.lens_model) parts.push(info.lens_model);
+    return parts.length > 0 ? parts.join(" | ") : null;
+  }
+
+  function formatExifLine2(info: ExifInfo): string | null {
+    const parts: string[] = [];
+    if (info.focal_length) parts.push(info.focal_length);
+    if (info.f_number) parts.push(info.f_number);
+    if (info.shutter_speed) parts.push(info.shutter_speed);
+    if (info.iso != null) parts.push(`ISO ${info.iso}`);
+    return parts.length > 0 ? parts.join("  ") : null;
   }
 
   function goPrev() {
@@ -102,6 +130,17 @@
 
   <button class="close-btn" onclick={onClose}>✕</button>
 
+  {#if exifInfo && (formatExifLine1(exifInfo) || formatExifLine2(exifInfo))}
+    <div class="exif-overlay">
+      {#if formatExifLine1(exifInfo)}
+        <div class="exif-line">{formatExifLine1(exifInfo)}</div>
+      {/if}
+      {#if formatExifLine2(exifInfo)}
+        <div class="exif-line">{formatExifLine2(exifInfo)}</div>
+      {/if}
+    </div>
+  {/if}
+
   {#if hasPrev}
     <button class="nav-btn nav-prev" onclick={goPrev}>‹</button>
   {/if}
@@ -123,7 +162,9 @@
 
   <div class="info-bar">
     <span>{image.name}</span>
-    <span>{image.width} × {image.height} · {formatSize(image.size_bytes)}</span>
+    <span>
+      {image.width} × {image.height} · {formatSize(image.size_bytes)}{#if exifInfo?.date_taken} · {exifInfo.date_taken}{/if}
+    </span>
     <span>{currentIndex + 1} / {images.length}</span>
   </div>
 </div>
@@ -229,6 +270,21 @@
   .loading {
     color: rgba(255, 255, 255, 0.5);
     font-size: 16px;
+  }
+
+  .exif-overlay {
+    position: absolute;
+    top: 56px;
+    left: 16px;
+    z-index: 210;
+    pointer-events: none;
+  }
+
+  .exif-line {
+    color: rgba(255, 255, 255, 0.85);
+    font-size: 12px;
+    line-height: 1.5;
+    text-shadow: 0 1px 3px rgba(0, 0, 0, 0.8), 0 0 6px rgba(0, 0, 0, 0.5);
   }
 
   .info-bar {
