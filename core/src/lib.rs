@@ -1,5 +1,6 @@
 use anyhow::{Context, Result};
 use image::{DynamicImage, GenericImageView, RgbaImage};
+use exif;
 use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 use std::fs::{self, File};
@@ -52,10 +53,90 @@ pub struct ProcessResult {
     pub final_quality: Option<u8>,
 }
 
+#[derive(Debug, Clone, Default, Serialize)]
+pub struct ExifInfo {
+    pub camera_make: Option<String>,
+    pub camera_model: Option<String>,
+    pub lens_model: Option<String>,
+    pub focal_length: Option<String>,
+    pub f_number: Option<String>,
+    pub shutter_speed: Option<String>,
+    pub iso: Option<u32>,
+    pub date_taken: Option<String>,
+}
+
 /// 進捗コールバック: (current, total) -> bool（falseでキャンセル）
 pub type ProgressCallback = Box<dyn Fn(usize, usize) -> bool + Send + Sync>;
 
 // --- 公開API ---
+
+/// 画像ファイルからEXIF情報を読み取る
+/// ファイルが存在しない、またはEXIFデータがない場合はデフォルト値（Noneフィールド）を返す
+pub fn read_exif_info(path: &Path) -> Result<ExifInfo> {
+    let file = match std::fs::File::open(path) {
+        Ok(f) => f,
+        Err(_) => return Ok(ExifInfo::default()),
+    };
+    let mut bufreader = std::io::BufReader::new(file);
+    let exif_data = match exif::Reader::new().read_from_container(&mut bufreader) {
+        Ok(e) => e,
+        Err(_) => return Ok(ExifInfo::default()),
+    };
+
+    let get_string = |tag: exif::Tag| -> Option<String> {
+        exif_data
+            .get_field(tag, exif::In::PRIMARY)
+            .map(|f| f.display_value().with_unit(&exif_data).to_string())
+    };
+
+    let iso = exif_data
+        .get_field(exif::Tag::PhotographicSensitivity, exif::In::PRIMARY)
+        .and_then(|f| match f.value {
+            exif::Value::Short(ref v) => v.first().map(|&x| x as u32),
+            exif::Value::Long(ref v) => v.first().copied(),
+            _ => f.display_value().to_string().parse::<u32>().ok(),
+        });
+
+    let shutter_speed = exif_data
+        .get_field(exif::Tag::ExposureTime, exif::In::PRIMARY)
+        .map(|f| {
+            let s = f.display_value().to_string();
+            if s.ends_with(" s") {
+                s.replace(" s", "s")
+            } else {
+                format!("{s}s")
+            }
+        });
+
+    let focal_length = exif_data
+        .get_field(exif::Tag::FocalLength, exif::In::PRIMARY)
+        .map(|f| {
+            let s = f.display_value().to_string();
+            if s.ends_with(" mm") {
+                s.replace(" mm", "mm")
+            } else {
+                s
+            }
+        });
+
+    let f_number = exif_data
+        .get_field(exif::Tag::FNumber, exif::In::PRIMARY)
+        .map(|f| {
+            let s = f.display_value().to_string();
+            format!("f/{s}")
+        });
+
+    Ok(ExifInfo {
+        camera_make: get_string(exif::Tag::Make).map(|s| s.trim().to_string()),
+        camera_model: get_string(exif::Tag::Model).map(|s| s.trim().to_string()),
+        lens_model: get_string(exif::Tag::LensModel).map(|s| s.trim().to_string()),
+        focal_length,
+        f_number,
+        shutter_speed,
+        iso,
+        date_taken: get_string(exif::Tag::DateTimeOriginal),
+    })
+}
 
 /// 設定を検証する
 pub fn validate_config(config: &ProcessingConfig) -> Result<()> {
@@ -858,6 +939,20 @@ mod tests {
             "出力ファイルが有効な画像として開けない"
         );
         assert!(result.final_size_mb > 0.0, "ファイルサイズが0");
+    }
+
+    // =========================================================
+    // ExifInfo
+    // =========================================================
+
+    #[test]
+    fn read_exif_info_returns_default_for_nonexistent_file() {
+        let result = read_exif_info(Path::new("/nonexistent/image.jpg"));
+        assert!(result.is_ok());
+        let info = result.unwrap();
+        assert!(info.camera_make.is_none());
+        assert!(info.camera_model.is_none());
+        assert!(info.iso.is_none());
     }
 
     // =========================================================
