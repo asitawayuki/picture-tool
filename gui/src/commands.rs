@@ -123,23 +123,23 @@ pub async fn list_images(path: String) -> Result<Vec<ImageEntry>, String> {
 pub async fn get_thumbnail(
     state: tauri::State<'_, ProcessingState>,
     path: String,
+    max_dimension: u32,
 ) -> Result<String, String> {
-    // キャッシュ確認
+    let cache_key = format!("{}:{}", path, max_dimension);
+
     {
         let mut cache = state.thumbnail_cache.lock().unwrap();
-        if let Some(cached) = cache.get(&path) {
+        if let Some(cached) = cache.get(&cache_key) {
             return Ok(cached.clone());
         }
     }
 
-    // キャッシュミス: 生成
-    let result = core::generate_thumbnail_base64(Path::new(&path), 200)
+    let result = core::generate_thumbnail_base64(Path::new(&path), max_dimension)
         .map_err(|e| e.to_string())?;
 
-    // キャッシュに保存
     {
         let mut cache = state.thumbnail_cache.lock().unwrap();
-        cache.put(path, result.clone());
+        cache.put(cache_key, result.clone());
     }
 
     Ok(result)
