@@ -7,7 +7,8 @@
   import SelectionList from "./lib/SelectionList.svelte";
   import SettingsPanel from "./lib/SettingsPanel.svelte";
   import ProgressOverlay from "./lib/ProgressOverlay.svelte";
-  import { listImages, processImages, cancelProcessing } from "./lib/api";
+  import ImagePreview from "./lib/ImagePreview.svelte";
+  import { listImages, processImages, cancelProcessing, getThumbnail } from "./lib/api";
   import type { ImageEntry, ProcessingConfig, ProgressPayload } from "./lib/types";
 
   // --- 状態 ---
@@ -24,6 +25,61 @@
   let processing = $state(false);
   let progress = $state<ProgressPayload | null>(null);
   let thumbnailCache = $state<Map<string, string>>(new Map());
+
+  // --- サムネイルロード（並列制限キュー） ---
+  let activeRequests = 0;
+  const MAX_CONCURRENT = 3;
+  const pendingQueue: string[] = [];
+
+  function processQueue() {
+    while (activeRequests < MAX_CONCURRENT && pendingQueue.length > 0) {
+      const path = pendingQueue.shift()!;
+      if (thumbnailCache.has(path)) continue;
+      activeRequests++;
+      getThumbnail(path)
+        .then((base64) => {
+          thumbnailCache.set(path, base64);
+          thumbnailCache = new Map(thumbnailCache);
+        })
+        .catch(() => {})
+        .finally(() => {
+          activeRequests--;
+          processQueue();
+        });
+    }
+  }
+
+  function handleRequestThumbnail(path: string) {
+    if (thumbnailCache.has(path)) return;
+    if (!pendingQueue.includes(path)) {
+      pendingQueue.push(path);
+    }
+    processQueue();
+  }
+
+  const PAGE_SIZE = 50;
+  let currentPage = $state(0);
+
+  let previewImage = $state<ImageEntry | null>(null);
+
+  function handlePreview(image: ImageEntry) {
+    previewImage = image;
+  }
+
+  function handleClosePreview() {
+    previewImage = null;
+  }
+
+  function handleNavigatePreview(image: ImageEntry) {
+    const idx = images.findIndex((img) => img.path === image.path);
+    if (idx >= 0) {
+      const targetPage = Math.floor(idx / PAGE_SIZE);
+      if (targetPage !== currentPage) {
+        currentPage = targetPage;
+      }
+    }
+    previewImage = image;
+  }
 
   // --- 派生状態 ---
   let selectedPaths = $derived(new Set(selectedImages.map((img) => img.path)));
@@ -47,7 +103,11 @@
   });
 
   // --- ハンドラー ---
+  let currentFolder = $state("");
+
   async function handleSelectFolder(path: string) {
+    currentFolder = path;
+    currentPage = 0;
     try {
       images = await listImages(path);
     } catch (e) {
@@ -70,7 +130,11 @@
   }
 
   async function handlePickOutputFolder() {
-    const selected = await open({ directory: true, multiple: false });
+    const selected = await open({
+      directory: true,
+      multiple: false,
+      defaultPath: currentFolder || undefined,
+    });
     if (selected) {
       outputFolder = selected as string;
     }
@@ -107,7 +171,12 @@
     <ThumbnailGrid
       {images}
       {selectedPaths}
+      {thumbnailCache}
+      {currentPage}
       onToggleSelect={handleToggleSelect}
+      onRequestThumbnail={handleRequestThumbnail}
+      onPreview={handlePreview}
+      onPageChange={(page) => (currentPage = page)}
     />
   </div>
 
@@ -116,16 +185,30 @@
       {selectedImages}
       {thumbnailCache}
       onRemove={handleRemove}
+      onRequestThumbnail={handleRequestThumbnail}
+      onPreview={handlePreview}
     />
     <SettingsPanel
       bind:config
       {outputFolder}
       {canProcess}
+      {currentFolder}
       onPickOutputFolder={handlePickOutputFolder}
       onProcess={handleProcess}
     />
   </div>
 </div>
+
+{#if previewImage}
+  <ImagePreview
+    image={previewImage}
+    {images}
+    {selectedPaths}
+    onToggleSelect={handleToggleSelect}
+    onClose={handleClosePreview}
+    onNavigate={handleNavigatePreview}
+  />
+{/if}
 
 <ProgressOverlay {progress} onCancel={handleCancel} />
 

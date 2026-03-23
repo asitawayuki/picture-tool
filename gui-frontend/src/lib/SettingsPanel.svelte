@@ -5,11 +5,12 @@
     config: ProcessingConfig;
     outputFolder: string;
     canProcess: boolean;
+    currentFolder: string;
     onPickOutputFolder: () => void;
     onProcess: () => void;
   }
 
-  let { config = $bindable(), outputFolder, canProcess, onPickOutputFolder, onProcess }: Props = $props();
+  let { config = $bindable(), outputFolder, canProcess, currentFolder, onPickOutputFolder, onProcess }: Props = $props();
 </script>
 
 <div class="settings-panel">
@@ -97,7 +98,7 @@
     color: var(--text-secondary);
   }
 
-  select, input[type="range"] {
+  select {
     width: 100%;
     background: var(--bg-primary);
     border: 1px solid var(--border-color);
@@ -105,6 +106,56 @@
     padding: 4px 8px;
     border-radius: var(--radius-sm);
     font-size: 12px;
+  }
+
+  input[type="range"] {
+    width: 100%;
+    height: 20px;
+    -webkit-appearance: none;
+    appearance: none;
+    background: transparent;
+    cursor: pointer;
+    padding: 0;
+    margin: 0;
+  }
+
+  input[type="range"]::-webkit-slider-track {
+    height: 4px;
+    background: var(--bg-primary);
+    border-radius: 2px;
+    border: 1px solid var(--border-color);
+  }
+
+  input[type="range"]::-webkit-slider-thumb {
+    -webkit-appearance: none;
+    appearance: none;
+    width: 14px;
+    height: 14px;
+    border-radius: 50%;
+    background: var(--accent);
+    border: none;
+    margin-top: -6px;
+    cursor: pointer;
+  }
+
+  input[type="range"]::-webkit-slider-thumb:hover {
+    background: var(--accent-hover);
+  }
+
+  input[type="range"]::-moz-range-track {
+    height: 4px;
+    background: var(--bg-primary);
+    border-radius: 2px;
+    border: 1px solid var(--border-color);
+  }
+
+  input[type="range"]::-moz-range-thumb {
+    width: 14px;
+    height: 14px;
+    border-radius: 50%;
+    background: var(--accent);
+    border: none;
+    cursor: pointer;
   }
 
   .folder-btn {

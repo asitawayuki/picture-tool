@@ -1,82 +1,88 @@
 <script lang="ts">
-  import { getThumbnail } from "./api";
   import type { ImageEntry } from "./types";
 
   interface Props {
     images: ImageEntry[];
     selectedPaths: Set<string>;
+    thumbnailCache: Map<string, string>;
+    currentPage: number;
     onToggleSelect: (image: ImageEntry) => void;
+    onRequestThumbnail: (path: string) => void;
+    onPreview: (image: ImageEntry) => void;
+    onPageChange: (page: number) => void;
   }
 
-  let { images, selectedPaths, onToggleSelect }: Props = $props();
+  let { images, selectedPaths, thumbnailCache, currentPage, onToggleSelect, onRequestThumbnail, onPreview, onPageChange }: Props = $props();
 
   const PAGE_SIZE = 50;
-  let currentPage = $state(0);
+  let columnCount = $state(4);
 
   let pagedImages = $derived(
     images.slice(currentPage * PAGE_SIZE, (currentPage + 1) * PAGE_SIZE)
   );
   let totalPages = $derived(Math.ceil(images.length / PAGE_SIZE));
 
-  // サムネイル遅延読み込み
-  let thumbnailCache = $state<Map<string, string>>(new Map());
-
-  async function loadThumbnail(path: string) {
-    if (thumbnailCache.has(path)) return;
-    try {
-      const base64 = await getThumbnail(path);
-      thumbnailCache.set(path, base64);
-      thumbnailCache = new Map(thumbnailCache); // reactivity trigger
-    } catch {
-      // プレースホルダーを維持
-    }
+  function observeThumbnail(node: HTMLElement, path: string) {
+    const observer = new IntersectionObserver(
+      (entries) => {
+        if (entries[0].isIntersecting) {
+          onRequestThumbnail(path);
+          observer.disconnect();
+        }
+      },
+      { rootMargin: "200px" }
+    );
+    observer.observe(node);
+    return {
+      destroy() {
+        observer.disconnect();
+      },
+    };
   }
-
-  // ページが変わったらキャッシュ済み以外をロード
-  $effect(() => {
-    pagedImages.forEach((img) => {
-      if (!thumbnailCache.has(img.path)) {
-        loadThumbnail(img.path);
-      }
-    });
-  });
-
-  // フォルダー変更時にページリセット
-  $effect(() => {
-    images; // dependency
-    currentPage = 0;
-  });
 </script>
 
 <div class="thumbnail-grid">
   <div class="grid-header">
     <span class="count">{images.length} 枚</span>
-    {#if totalPages > 1}
-      <div class="pagination">
-        <button
-          onclick={() => (currentPage = Math.max(0, currentPage - 1))}
-          disabled={currentPage === 0}>←</button>
-        <span>{currentPage + 1} / {totalPages}</span>
-        <button
-          onclick={() => (currentPage = Math.min(totalPages - 1, currentPage + 1))}
-          disabled={currentPage >= totalPages - 1}>→</button>
+    <div class="toolbar-right">
+      <div class="size-control">
+        <span class="size-label">🖼</span>
+        <input
+          type="range"
+          min="2"
+          max="8"
+          bind:value={columnCount}
+          class="size-slider"
+        />
       </div>
-    {/if}
+      {#if totalPages > 1}
+        <div class="pagination">
+          <button
+            onclick={() => onPageChange(Math.max(0, currentPage - 1))}
+            disabled={currentPage === 0}>←</button>
+          <span>{currentPage + 1} / {totalPages}</span>
+          <button
+            onclick={() => onPageChange(Math.min(totalPages - 1, currentPage + 1))}
+            disabled={currentPage >= totalPages - 1}>→</button>
+        </div>
+      {/if}
+    </div>
   </div>
 
-  <div class="grid">
+  <div class="grid" style="grid-template-columns: repeat({columnCount}, 1fr);">
     {#each pagedImages as image (image.path)}
       <button
         class="grid-item"
         class:selected={selectedPaths.has(image.path)}
         onclick={() => onToggleSelect(image)}
+        ondblclick={(e) => { e.preventDefault(); onPreview(image); }}
+        use:observeThumbnail={image.path}
       >
         <div class="thumb-wrapper">
           {#if thumbnailCache.has(image.path)}
             <img
               src="data:image/jpeg;base64,{thumbnailCache.get(image.path)}"
               alt={image.name}
-              loading="lazy"
             />
           {:else}
             <div class="placeholder">📷</div>
@@ -135,7 +141,6 @@
     overflow-y: auto;
     padding: 12px;
     display: grid;
-    grid-template-columns: repeat(auto-fill, minmax(120px, 1fr));
     gap: 8px;
     align-content: start;
   }
@@ -209,5 +214,64 @@
     text-overflow: ellipsis;
     white-space: nowrap;
     max-width: 100%;
+  }
+
+  .toolbar-right {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+  }
+
+  .size-control {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+  }
+
+  .size-label {
+    font-size: 12px;
+  }
+
+  .size-slider {
+    width: 80px;
+    height: 16px;
+    -webkit-appearance: none;
+    appearance: none;
+    background: transparent;
+    cursor: pointer;
+    padding: 0;
+    margin: 0;
+  }
+
+  .size-slider::-webkit-slider-track {
+    height: 3px;
+    background: var(--border-color);
+    border-radius: 2px;
+  }
+
+  .size-slider::-webkit-slider-thumb {
+    -webkit-appearance: none;
+    width: 12px;
+    height: 12px;
+    border-radius: 50%;
+    background: var(--accent);
+    border: none;
+    margin-top: -5px;
+    cursor: pointer;
+  }
+
+  .size-slider::-moz-range-track {
+    height: 3px;
+    background: var(--border-color);
+    border-radius: 2px;
+  }
+
+  .size-slider::-moz-range-thumb {
+    width: 12px;
+    height: 12px;
+    border-radius: 50%;
+    background: var(--accent);
+    border: none;
+    cursor: pointer;
   }
 </style>

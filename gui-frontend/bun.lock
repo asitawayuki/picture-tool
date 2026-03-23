@@ -7,6 +7,7 @@
       "dependencies": {
         "@tauri-apps/api": "^2",
         "@tauri-apps/plugin-dialog": "^2",
+        "@tauri-apps/plugin-store": "^2.4.2",
       },
       "devDependencies": {
         "@sveltejs/vite-plugin-svelte": "^4",
@@ -132,6 +133,8 @@
     "@tauri-apps/api": ["@tauri-apps/api@2.10.1", "", {}, "sha512-hKL/jWf293UDSUN09rR69hrToyIXBb8CjGaWC7gfinvnQrBVvnLr08FeFi38gxtugAVyVcTa5/FD/Xnkb1siBw=="],
 
     "@tauri-apps/plugin-dialog": ["@tauri-apps/plugin-dialog@2.6.0", "", { "dependencies": { "@tauri-apps/api": "^2.8.0" } }, "sha512-q4Uq3eY87TdcYzXACiYSPhmpBA76shgmQswGkSVio4C82Sz2W4iehe9TnKYwbq7weHiL88Yw19XZm7v28+Micg=="],
+
+    "@tauri-apps/plugin-store": ["@tauri-apps/plugin-store@2.4.2", "", { "dependencies": { "@tauri-apps/api": "^2.8.0" } }, "sha512-0ClHS50Oq9HEvLPhNzTNFxbWVOqoAp3dRvtewQBeqfIQ0z5m3JRnOISIn2ZVPCrQC0MyGyhTS9DWhHjpigQE7A=="],
 
     "@types/estree": ["@types/estree@1.0.8", "", {}, "sha512-dWHzHa2WqEXI/O1E9OjrocMTKJl2mSrEolh1Iomrv6U+JuNwaHXsXx9bLu5gG7BUWFIN0skIQJQ/L1rIex4X6w=="],
 

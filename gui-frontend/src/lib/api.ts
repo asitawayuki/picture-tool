@@ -37,3 +37,11 @@ export async function processImages(
 export async function cancelProcessing(): Promise<void> {
   return invoke("cancel_processing");
 }
+
+export async function getFullImage(
+  path: string,
+  maxWidth: number,
+  maxHeight: number
+): Promise<string> {
+  return invoke("get_full_image", { path, maxWidth, maxHeight });
+}
