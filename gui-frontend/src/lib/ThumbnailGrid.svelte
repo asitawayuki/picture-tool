@@ -13,6 +13,7 @@
 
   const PAGE_SIZE = 50;
   let currentPage = $state(0);
+  let columnCount = $state(4);
 
   let pagedImages = $derived(
     images.slice(currentPage * PAGE_SIZE, (currentPage + 1) * PAGE_SIZE)
@@ -46,20 +47,32 @@
 <div class="thumbnail-grid">
   <div class="grid-header">
     <span class="count">{images.length} 枚</span>
-    {#if totalPages > 1}
-      <div class="pagination">
-        <button
-          onclick={() => (currentPage = Math.max(0, currentPage - 1))}
-          disabled={currentPage === 0}>←</button>
-        <span>{currentPage + 1} / {totalPages}</span>
-        <button
-          onclick={() => (currentPage = Math.min(totalPages - 1, currentPage + 1))}
-          disabled={currentPage >= totalPages - 1}>→</button>
+    <div class="toolbar-right">
+      <div class="size-control">
+        <span class="size-label">🖼</span>
+        <input
+          type="range"
+          min="2"
+          max="8"
+          bind:value={columnCount}
+          class="size-slider"
+        />
       </div>
-    {/if}
+      {#if totalPages > 1}
+        <div class="pagination">
+          <button
+            onclick={() => (currentPage = Math.max(0, currentPage - 1))}
+            disabled={currentPage === 0}>←</button>
+          <span>{currentPage + 1} / {totalPages}</span>
+          <button
+            onclick={() => (currentPage = Math.min(totalPages - 1, currentPage + 1))}
+            disabled={currentPage >= totalPages - 1}>→</button>
+        </div>
+      {/if}
+    </div>
   </div>
 
-  <div class="grid">
+  <div class="grid" style="grid-template-columns: repeat({columnCount}, 1fr);">
     {#each pagedImages as image (image.path)}
       <button
         class="grid-item"
@@ -130,7 +143,6 @@
     overflow-y: auto;
     padding: 12px;
     display: grid;
-    grid-template-columns: repeat(auto-fill, minmax(120px, 1fr));
     gap: 8px;
     align-content: start;
   }
@@ -204,5 +216,64 @@
     text-overflow: ellipsis;
     white-space: nowrap;
     max-width: 100%;
+  }
+
+  .toolbar-right {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+  }
+
+  .size-control {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+  }
+
+  .size-label {
+    font-size: 12px;
+  }
+
+  .size-slider {
+    width: 80px;
+    height: 16px;
+    -webkit-appearance: none;
+    appearance: none;
+    background: transparent;
+    cursor: pointer;
+    padding: 0;
+    margin: 0;
+  }
+
+  .size-slider::-webkit-slider-track {
+    height: 3px;
+    background: var(--border-color);
+    border-radius: 2px;
+  }
+
+  .size-slider::-webkit-slider-thumb {
+    -webkit-appearance: none;
+    width: 12px;
+    height: 12px;
+    border-radius: 50%;
+    background: var(--accent);
+    border: none;
+    margin-top: -5px;
+    cursor: pointer;
+  }
+
+  .size-slider::-moz-range-track {
+    height: 3px;
+    background: var(--border-color);
+    border-radius: 2px;
+  }
+
+  .size-slider::-moz-range-thumb {
+    width: 12px;
+    height: 12px;
+    border-radius: 50%;
+    background: var(--accent);
+    border: none;
+    cursor: pointer;
   }
 </style>
