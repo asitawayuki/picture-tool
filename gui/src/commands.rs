@@ -227,5 +227,10 @@ pub fn cancel_processing(state: tauri::State<'_, ProcessingState>) -> Result<(),
     Ok(())
 }
 
+#[tauri::command]
+pub async fn get_exif_info(path: String) -> Result<core::ExifInfo, String> {
+    core::read_exif_info(Path::new(&path)).map_err(|e| e.to_string())
+}
+
 // 注: pick_folderはTauriコマンドとしては実装しない。
 // フロントエンドから@tauri-apps/plugin-dialogのopen()を直接呼び出す。

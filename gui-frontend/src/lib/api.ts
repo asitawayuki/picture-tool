@@ -4,6 +4,7 @@ import type {
   ImageEntry,
   ProcessingConfig,
   ProcessResult,
+  ExifInfo,
 } from "./types";
 
 export async function listDirectory(path: string): Promise<FileEntry[]> {
@@ -44,4 +45,8 @@ export async function getFullImage(
   maxHeight: number
 ): Promise<string> {
   return invoke("get_full_image", { path, maxWidth, maxHeight });
+}
+
+export async function getExifInfo(path: string): Promise<ExifInfo> {
+  return invoke("get_exif_info", { path });
 }

@@ -34,3 +34,14 @@ export interface ProgressPayload {
   total: number;
   file_name: string;
 }
+
+export interface ExifInfo {
+  camera_make: string | null;
+  camera_model: string | null;
+  lens_model: string | null;
+  focal_length: string | null;
+  f_number: string | null;
+  shutter_speed: string | null;
+  iso: number | null;
+  date_taken: string | null;
+}
