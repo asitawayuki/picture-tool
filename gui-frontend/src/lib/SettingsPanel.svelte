@@ -121,7 +121,7 @@
 
   input[type="range"]::-webkit-slider-track {
     height: 4px;
-    background: var(--bg-primary);
+    background: #555;
     border-radius: 2px;
     border: 1px solid var(--border-color);
   }
@@ -144,7 +144,7 @@
 
   input[type="range"]::-moz-range-track {
     height: 4px;
-    background: var(--bg-primary);
+    background: #555;
     border-radius: 2px;
     border: 1px solid var(--border-color);
   }

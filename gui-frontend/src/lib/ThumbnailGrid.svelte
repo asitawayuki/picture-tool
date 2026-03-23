@@ -52,7 +52,7 @@
     <span class="count">{images.length} 枚</span>
     <div class="toolbar-right">
       <div class="size-control">
-        <span class="size-label">🖼</span>
+        <span class="size-label">列</span>
         <input
           type="range"
           min="2"
@@ -251,7 +251,7 @@
 
   .size-slider::-webkit-slider-track {
     height: 3px;
-    background: var(--border-color);
+    background: #555;
     border-radius: 2px;
   }
 
@@ -268,7 +268,7 @@
 
   .size-slider::-moz-range-track {
     height: 3px;
-    background: var(--border-color);
+    background: #555;
     border-radius: 2px;
   }
 
