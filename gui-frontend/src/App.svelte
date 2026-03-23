@@ -104,7 +104,11 @@
   }
 
   async function handlePickOutputFolder() {
-    const selected = await open({ directory: true, multiple: false });
+    const selected = await open({
+      directory: true,
+      multiple: false,
+      defaultPath: currentFolder || undefined,
+    });
     if (selected) {
       outputFolder = selected as string;
     }

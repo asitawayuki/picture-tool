@@ -5,11 +5,12 @@
     config: ProcessingConfig;
     outputFolder: string;
     canProcess: boolean;
+    currentFolder: string;
     onPickOutputFolder: () => void;
     onProcess: () => void;
   }
 
-  let { config = $bindable(), outputFolder, canProcess, onPickOutputFolder, onProcess }: Props = $props();
+  let { config = $bindable(), outputFolder, canProcess, currentFolder, onPickOutputFolder, onProcess }: Props = $props();
 </script>
 
 <div class="settings-panel">
