@@ -6,9 +6,10 @@
     thumbnailCache: Map<string, string>;
     onRemove: (image: ImageEntry) => void;
     onRequestThumbnail: (path: string) => void;
+    onPreview: (image: ImageEntry) => void;
   }
 
-  let { selectedImages, thumbnailCache, onRemove, onRequestThumbnail }: Props = $props();
+  let { selectedImages, thumbnailCache, onRemove, onRequestThumbnail, onPreview }: Props = $props();
 
   $effect(() => {
     for (const img of selectedImages) {
@@ -23,7 +24,7 @@
   <div class="header">選択済み ({selectedImages.length})</div>
   <div class="list">
     {#each selectedImages as image (image.path)}
-      <div class="item">
+      <div class="item" ondblclick={() => onPreview(image)}>
         <div class="thumb">
           {#if thumbnailCache.has(image.path)}
             <img

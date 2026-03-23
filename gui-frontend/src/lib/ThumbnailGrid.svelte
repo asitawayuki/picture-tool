@@ -5,25 +5,22 @@
     images: ImageEntry[];
     selectedPaths: Set<string>;
     thumbnailCache: Map<string, string>;
+    currentPage: number;
     onToggleSelect: (image: ImageEntry) => void;
     onRequestThumbnail: (path: string) => void;
+    onPreview: (image: ImageEntry) => void;
+    onPageChange: (page: number) => void;
   }
 
-  let { images, selectedPaths, thumbnailCache, onToggleSelect, onRequestThumbnail }: Props = $props();
+  let { images, selectedPaths, thumbnailCache, currentPage, onToggleSelect, onRequestThumbnail, onPreview, onPageChange }: Props = $props();
 
   const PAGE_SIZE = 50;
-  let currentPage = $state(0);
   let columnCount = $state(4);
 
   let pagedImages = $derived(
     images.slice(currentPage * PAGE_SIZE, (currentPage + 1) * PAGE_SIZE)
   );
   let totalPages = $derived(Math.ceil(images.length / PAGE_SIZE));
-
-  $effect(() => {
-    images;
-    currentPage = 0;
-  });
 
   function observeThumbnail(node: HTMLElement, path: string) {
     const observer = new IntersectionObserver(
@@ -61,11 +58,11 @@
       {#if totalPages > 1}
         <div class="pagination">
           <button
-            onclick={() => (currentPage = Math.max(0, currentPage - 1))}
+            onclick={() => onPageChange(Math.max(0, currentPage - 1))}
             disabled={currentPage === 0}>←</button>
           <span>{currentPage + 1} / {totalPages}</span>
           <button
-            onclick={() => (currentPage = Math.min(totalPages - 1, currentPage + 1))}
+            onclick={() => onPageChange(Math.min(totalPages - 1, currentPage + 1))}
             disabled={currentPage >= totalPages - 1}>→</button>
         </div>
       {/if}
@@ -78,6 +75,7 @@
         class="grid-item"
         class:selected={selectedPaths.has(image.path)}
         onclick={() => onToggleSelect(image)}
+        ondblclick={(e) => { e.preventDefault(); onPreview(image); }}
         use:observeThumbnail={image.path}
       >
         <div class="thumb-wrapper">
