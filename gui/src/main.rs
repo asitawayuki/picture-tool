@@ -13,6 +13,7 @@ fn main() {
             commands::list_drives,
             commands::list_images,
             commands::get_thumbnail,
+            commands::get_full_image,
             commands::process_images,
             commands::cancel_processing,
         ])

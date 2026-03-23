@@ -146,6 +146,16 @@ pub async fn get_thumbnail(
 }
 
 #[tauri::command]
+pub async fn get_full_image(
+    path: String,
+    max_width: u32,
+    max_height: u32,
+) -> Result<String, String> {
+    core::generate_full_image_base64(Path::new(&path), max_width, max_height)
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
 pub async fn process_images(
     app_handle: tauri::AppHandle,
     state: tauri::State<'_, ProcessingState>,

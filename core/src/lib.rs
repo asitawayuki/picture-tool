@@ -194,6 +194,43 @@ pub fn generate_thumbnail_base64(path: &Path, max_dimension: u32) -> Result<Stri
     Ok(base64::engine::general_purpose::STANDARD.encode(&jpeg_bytes))
 }
 
+/// フル解像度画像をbase64エンコードされたJPEG文字列として生成（プレビュー用）
+pub fn generate_full_image_base64(
+    path: &Path,
+    max_width: u32,
+    max_height: u32,
+) -> Result<String> {
+    use base64::Engine as _;
+
+    let max_width = max_width.min(2560);
+    let max_height = max_height.min(1600);
+
+    let img = image::open(path)
+        .with_context(|| format!("Failed to open image: {}", path.display()))?;
+
+    let (w, h) = img.dimensions();
+
+    let resized = if w > max_width || h > max_height {
+        img.resize(max_width, max_height, image::imageops::FilterType::Lanczos3)
+    } else {
+        img
+    };
+
+    let rgb = resized.to_rgb8();
+
+    let mut jpeg_bytes = Vec::new();
+    let mut cursor = std::io::Cursor::new(&mut jpeg_bytes);
+    let mut encoder = image::codecs::jpeg::JpegEncoder::new_with_quality(&mut cursor, 90);
+    encoder.encode(
+        rgb.as_raw(),
+        rgb.width(),
+        rgb.height(),
+        image::ColorType::Rgb8,
+    )?;
+
+    Ok(base64::engine::general_purpose::STANDARD.encode(&jpeg_bytes))
+}
+
 // --- プライベートヘルパー ---
 
 /// 4:5のアスペクト比に変換 (中央クロップ)
@@ -775,6 +812,32 @@ mod tests {
     fn generate_thumbnail_for_nonexistent_file_returns_error() {
         let result = generate_thumbnail_base64(Path::new("/nonexistent/image.jpg"), 200);
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn generate_full_image_returns_valid_base64_jpeg() {
+        let dir = tempfile::tempdir().unwrap();
+        let img_path = dir.path().join("test.jpg");
+        let img = image::RgbImage::from_fn(100, 100, |_, _| image::Rgb([128, 128, 128]));
+        img.save(&img_path).unwrap();
+
+        let result = generate_full_image_base64(&img_path, 50, 50).unwrap();
+        assert!(!result.is_empty());
+
+        use base64::Engine as _;
+        let bytes = base64::engine::general_purpose::STANDARD.decode(&result).unwrap();
+        assert!(bytes.len() > 0);
+    }
+
+    #[test]
+    fn generate_full_image_clamps_resolution_to_max() {
+        let dir = tempfile::tempdir().unwrap();
+        let img_path = dir.path().join("test.jpg");
+        let img = image::RgbImage::from_fn(100, 100, |_, _| image::Rgb([128, 128, 128]));
+        img.save(&img_path).unwrap();
+
+        let result = generate_full_image_base64(&img_path, 10000, 10000).unwrap();
+        assert!(!result.is_empty());
     }
 
     // =========================================================
