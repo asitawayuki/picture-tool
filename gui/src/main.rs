@@ -7,6 +7,7 @@ use state::ProcessingState;
 fn main() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_store::Builder::default().build())
         .manage(ProcessingState::new())
         .invoke_handler(tauri::generate_handler![
             commands::list_directory,
