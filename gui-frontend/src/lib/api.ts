@@ -19,8 +19,8 @@ export async function listImages(path: string): Promise<ImageEntry[]> {
   return invoke("list_images", { path });
 }
 
-export async function getThumbnail(path: string): Promise<string> {
-  return invoke("get_thumbnail", { path });
+export async function getThumbnail(path: string, maxDimension: number): Promise<string> {
+  return invoke("get_thumbnail", { path, maxDimension });
 }
 
 export async function processImages(

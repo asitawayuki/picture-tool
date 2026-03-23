@@ -7,7 +7,7 @@
     thumbnailCache: Map<string, string>;
     currentPage: number;
     onToggleSelect: (image: ImageEntry) => void;
-    onRequestThumbnail: (path: string) => void;
+    onRequestThumbnail: (path: string, maxDimension: number) => void;
     onPreview: (image: ImageEntry) => void;
     onPageChange: (page: number) => void;
   }
@@ -16,6 +16,12 @@
 
   const PAGE_SIZE = 50;
   let columnCount = $state(4);
+  let gridElement: HTMLDivElement | undefined = $state();
+  let thumbSize = $derived.by(() => {
+    void columnCount;
+    const containerWidth = gridElement?.clientWidth ?? window.innerWidth * 0.5;
+    return Math.ceil(containerWidth / columnCount);
+  });
 
   let pagedImages = $derived(
     images.slice(currentPage * PAGE_SIZE, (currentPage + 1) * PAGE_SIZE)
@@ -26,7 +32,7 @@
     const observer = new IntersectionObserver(
       (entries) => {
         if (entries[0].isIntersecting) {
-          onRequestThumbnail(path);
+          onRequestThumbnail(path, thumbSize);
           observer.disconnect();
         }
       },
@@ -69,7 +75,7 @@
     </div>
   </div>
 
-  <div class="grid" style="grid-template-columns: repeat({columnCount}, 1fr);">
+  <div class="grid" bind:this={gridElement} style="grid-template-columns: repeat({columnCount}, 1fr);">
     {#each pagedImages as image (image.path)}
       <button
         class="grid-item"
@@ -178,7 +184,7 @@
   .thumb-wrapper img {
     width: 100%;
     height: 100%;
-    object-fit: cover;
+    object-fit: contain;
   }
 
   .placeholder {

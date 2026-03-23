@@ -5,7 +5,7 @@
     selectedImages: ImageEntry[];
     thumbnailCache: Map<string, string>;
     onRemove: (image: ImageEntry) => void;
-    onRequestThumbnail: (path: string) => void;
+    onRequestThumbnail: (path: string, maxDimension: number) => void;
     onPreview: (image: ImageEntry) => void;
   }
 
@@ -14,7 +14,7 @@
   $effect(() => {
     for (const img of selectedImages) {
       if (!thumbnailCache.has(img.path)) {
-        onRequestThumbnail(img.path);
+        onRequestThumbnail(img.path, 200);
       }
     }
   });
