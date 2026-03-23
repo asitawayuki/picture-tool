@@ -16,6 +16,9 @@
   let fullImageData = $state<string | null>(null);
   let loading = $state(false);
   let exifInfo = $state<ExifInfo | null>(null);
+  let zoomed = $state(false);
+  let transformOrigin = $state("50% 50%");
+  let imageElement: HTMLImageElement | undefined = $state();
 
   let currentIndex = $derived(images.findIndex((img) => img.path === image.path));
   let hasPrev = $derived(currentIndex > 0);
@@ -25,6 +28,11 @@
   $effect(() => {
     loadFullImage(image.path);
     loadExifInfo(image.path);
+  });
+
+  $effect(() => {
+    void image.path;
+    zoomed = false;
   });
 
   async function loadFullImage(path: string) {
@@ -106,6 +114,36 @@
     if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(0)}KB`;
     return `${(bytes / (1024 * 1024)).toFixed(1)}MB`;
   }
+
+  function getZoomScale(): number {
+    if (!imageElement || !image) return 1;
+    const rendered = imageElement.getBoundingClientRect();
+    if (rendered.width === 0) return 1;
+    return image.width / rendered.width;
+  }
+
+  function handleImageClick(e: MouseEvent) {
+    e.stopPropagation();
+    if (zoomed) {
+      zoomed = false;
+    } else {
+      updateTransformOrigin(e);
+      zoomed = true;
+    }
+  }
+
+  function handleImageMouseMove(e: MouseEvent) {
+    if (!zoomed) return;
+    updateTransformOrigin(e);
+  }
+
+  function updateTransformOrigin(e: MouseEvent) {
+    if (!imageElement) return;
+    const rect = imageElement.getBoundingClientRect();
+    const x = ((e.clientX - rect.left) / rect.width) * 100;
+    const y = ((e.clientY - rect.top) / rect.height) * 100;
+    transformOrigin = `${x}% ${y}%`;
+  }
 </script>
 
 <svelte:window onkeydown={handleKeydown} />
@@ -148,14 +186,19 @@
     <button class="nav-btn nav-next" onclick={goNext}>›</button>
   {/if}
 
-  <div class="image-container">
+  <div class="image-container" class:zoomed>
     {#if loading}
       <div class="loading">読み込み中...</div>
     {:else if fullImageData}
       <img
+        bind:this={imageElement}
         src="data:image/jpeg;base64,{fullImageData}"
         alt={image.name}
         class="preview-image"
+        class:zoomed
+        style="transform-origin: {transformOrigin}; {zoomed ? `transform: scale(${getZoomScale()});` : ''}"
+        onclick={handleImageClick}
+        onmousemove={handleImageMouseMove}
       />
     {/if}
   </div>
@@ -260,11 +303,22 @@
     justify-content: center;
   }
 
+  .image-container.zoomed {
+    overflow: hidden;
+  }
+
   .preview-image {
     max-width: 100%;
     max-height: calc(100vh - 100px);
     object-fit: contain;
     border-radius: 4px;
+    cursor: zoom-in;
+    transition: transform 0.15s ease-out;
+  }
+
+  .preview-image.zoomed {
+    cursor: zoom-out;
+    transition: none;
   }
 
   .loading {
