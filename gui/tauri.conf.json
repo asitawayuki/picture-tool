@@ -10,6 +10,9 @@
     "beforeBuildCommand": "cd ../gui-frontend && bun run build"
   },
   "app": {
+    "security": {
+      "csp": "default-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'"
+    },
     "windows": [
       {
         "title": "Picture Tool",

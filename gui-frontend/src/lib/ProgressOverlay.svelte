@@ -9,7 +9,9 @@
   let { progress, onCancel }: Props = $props();
 
   let percentage = $derived(
-    progress ? Math.round((progress.current / progress.total) * 100) : 0
+    progress && progress.total > 0
+      ? Math.round((progress.current / progress.total) * 100)
+      : 0
   );
 </script>
 

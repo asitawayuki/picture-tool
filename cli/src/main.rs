@@ -7,7 +7,11 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Instant;
 
 #[derive(Parser, Debug)]
-#[command(author, version, about = "画像バッチ処理ツール - 4:5のアスペクト比に変換し、サイズ制限付きで保存")]
+#[command(
+    author,
+    version,
+    about = "画像バッチ処理ツール - 4:5のアスペクト比に変換し、サイズ制限付きで保存"
+)]
 struct Args {
     /// 入力フォルダーパス
     #[arg(short, long)]
@@ -39,10 +43,17 @@ struct Args {
 }
 
 #[derive(Debug, Clone, Copy, clap::ValueEnum)]
-enum CliConversionMode { Crop, Pad, Quality }
+enum CliConversionMode {
+    Crop,
+    Pad,
+    Quality,
+}
 
 #[derive(Debug, Clone, Copy, clap::ValueEnum)]
-enum CliBgColor { White, Black }
+enum CliBgColor {
+    White,
+    Black,
+}
 
 impl From<CliConversionMode> for ConversionMode {
     fn from(m: CliConversionMode) -> Self {
@@ -84,8 +95,9 @@ fn main() -> Result<()> {
     }
 
     if !args.output.exists() {
-        fs::create_dir_all(&args.output)
-            .with_context(|| format!("Failed to create output folder: {}", args.output.display()))?;
+        fs::create_dir_all(&args.output).with_context(|| {
+            format!("Failed to create output folder: {}", args.output.display())
+        })?;
         println!("Created output folder: {}", args.output.display());
     } else if !args.output.is_dir() {
         anyhow::bail!("Output path is not a directory: {}", args.output.display());
@@ -124,21 +136,30 @@ fn main() -> Result<()> {
         match result {
             Ok(r) => {
                 success_count.fetch_add(1, Ordering::SeqCst);
-                let quality_info = r.final_quality.map_or(String::new(), |q| format!(", quality: {}%", q));
+                let quality_info = r
+                    .final_quality
+                    .map_or(String::new(), |q| format!(", quality: {}%", q));
                 println!(
                     "[{}/{}] {} → {} ({:.1} MB{}) ✓",
-                    i + 1, total_count,
+                    i + 1,
+                    total_count,
                     path.file_name().unwrap().to_string_lossy(),
-                    PathBuf::from(&r.output_path).file_name().unwrap().to_string_lossy(),
-                    r.final_size_mb, quality_info
+                    PathBuf::from(&r.output_path)
+                        .file_name()
+                        .unwrap()
+                        .to_string_lossy(),
+                    r.final_size_mb,
+                    quality_info
                 );
             }
             Err(e) => {
                 failed_count.fetch_add(1, Ordering::SeqCst);
                 eprintln!(
                     "[{}/{}] {} ✗ Error: {}",
-                    i + 1, total_count,
-                    path.file_name().unwrap().to_string_lossy(), e
+                    i + 1,
+                    total_count,
+                    path.file_name().unwrap().to_string_lossy(),
+                    e
                 );
             }
         }

@@ -44,7 +44,9 @@ pub fn list_directory(path: String) -> Result<Vec<FileEntry>, String> {
 
     // フォルダーを先に、ファイルはアルファベット順
     entries.sort_by(|a, b| {
-        b.is_dir.cmp(&a.is_dir).then(a.name.to_lowercase().cmp(&b.name.to_lowercase()))
+        b.is_dir
+            .cmp(&a.is_dir)
+            .then(a.name.to_lowercase().cmp(&b.name.to_lowercase()))
     });
 
     Ok(entries)
@@ -72,51 +74,51 @@ pub fn list_drives() -> Result<Vec<String>, String> {
 
 #[tauri::command]
 pub async fn list_images(path: String) -> Result<Vec<ImageEntry>, String> {
-    let dir = Path::new(&path);
-    if !dir.is_dir() {
+    let dir_path = path.clone();
+    if !Path::new(&dir_path).is_dir() {
         return Err(format!("Not a directory: {}", path));
     }
 
-    // 直下の画像のみ取得（再帰しない）
-    let read_dir = fs::read_dir(dir).map_err(|e| e.to_string())?;
+    tokio::task::spawn_blocking(move || {
+        // 直下の画像のみ取得（再帰しない）
+        let read_dir = fs::read_dir(&dir_path).map_err(|e| e.to_string())?;
 
-    let direct_files: Vec<PathBuf> = read_dir
-        .flatten()
-        .map(|e| e.path())
-        .filter(|p| p.is_file() && core::is_supported_image(p))
-        .collect();
+        let direct_files: Vec<PathBuf> = read_dir
+            .flatten()
+            .map(|e| e.path())
+            .filter(|p| p.is_file() && core::is_supported_image(p))
+            .collect();
 
-    let mut entries = Vec::new();
-    for file_path in direct_files {
-        let name = file_path
-            .file_name()
-            .unwrap_or_default()
-            .to_string_lossy()
-            .to_string();
-        let path_str = file_path.to_string_lossy().to_string();
+        let mut entries = Vec::new();
+        for file_path in direct_files {
+            let name = file_path
+                .file_name()
+                .unwrap_or_default()
+                .to_string_lossy()
+                .to_string();
+            let path_str = file_path.to_string_lossy().to_string();
 
-        let (width, height) = match image::image_dimensions(&file_path) {
-            Ok(dims) => dims,
-            Err(_) => (0, 0),
-        };
+            let (width, height): (u32, u32) =
+                image::image_dimensions(&file_path).unwrap_or_default();
 
-        let size_bytes = fs::metadata(&file_path)
-            .map(|m| m.len())
-            .unwrap_or(0);
+            let size_bytes = fs::metadata(&file_path).map(|m| m.len()).unwrap_or(0);
 
-        entries.push(ImageEntry {
-            name,
-            path: path_str,
-            width,
-            height,
-            size_bytes,
-            thumbnail_base64: None, // 遅延読み込み
-        });
-    }
+            entries.push(ImageEntry {
+                name,
+                path: path_str,
+                width,
+                height,
+                size_bytes,
+                thumbnail_base64: None, // 遅延読み込み
+            });
+        }
 
-    entries.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
+        entries.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
 
-    Ok(entries)
+        Ok(entries)
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 #[tauri::command]
@@ -128,17 +130,26 @@ pub async fn get_thumbnail(
     let cache_key = format!("{}:{}", path, max_dimension);
 
     {
-        let mut cache = state.thumbnail_cache.lock().unwrap();
+        let mut cache = state
+            .thumbnail_cache
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         if let Some(cached) = cache.get(&cache_key) {
             return Ok(cached.clone());
         }
     }
 
-    let result = core::generate_thumbnail_base64(Path::new(&path), max_dimension)
-        .map_err(|e| e.to_string())?;
+    let result = tokio::task::spawn_blocking(move || {
+        core::generate_thumbnail_base64(Path::new(&path), max_dimension).map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|e| e.to_string())??;
 
     {
-        let mut cache = state.thumbnail_cache.lock().unwrap();
+        let mut cache = state
+            .thumbnail_cache
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         cache.put(cache_key, result.clone());
     }
 
@@ -151,8 +162,12 @@ pub async fn get_full_image(
     max_width: u32,
     max_height: u32,
 ) -> Result<String, String> {
-    core::generate_full_image_base64(Path::new(&path), max_width, max_height)
-        .map_err(|e| e.to_string())
+    tokio::task::spawn_blocking(move || {
+        core::generate_full_image_base64(Path::new(&path), max_width, max_height)
+            .map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 #[tauri::command]
@@ -213,10 +228,21 @@ pub async fn process_images(
     .await
     .map_err(|e| e.to_string())?;
 
-    let successes: Vec<core::ProcessResult> = results
-        .into_iter()
-        .filter_map(|r| r.ok())
-        .collect();
+    let mut successes = Vec::new();
+    let mut error_count = 0u32;
+    for result in results {
+        match result {
+            Ok(r) => successes.push(r),
+            Err(e) => {
+                error_count += 1;
+                eprintln!("Processing error: {}", e);
+            }
+        }
+    }
+
+    if error_count > 0 {
+        let _ = app_handle.emit("processing-error", format!("{} files failed", error_count));
+    }
 
     Ok(successes)
 }
@@ -229,7 +255,11 @@ pub fn cancel_processing(state: tauri::State<'_, ProcessingState>) -> Result<(),
 
 #[tauri::command]
 pub async fn get_exif_info(path: String) -> Result<core::ExifInfo, String> {
-    core::read_exif_info(Path::new(&path)).map_err(|e| e.to_string())
+    tokio::task::spawn_blocking(move || {
+        core::read_exif_info(Path::new(&path)).map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 // 注: pick_folderはTauriコマンドとしては実装しない。

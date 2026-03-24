@@ -1,6 +1,5 @@
 use anyhow::{Context, Result};
 use image::{DynamicImage, GenericImageView, RgbaImage};
-use exif;
 use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 use std::fs::{self, File};
@@ -75,7 +74,10 @@ pub type ProgressCallback = Box<dyn Fn(usize, usize) -> bool + Send + Sync>;
 pub fn read_exif_info(path: &Path) -> Result<ExifInfo> {
     let file = match std::fs::File::open(path) {
         Ok(f) => f,
-        Err(_) => return Ok(ExifInfo::default()),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(ExifInfo::default()),
+        Err(e) => {
+            return Err(e).with_context(|| format!("Failed to open for EXIF: {}", path.display()))
+        }
     };
     let mut bufreader = std::io::BufReader::new(file);
     let exif_data = match exif::Reader::new().read_from_container(&mut bufreader) {
@@ -147,6 +149,9 @@ pub fn validate_config(config: &ProcessingConfig) -> Result<()> {
     if config.quality == 0 || config.quality > 100 {
         anyhow::bail!("Quality must be between 1 and 100");
     }
+    if config.max_size_mb == 0 {
+        anyhow::bail!("max_size_mb must be at least 1");
+    }
     Ok(())
 }
 
@@ -165,7 +170,7 @@ pub fn collect_image_files(dir: &Path) -> Result<Vec<PathBuf>> {
     let mut files = Vec::new();
 
     for entry in WalkDir::new(dir)
-        .follow_links(true)
+        .follow_links(false)
         .into_iter()
         .filter_map(|e| e.ok())
     {
@@ -259,6 +264,7 @@ pub fn process_batch(
 /// サムネイルをbase64エンコードされたJPEG文字列として生成
 pub fn generate_thumbnail_base64(path: &Path, max_dimension: u32) -> Result<String> {
     use base64::Engine as _;
+    let max_dimension = max_dimension.min(1024);
 
     let img = image::open(path)
         .with_context(|| format!("Failed to open image for thumbnail: {}", path.display()))?;
@@ -280,18 +286,14 @@ pub fn generate_thumbnail_base64(path: &Path, max_dimension: u32) -> Result<Stri
 }
 
 /// フル解像度画像をbase64エンコードされたJPEG文字列として生成（プレビュー用）
-pub fn generate_full_image_base64(
-    path: &Path,
-    max_width: u32,
-    max_height: u32,
-) -> Result<String> {
+pub fn generate_full_image_base64(path: &Path, max_width: u32, max_height: u32) -> Result<String> {
     use base64::Engine as _;
 
     let max_width = max_width.min(2560);
     let max_height = max_height.min(1600);
 
-    let img = image::open(path)
-        .with_context(|| format!("Failed to open image: {}", path.display()))?;
+    let img =
+        image::open(path).with_context(|| format!("Failed to open image: {}", path.display()))?;
 
     let (w, h) = img.dimensions();
 
@@ -404,11 +406,16 @@ fn save_with_size_limit(
     const MIN_QUALITY: u8 = 60;
     const QUALITY_STEP: u8 = 5;
 
+    let rgb_img = img.to_rgb8();
     let mut quality = initial_quality;
 
     loop {
         let temp_path = output_path.with_extension("tmp.jpg");
-        save_jpeg(img, &temp_path, quality)?;
+
+        if let Err(e) = save_jpeg_rgb(&rgb_img, &temp_path, quality) {
+            let _ = fs::remove_file(&temp_path);
+            return Err(e);
+        }
 
         let metadata = fs::metadata(&temp_path)
             .with_context(|| format!("Failed to get metadata: {}", temp_path.display()))?;
@@ -425,16 +432,12 @@ fn save_with_size_limit(
     }
 }
 
-/// JPEG形式で画像を保存
-fn save_jpeg(img: &DynamicImage, path: &Path, quality: u8) -> Result<()> {
+/// JPEG形式で画像を保存（RgbImageを直接受け取る低レベル関数）
+fn save_jpeg_rgb(rgb_img: &image::RgbImage, path: &Path, quality: u8) -> Result<()> {
     let file =
         File::create(path).with_context(|| format!("Failed to create file: {}", path.display()))?;
-
     let mut writer = BufWriter::new(file);
-
-    let rgb_img = img.to_rgb8();
     let mut encoder = image::codecs::jpeg::JpegEncoder::new_with_quality(&mut writer, quality);
-
     encoder
         .encode(
             rgb_img.as_raw(),
@@ -443,8 +446,14 @@ fn save_jpeg(img: &DynamicImage, path: &Path, quality: u8) -> Result<()> {
             image::ColorType::Rgb8,
         )
         .with_context(|| format!("Failed to encode JPEG: {}", path.display()))?;
-
     Ok(())
+}
+
+/// JPEG形式で画像を保存
+#[allow(dead_code)]
+fn save_jpeg(img: &DynamicImage, path: &Path, quality: u8) -> Result<()> {
+    let rgb_img = img.to_rgb8();
+    save_jpeg_rgb(&rgb_img, path, quality)
 }
 
 #[cfg(test)]
@@ -574,7 +583,9 @@ mod tests {
         assert!(
             (ratio - 0.8).abs() < 0.02,
             "crop結果のアスペクト比が4:5でない: {}x{} (ratio={})",
-            w, h, ratio
+            w,
+            h,
+            ratio
         );
     }
 
@@ -598,7 +609,9 @@ mod tests {
         assert!(
             (ratio - 0.8).abs() < 0.02,
             "crop結果のアスペクト比が4:5でない: {}x{} (ratio={})",
-            w, h, ratio
+            w,
+            h,
+            ratio
         );
     }
 
@@ -627,7 +640,9 @@ mod tests {
         assert!(
             (ratio - 0.8).abs() < 0.02,
             "pad結果のアスペクト比が4:5でない: {}x{} (ratio={})",
-            w, h, ratio
+            w,
+            h,
+            ratio
         );
         // パディングは元画像以上のサイズになる
         assert!(w >= 800, "幅が元画像より小さい");
@@ -817,11 +832,7 @@ mod tests {
             3,
             "最大currentは3であるべき"
         );
-        assert_eq!(
-            total_seen.load(Ordering::SeqCst),
-            3,
-            "totalは3であるべき"
-        );
+        assert_eq!(total_seen.load(Ordering::SeqCst), 3, "totalは3であるべき");
     }
 
     #[test]
@@ -881,8 +892,8 @@ mod tests {
             .expect("base64デコード失敗");
 
         let cursor = std::io::Cursor::new(bytes);
-        let thumb = image::load(cursor, image::ImageFormat::Jpeg)
-            .expect("サムネイルがJPEGとして読めない");
+        let thumb =
+            image::load(cursor, image::ImageFormat::Jpeg).expect("サムネイルがJPEGとして読めない");
 
         let (w, h) = thumb.dimensions();
         assert!(
@@ -910,7 +921,9 @@ mod tests {
         assert!(!result.is_empty());
 
         use base64::Engine as _;
-        let bytes = base64::engine::general_purpose::STANDARD.decode(&result).unwrap();
+        let bytes = base64::engine::general_purpose::STANDARD
+            .decode(&result)
+            .unwrap();
         assert!(bytes.len() > 0);
     }
 
@@ -938,10 +951,7 @@ mod tests {
 
         let result = process_image(&input, out.path(), &test_config()).unwrap();
         let output_img = image::open(&result.output_path);
-        assert!(
-            output_img.is_ok(),
-            "出力ファイルが有効な画像として開けない"
-        );
+        assert!(output_img.is_ok(), "出力ファイルが有効な画像として開けない");
         assert!(result.final_size_mb > 0.0, "ファイルサイズが0");
     }
 
@@ -988,5 +998,109 @@ mod tests {
         assert_eq!(config.bg_color, BackgroundColor::Black);
         assert_eq!(config.quality, 75);
         assert!(config.delete_originals);
+    }
+
+    // =========================================================
+    // validate_config: max_size_mb バリデーション
+    // =========================================================
+
+    #[test]
+    fn validate_config_rejects_zero_max_size() {
+        let mut config = test_config();
+        config.max_size_mb = 0;
+        assert!(validate_config(&config).is_err());
+    }
+
+    #[test]
+    fn validate_config_accepts_valid_max_size() {
+        let mut config = test_config();
+        config.max_size_mb = 1;
+        assert!(validate_config(&config).is_ok());
+        config.max_size_mb = 50;
+        assert!(validate_config(&config).is_ok());
+    }
+
+    // =========================================================
+    // ファイルサイズ制限の実効性
+    // =========================================================
+
+    #[test]
+    fn save_with_size_limit_actually_reduces_quality() {
+        let dir = tempfile::tempdir().unwrap();
+        let out = tempfile::tempdir().unwrap();
+        let input = dir.path().join("large.jpg");
+        // 大きめの画像を生成
+        create_test_image(&input, 4000, 5000);
+
+        let config = ProcessingConfig {
+            mode: ConversionMode::Quality,
+            max_size_mb: 1,
+            quality: 95,
+            ..test_config()
+        };
+        let result = process_image(&input, out.path(), &config).unwrap();
+
+        // 1MB以下または品質がMIN_QUALITYまで下がっていること
+        assert!(
+            result.final_size_mb <= 1.0 || result.final_quality == Some(60),
+            "サイズ制限が機能していない: size={:.2}MB, quality={:?}",
+            result.final_size_mb,
+            result.final_quality
+        );
+    }
+
+    // =========================================================
+    // エッジケース: 極小画像
+    // =========================================================
+
+    #[test]
+    fn crop_mode_handles_tiny_image() {
+        let dir = tempfile::tempdir().unwrap();
+        let out = tempfile::tempdir().unwrap();
+        let input = dir.path().join("tiny.jpg");
+        create_test_image(&input, 2, 3);
+
+        let config = ProcessingConfig {
+            mode: ConversionMode::Crop,
+            ..test_config()
+        };
+        let result = process_image(&input, out.path(), &config);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn pad_mode_handles_tiny_image() {
+        let dir = tempfile::tempdir().unwrap();
+        let out = tempfile::tempdir().unwrap();
+        let input = dir.path().join("tiny.jpg");
+        create_test_image(&input, 2, 3);
+
+        let config = ProcessingConfig {
+            mode: ConversionMode::Pad,
+            ..test_config()
+        };
+        let result = process_image(&input, out.path(), &config);
+        assert!(result.is_ok());
+    }
+
+    // =========================================================
+    // PNG入力の変換
+    // =========================================================
+
+    #[test]
+    fn process_image_handles_png_input() {
+        let dir = tempfile::tempdir().unwrap();
+        let out = tempfile::tempdir().unwrap();
+        let input = dir.path().join("photo.png");
+        create_test_image(&input, 800, 1000);
+
+        let result = process_image(&input, out.path(), &test_config()).unwrap();
+        assert!(
+            result.output_path.ends_with(".jpg"),
+            "出力はJPEGであるべき: {}",
+            result.output_path
+        );
+        let output_img = image::open(&result.output_path);
+        assert!(output_img.is_ok());
     }
 }

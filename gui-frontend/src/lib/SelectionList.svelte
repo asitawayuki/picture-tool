@@ -24,7 +24,7 @@
   <div class="header">選択済み ({selectedImages.length})</div>
   <div class="list">
     {#each selectedImages as image (image.path)}
-      <div class="item" ondblclick={() => onPreview(image)}>
+      <div class="item" role="button" tabindex="0" ondblclick={() => onPreview(image)} onkeydown={(e) => { if (e.key === 'Enter') onPreview(image); }}>
         <div class="thumb">
           {#if thumbnailCache.has(image.path)}
             <img

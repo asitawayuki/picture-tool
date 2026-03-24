@@ -88,17 +88,26 @@
   );
 
   // --- イベントリスナー ---
-  let unlisten: UnlistenFn | null = $state(null);
+  let unlisten: UnlistenFn | null = null;
 
   $effect(() => {
+    let cancelled = false;
     listen<ProgressPayload>("processing-progress", (event) => {
       progress = event.payload;
     }).then((fn) => {
-      unlisten = fn;
+      if (cancelled) {
+        fn();
+      } else {
+        unlisten = fn;
+      }
+    }).catch((e) => {
+      console.error("Failed to listen for progress:", e);
     });
 
     return () => {
+      cancelled = true;
       unlisten?.();
+      unlisten = null;
     };
   });
 

@@ -130,7 +130,7 @@
   function selectFolder(node: TreeNode) {
     selectedPath = node.entry.path;
     onSelectFolder(node.entry.path);
-    toggleNode(node);
+    toggleNode(node).catch(() => {});
   }
 
   function getFolderName(path: string): string {
@@ -139,8 +139,8 @@
   }
 
   $effect(() => {
-    loadRoots();
-    initStore();
+    loadRoots().catch((e) => console.error("Failed to load roots:", e));
+    initStore().catch((e) => console.error("Failed to init store:", e));
   });
 </script>
 

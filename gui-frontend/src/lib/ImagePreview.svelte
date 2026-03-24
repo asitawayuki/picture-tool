@@ -119,7 +119,7 @@
     if (!imageElement || !image) return 1;
     const rendered = imageElement.getBoundingClientRect();
     if (rendered.width === 0) return 1;
-    return image.width / rendered.width;
+    return imageElement.naturalWidth / rendered.width;
   }
 
   function handleImageClick(e: MouseEvent) {
@@ -152,6 +152,7 @@
   class="preview-overlay"
   role="dialog"
   aria-modal="true"
+  aria-label="画像プレビュー"
   onclick={handleOverlayClick}
 >
   <button
