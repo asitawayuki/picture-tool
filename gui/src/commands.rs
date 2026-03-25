@@ -177,6 +177,7 @@ pub async fn process_images(
     files: Vec<String>,
     output_folder: String,
     config: core::ProcessingConfig,
+    exif_frame_config: Option<core::exif_frame::ExifFrameConfig>,
 ) -> Result<Vec<core::ProcessResult>, String> {
     core::validate_config(&config).map_err(|e| e.to_string())?;
 
@@ -223,7 +224,15 @@ pub async fn process_images(
         });
 
         let output_path = PathBuf::from(&output);
-        core::process_batch(&file_paths, &output_path, &config, Some(on_progress))
+        let asset_dirs = core::exif_frame::AssetDirs::default();
+        core::process_batch(
+            &file_paths,
+            &output_path,
+            &config,
+            exif_frame_config.as_ref(),
+            Some(&asset_dirs),
+            Some(on_progress),
+        )
     })
     .await
     .map_err(|e| e.to_string())?;

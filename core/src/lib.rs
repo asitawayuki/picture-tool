@@ -200,6 +200,8 @@ pub fn process_image(
     input_path: &Path,
     output_folder: &Path,
     config: &ProcessingConfig,
+    exif_frame_config: Option<&exif_frame::ExifFrameConfig>,
+    asset_dirs: Option<&exif_frame::AssetDirs>,
 ) -> Result<ProcessResult> {
     let img = image::open(input_path)
         .with_context(|| format!("Failed to open image: {}", input_path.display()))?;
@@ -210,11 +212,26 @@ pub fn process_image(
         ConversionMode::Quality => img,
     };
 
+    // Exifフレーム付加（オプション）
+    // EXIF読み取り失敗でもフレーム生成は続行
+    let framed = if let (Some(fc), Some(ad)) = (exif_frame_config, asset_dirs) {
+        let exif = read_exif_info(input_path).unwrap_or_default();
+        match exif_frame::render_exif_frame(&converted, &exif, fc, ad) {
+            Ok(result) => result,
+            Err(e) => {
+                eprintln!("Warning: Exif frame rendering failed for {}: {}", input_path.display(), e);
+                converted
+            }
+        }
+    } else {
+        converted
+    };
+
     let output_path = generate_output_path(input_path, output_folder)?;
     let max_size_bytes = config.max_size_mb * 1024 * 1024;
 
     let (final_size, final_quality) =
-        save_with_size_limit(&converted, &output_path, config.quality, max_size_bytes)?;
+        save_with_size_limit(&framed, &output_path, config.quality, max_size_bytes)?;
 
     // 成功時のみ元ファイルを削除
     if config.delete_originals {
@@ -246,6 +263,8 @@ pub fn process_batch(
     files: &[PathBuf],
     output_folder: &Path,
     config: &ProcessingConfig,
+    exif_frame_config: Option<&exif_frame::ExifFrameConfig>,
+    asset_dirs: Option<&exif_frame::AssetDirs>,
     on_progress: Option<ProgressCallback>,
 ) -> Vec<Result<ProcessResult>> {
     let total = files.len();
@@ -259,7 +278,7 @@ pub fn process_batch(
                 return Err(anyhow::anyhow!("Processing cancelled"));
             }
 
-            let result = process_image(path, output_folder, config);
+            let result = process_image(path, output_folder, config, exif_frame_config, asset_dirs);
 
             let current = processed_count.fetch_add(1, Ordering::SeqCst) + 1;
             if let Some(ref cb) = on_progress {
@@ -587,7 +606,7 @@ mod tests {
             mode: ConversionMode::Crop,
             ..test_config()
         };
-        let result = process_image(&input, out.path(), &config).unwrap();
+        let result = process_image(&input, out.path(), &config, None, None).unwrap();
 
         let output_img = image::open(&result.output_path).unwrap();
         let (w, h) = output_img.dimensions();
@@ -613,7 +632,7 @@ mod tests {
             mode: ConversionMode::Crop,
             ..test_config()
         };
-        let result = process_image(&input, out.path(), &config).unwrap();
+        let result = process_image(&input, out.path(), &config, None, None).unwrap();
 
         let output_img = image::open(&result.output_path).unwrap();
         let (w, h) = output_img.dimensions();
@@ -644,7 +663,7 @@ mod tests {
             bg_color: BackgroundColor::White,
             ..test_config()
         };
-        let result = process_image(&input, out.path(), &config).unwrap();
+        let result = process_image(&input, out.path(), &config, None, None).unwrap();
 
         let output_img = image::open(&result.output_path).unwrap();
         let (w, h) = output_img.dimensions();
@@ -673,7 +692,7 @@ mod tests {
             bg_color: BackgroundColor::Black,
             ..test_config()
         };
-        let result = process_image(&input, out.path(), &config).unwrap();
+        let result = process_image(&input, out.path(), &config, None, None).unwrap();
         assert!(Path::new(&result.output_path).exists());
 
         let output_img = image::open(&result.output_path).unwrap();
@@ -697,7 +716,7 @@ mod tests {
             mode: ConversionMode::Quality,
             ..test_config()
         };
-        let result = process_image(&input, out.path(), &config).unwrap();
+        let result = process_image(&input, out.path(), &config, None, None).unwrap();
 
         let output_img = image::open(&result.output_path).unwrap();
         let (w, h) = output_img.dimensions();
@@ -722,7 +741,7 @@ mod tests {
         let input = dir.path().join("photo.jpg");
         create_test_image(&input, 400, 500);
 
-        let result = process_image(&input, out.path(), &test_config()).unwrap();
+        let result = process_image(&input, out.path(), &test_config(), None, None).unwrap();
         assert!(
             result.output_path.ends_with("photo_processed.jpg"),
             "出力ファイル名が不正: {}",
@@ -738,11 +757,11 @@ mod tests {
         create_test_image(&input, 400, 500);
 
         // 1回目
-        let r1 = process_image(&input, out.path(), &test_config()).unwrap();
+        let r1 = process_image(&input, out.path(), &test_config(), None, None).unwrap();
         assert!(r1.output_path.ends_with("dup_processed.jpg"));
 
         // 2回目 — 同じ入力で重複
-        let r2 = process_image(&input, out.path(), &test_config()).unwrap();
+        let r2 = process_image(&input, out.path(), &test_config(), None, None).unwrap();
         assert!(
             r2.output_path.ends_with("dup_processed_1.jpg"),
             "重複時の連番が不正: {}",
@@ -765,7 +784,7 @@ mod tests {
             delete_originals: true,
             ..test_config()
         };
-        let result = process_image(&input, out.path(), &config);
+        let result = process_image(&input, out.path(), &config, None, None);
         assert!(result.is_ok());
         assert!(
             !input.exists(),
@@ -784,7 +803,7 @@ mod tests {
             delete_originals: false,
             ..test_config()
         };
-        process_image(&input, out.path(), &config).unwrap();
+        process_image(&input, out.path(), &config, None, None).unwrap();
         assert!(
             input.exists(),
             "delete_originals=falseなのに元ファイルが削除された"
@@ -808,7 +827,7 @@ mod tests {
             })
             .collect();
 
-        let results = process_batch(&files, out.path(), &test_config(), None);
+        let results = process_batch(&files, out.path(), &test_config(), None, None, None);
         let success_count = results.iter().filter(|r| r.is_ok()).count();
         assert_eq!(success_count, 5, "5枚すべて処理成功すべき");
     }
@@ -837,7 +856,7 @@ mod tests {
             true
         });
 
-        process_batch(&files, out.path(), &test_config(), Some(cb));
+        process_batch(&files, out.path(), &test_config(), None, None, Some(cb));
 
         assert_eq!(
             max_seen.load(Ordering::SeqCst),
@@ -865,7 +884,7 @@ mod tests {
         // 1枚処理完了後にキャンセル
         let cb: ProgressCallback = Box::new(|current, _total| current < 1);
 
-        let results = process_batch(&files, out.path(), &test_config(), Some(cb));
+        let results = process_batch(&files, out.path(), &test_config(), None, None, Some(cb));
         let cancelled_count = results
             .iter()
             .filter(|r| {
@@ -961,7 +980,7 @@ mod tests {
         let input = dir.path().join("valid.jpg");
         create_test_image(&input, 800, 1000);
 
-        let result = process_image(&input, out.path(), &test_config()).unwrap();
+        let result = process_image(&input, out.path(), &test_config(), None, None).unwrap();
         let output_img = image::open(&result.output_path);
         assert!(output_img.is_ok(), "出力ファイルが有効な画像として開けない");
         assert!(result.final_size_mb > 0.0, "ファイルサイズが0");
@@ -1050,7 +1069,7 @@ mod tests {
             quality: 95,
             ..test_config()
         };
-        let result = process_image(&input, out.path(), &config).unwrap();
+        let result = process_image(&input, out.path(), &config, None, None).unwrap();
 
         // 1MB以下または品質がMIN_QUALITYまで下がっていること
         assert!(
@@ -1076,7 +1095,7 @@ mod tests {
             mode: ConversionMode::Crop,
             ..test_config()
         };
-        let result = process_image(&input, out.path(), &config);
+        let result = process_image(&input, out.path(), &config, None, None);
         assert!(result.is_ok());
     }
 
@@ -1091,7 +1110,7 @@ mod tests {
             mode: ConversionMode::Pad,
             ..test_config()
         };
-        let result = process_image(&input, out.path(), &config);
+        let result = process_image(&input, out.path(), &config, None, None);
         assert!(result.is_ok());
     }
 
@@ -1106,7 +1125,7 @@ mod tests {
         let input = dir.path().join("photo.png");
         create_test_image(&input, 800, 1000);
 
-        let result = process_image(&input, out.path(), &test_config()).unwrap();
+        let result = process_image(&input, out.path(), &test_config(), None, None).unwrap();
         assert!(
             result.output_path.ends_with(".jpg"),
             "出力はJPEGであるべき: {}",

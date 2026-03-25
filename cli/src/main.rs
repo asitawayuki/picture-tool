@@ -128,6 +128,8 @@ fn main() -> Result<()> {
         &image_files,
         &args.output,
         &config,
+        None,
+        None,
         Some(Box::new(on_progress)),
     );
 
