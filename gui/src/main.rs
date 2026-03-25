@@ -18,6 +18,12 @@ fn main() {
             commands::process_images,
             commands::cancel_processing,
             commands::get_exif_info,
+            commands::render_exif_frame_preview,
+            commands::list_presets,
+            commands::save_preset,
+            commands::delete_preset,
+            commands::list_available_fonts,
+            commands::list_available_logos,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
