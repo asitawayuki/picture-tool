@@ -40,6 +40,22 @@ struct Args {
     /// 変換完了後に元ファイルを削除
     #[arg(long, default_value = "false")]
     delete_originals: bool,
+
+    /// Exifフレームを付加
+    #[arg(short = 'e', long, default_value = "false")]
+    exif_frame: bool,
+
+    /// プリセット名
+    #[arg(short, long, default_value = "default")]
+    preset: String,
+
+    /// プリセットJSONファイル直接指定
+    #[arg(long)]
+    preset_file: Option<PathBuf>,
+
+    /// カスタムテキスト（プリセットの値を上書き）
+    #[arg(long, default_value = "")]
+    custom_text: String,
 }
 
 #[derive(Debug, Clone, Copy, clap::ValueEnum)]
@@ -87,6 +103,34 @@ fn main() -> Result<()> {
 
     core::validate_config(&config)?;
 
+    let (exif_frame_config, asset_dirs) = if args.exif_frame {
+        let config = if let Some(ref path) = args.preset_file {
+            let json = std::fs::read_to_string(path)
+                .with_context(|| format!("Failed to read preset file: {}", path.display()))?;
+            serde_json::from_str::<core::exif_frame::ExifFrameConfig>(&json)?
+        } else {
+            let presets_dir = dirs::config_dir()
+                .map(|d| d.join("picture-tool/presets"));
+            let all = core::exif_frame::preset::list_all_presets(presets_dir.as_deref());
+            all.into_iter()
+                .find(|p| p.name == args.preset)
+                .unwrap_or_else(|| {
+                    eprintln!("Preset '{}' not found, using default", args.preset);
+                    core::exif_frame::ExifFrameConfig::default()
+                })
+        };
+
+        let mut config = config;
+        if !args.custom_text.is_empty() {
+            config.custom_text = args.custom_text.clone();
+            config.items.custom_text = true;
+        }
+
+        (Some(config), Some(core::exif_frame::AssetDirs::default()))
+    } else {
+        (None, None)
+    };
+
     if !args.input.exists() {
         anyhow::bail!("Input folder does not exist: {}", args.input.display());
     }
@@ -128,8 +172,8 @@ fn main() -> Result<()> {
         &image_files,
         &args.output,
         &config,
-        None,
-        None,
+        exif_frame_config.as_ref(),
+        asset_dirs.as_ref(),
         Some(Box::new(on_progress)),
     );
 
