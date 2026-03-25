@@ -1,3 +1,6 @@
+pub mod exif_frame;
+pub mod model_map;
+
 use anyhow::{Context, Result};
 use image::{DynamicImage, GenericImageView, RgbaImage};
 use rayon::prelude::*;

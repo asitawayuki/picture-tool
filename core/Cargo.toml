@@ -5,13 +5,19 @@ edition = "2021"
 
 [dependencies]
 image = "0.24"
+imageproc = "0.23"
+ab_glyph = "0.2"
+resvg = "0.37"
+usvg = "0.37"
+rust-embed = "8"
+dirs = "5"
 rayon = "1.10"
 walkdir = "2.5"
 anyhow = "1.0"
 serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
 base64 = "0.22"
 kamadak-exif = "0.5"
 
 [dev-dependencies]
 tempfile = "3"
-serde_json = "1.0"
