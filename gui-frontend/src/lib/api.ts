@@ -5,6 +5,9 @@ import type {
   ProcessingConfig,
   ProcessResult,
   ExifInfo,
+  ExifFrameConfig,
+  FontInfo,
+  LogoInfo,
 } from "./types";
 
 export async function listDirectory(path: string): Promise<FileEntry[]> {
@@ -26,12 +29,14 @@ export async function getThumbnail(path: string, maxDimension: number): Promise<
 export async function processImages(
   files: string[],
   outputFolder: string,
-  config: ProcessingConfig
+  config: ProcessingConfig,
+  exifFrameConfig?: ExifFrameConfig | null
 ): Promise<ProcessResult[]> {
   return invoke("process_images", {
     files,
     outputFolder,
     config,
+    exifFrameConfig: exifFrameConfig ?? null,
   });
 }
 
@@ -49,4 +54,31 @@ export async function getFullImage(
 
 export async function getExifInfo(path: string): Promise<ExifInfo> {
   return invoke("get_exif_info", { path });
+}
+
+export async function renderExifFramePreview(
+  path: string,
+  config: ExifFrameConfig
+): Promise<string> {
+  return invoke("render_exif_frame_preview", { path, config });
+}
+
+export async function listPresets(): Promise<ExifFrameConfig[]> {
+  return invoke("list_presets");
+}
+
+export async function savePreset(config: ExifFrameConfig): Promise<void> {
+  return invoke("save_preset", { config });
+}
+
+export async function deletePreset(name: string): Promise<void> {
+  return invoke("delete_preset", { name });
+}
+
+export async function listAvailableFonts(): Promise<FontInfo[]> {
+  return invoke("list_available_fonts");
+}
+
+export async function listAvailableLogos(): Promise<LogoInfo[]> {
+  return invoke("list_available_logos");
 }
