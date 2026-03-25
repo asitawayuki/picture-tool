@@ -1,0 +1,31 @@
+{
+  "camera": {
+    "ILCE-7M4": "α7IV",
+    "ILCE-7M3": "α7III",
+    "ILCE-7RM5": "α7RV",
+    "ILCE-7RM4": "α7RIV",
+    "ILCE-7RM3": "α7RIII",
+    "ILCE-7SM3": "α7SIII",
+    "ILCE-7CR": "α7CR",
+    "ILCE-7CL": "α7CII",
+    "ILCE-7C": "α7C",
+    "ILCE-9M3": "α9III",
+    "ILCE-9M2": "α9II",
+    "ILCE-1": "α1",
+    "ILCE-6700": "α6700",
+    "ILCE-6600": "α6600",
+    "ILCE-6400": "α6400"
+  },
+  "logo_match": {
+    "SONY": { "maker": "sony.svg", "brand": "alpha.svg" },
+    "Canon": { "maker": "canon.svg", "brand": null },
+    "NIKON CORPORATION": { "maker": "nikon.svg", "brand": null },
+    "FUJIFILM": { "maker": "fujifilm.svg", "brand": null },
+    "SIGMA": { "maker": "sigma.svg", "brand": null }
+  },
+  "lens_brand_match": [
+    { "pattern": "GM", "match_type": "contains", "logo": "gmaster.svg" },
+    { "pattern": " G ", "match_type": "contains", "logo": "sony_g.svg" },
+    { "pattern": "Art", "match_type": "contains", "logo": "sigma_art.svg" }
+  ]
+}

@@ -9,7 +9,7 @@ imageproc = "0.23"
 ab_glyph = "0.2"
 resvg = "0.37"
 usvg = "0.37"
-rust-embed = "8"
+rust-embed = { version = "8", features = ["include-exclude"] }
 dirs = "5"
 rayon = "1.10"
 walkdir = "2.5"
