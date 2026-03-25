@@ -1,0 +1,26 @@
+{
+  "name": "default",
+  "layout": "bottom_bar",
+  "color": "white",
+  "aspect_ratio": { "fixed": [4, 5] },
+  "items": {
+    "maker_logo": true,
+    "brand_logo": true,
+    "lens_brand_logo": true,
+    "camera_model": true,
+    "lens_model": true,
+    "focal_length": true,
+    "f_number": true,
+    "shutter_speed": true,
+    "iso": true,
+    "date_taken": false,
+    "custom_text": false
+  },
+  "font": {
+    "font_path": null,
+    "primary_size": 0.025,
+    "secondary_size": 0.018
+  },
+  "custom_text": "",
+  "frame_padding": 0.05
+}
