@@ -112,8 +112,10 @@
 </script>
 
 {#if visible}
-  <div class="overlay" onclick={onClose}>
-    <div class="modal" onclick={(e) => e.stopPropagation()}>
+  <!-- svelte-ignore a11y_click_events_have_key_events a11y_no_static_element_interactions -->
+  <div class="overlay" role="presentation" onclick={onClose}>
+    <!-- svelte-ignore a11y_click_events_have_key_events a11y_no_static_element_interactions -->
+    <div class="modal" role="dialog" tabindex="-1" onclick={(e) => e.stopPropagation()}>
       <header>
         <h2>Exifフレーム設定</h2>
         <button class="close-btn" onclick={onClose}>✕</button>
@@ -124,7 +126,7 @@
         <div class="settings">
           <!-- Preset -->
           <section>
-            <label class="label">プリセット</label>
+            <span class="label">プリセット</span>
             <select value={selectedPresetName} onchange={(e) => selectPreset(e.currentTarget.value)}>
               {#each presets as preset}
                 <option value={preset.name}>{preset.name}</option>
@@ -134,7 +136,7 @@
 
           <!-- Layout -->
           <section>
-            <label class="label">レイアウト</label>
+            <span class="label">レイアウト</span>
             <div class="layout-grid">
               {#each layouts as layout}
                 <button
@@ -150,7 +152,7 @@
 
           <!-- Display Items -->
           <section>
-            <label class="label">表示項目</label>
+            <span class="label">表示項目</span>
             <div class="tags">
               {#each displayItemKeys as item}
                 <button
@@ -166,7 +168,7 @@
 
           <!-- Aspect Ratio -->
           <section>
-            <label class="label">アスペクト比</label>
+            <span class="label">アスペクト比</span>
             <div class="aspect-btns">
               {#each aspectRatios as ar}
                 <button
@@ -182,24 +184,26 @@
 
           <!-- Frame Color -->
           <section>
-            <label class="label">フレーム色</label>
+            <span class="label">フレーム色</span>
             <div class="color-options">
               <button
                 class="color-circle white"
                 class:active={config.color === 'white'}
                 onclick={() => config.color = 'white'}
+                aria-label="白"
               ></button>
               <button
                 class="color-circle black"
                 class:active={config.color === 'black'}
                 onclick={() => config.color = 'black'}
+                aria-label="黒"
               ></button>
             </div>
           </section>
 
           <!-- Font Size -->
           <section>
-            <label class="label">フォントサイズ</label>
+            <span class="label">フォントサイズ</span>
             <div class="slider-row">
               <span class="slider-label">メイン</span>
               <input type="range" min="0.015" max="0.05" step="0.001" bind:value={config.font.primary_size} />
@@ -214,13 +218,13 @@
 
           <!-- Custom Text -->
           <section>
-            <label class="label">カスタムテキスト</label>
+            <span class="label">カスタムテキスト</span>
             <input type="text" bind:value={config.custom_text} placeholder="@username" />
           </section>
 
           <!-- Frame Padding -->
           <section>
-            <label class="label">フレーム幅</label>
+            <span class="label">フレーム幅</span>
             <div class="slider-row">
               <input type="range" min="0.02" max="0.15" step="0.005" bind:value={config.frame_padding} />
               <span class="slider-value">{(config.frame_padding * 100).toFixed(1)}%</span>
