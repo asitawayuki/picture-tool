@@ -8,8 +8,9 @@
   import SettingsPanel from "./lib/SettingsPanel.svelte";
   import ProgressOverlay from "./lib/ProgressOverlay.svelte";
   import ImagePreview from "./lib/ImagePreview.svelte";
-  import { listImages, processImages, cancelProcessing, getThumbnail } from "./lib/api";
-  import type { ImageEntry, ProcessingConfig, ProgressPayload } from "./lib/types";
+  import ExifFrameSettings from "./lib/ExifFrameSettings.svelte";
+  import { listImages, processImages, cancelProcessing, getThumbnail, listPresets, savePreset } from "./lib/api";
+  import type { ImageEntry, ProcessingConfig, ProgressPayload, ExifFrameConfig } from "./lib/types";
 
   // --- 状態 ---
   let images = $state<ImageEntry[]>([]);
@@ -25,6 +26,24 @@
   let processing = $state(false);
   let progress = $state<ProgressPayload | null>(null);
   let thumbnailCache = $state<Map<string, string>>(new Map());
+
+  // --- Exifフレーム状態 ---
+  let exifFrameEnabled = $state(false);
+  let selectedPresetName = $state("default");
+  let exifFramePresets = $state<ExifFrameConfig[]>([]);
+  let showExifFrameSettings = $state(false);
+
+  $effect(() => {
+    listPresets().then((presets) => {
+      exifFramePresets = presets;
+    }).catch((e) => {
+      console.error("Failed to load presets:", e);
+    });
+  });
+
+  let activeExifFrameConfig = $derived(
+    exifFramePresets.find((p) => p.name === selectedPresetName) ?? null
+  );
 
   // --- サムネイルロード（並列制限キュー） ---
   let activeRequests = 0;
@@ -156,7 +175,12 @@
 
     try {
       const files = selectedImages.map((img) => img.path);
-      const results = await processImages(files, outputFolder, config);
+      const results = await processImages(
+        files,
+        outputFolder,
+        config,
+        exifFrameEnabled ? activeExifFrameConfig : null
+      );
       alert(`完了: ${results.length}/${selectedImages.length} 枚を変換しました`);
     } catch (e) {
       alert(`エラー: ${e}`);
@@ -204,6 +228,12 @@
       {currentFolder}
       onPickOutputFolder={handlePickOutputFolder}
       onProcess={handleProcess}
+      {exifFrameEnabled}
+      {selectedPresetName}
+      presets={exifFramePresets}
+      onExifFrameEnabledChange={(enabled) => (exifFrameEnabled = enabled)}
+      onPresetChange={(name) => (selectedPresetName = name)}
+      onOpenExifSettings={() => (showExifFrameSettings = true)}
     />
   </div>
 </div>
@@ -220,6 +250,19 @@
 {/if}
 
 <ProgressOverlay {progress} onCancel={handleCancel} />
+
+{#if showExifFrameSettings}
+  <ExifFrameSettings
+    visible={showExifFrameSettings}
+    previewImagePath={selectedImages[0]?.path ?? null}
+    onClose={() => (showExifFrameSettings = false)}
+    onSave={async (config) => {
+      await savePreset(config);
+      exifFramePresets = await listPresets();
+      showExifFrameSettings = false;
+    }}
+  />
+{/if}
 
 <style>
   .app {

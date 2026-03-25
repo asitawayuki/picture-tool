@@ -1,5 +1,5 @@
 <script lang="ts">
-  import type { ProcessingConfig } from "./types";
+  import type { ProcessingConfig, ExifFrameConfig } from "./types";
 
   interface Props {
     config: ProcessingConfig;
@@ -8,9 +8,28 @@
     currentFolder: string;
     onPickOutputFolder: () => void;
     onProcess: () => void;
+    exifFrameEnabled: boolean;
+    selectedPresetName: string;
+    presets: ExifFrameConfig[];
+    onExifFrameEnabledChange: (enabled: boolean) => void;
+    onPresetChange: (name: string) => void;
+    onOpenExifSettings: () => void;
   }
 
-  let { config = $bindable(), outputFolder, canProcess, currentFolder, onPickOutputFolder, onProcess }: Props = $props();
+  let {
+    config = $bindable(),
+    outputFolder,
+    canProcess,
+    currentFolder,
+    onPickOutputFolder,
+    onProcess,
+    exifFrameEnabled,
+    selectedPresetName,
+    presets,
+    onExifFrameEnabledChange,
+    onPresetChange,
+    onOpenExifSettings,
+  }: Props = $props();
 </script>
 
 <div class="settings-panel">
@@ -56,6 +75,34 @@
       <input type="checkbox" bind:checked={config.delete_originals} />
       <span>元ファイルを削除</span>
     </label>
+
+    <div class="exif-frame-section">
+      <label class="checkbox">
+        <input
+          type="checkbox"
+          checked={exifFrameEnabled}
+          onchange={(e) => onExifFrameEnabledChange((e.target as HTMLInputElement).checked)}
+        />
+        <span>Exifフレーム</span>
+      </label>
+
+      {#if exifFrameEnabled}
+        <div class="exif-frame-controls">
+          <select
+            value={selectedPresetName}
+            onchange={(e) => onPresetChange((e.target as HTMLSelectElement).value)}
+          >
+            {#each presets as preset}
+              <option value={preset.name}>{preset.name}</option>
+            {/each}
+            {#if presets.length === 0}
+              <option value="default">default</option>
+            {/if}
+          </select>
+          <button class="gear-btn" onclick={onOpenExifSettings} title="Exifフレーム設定">⚙</button>
+        </div>
+      {/if}
+    </div>
   </div>
 
   <div class="action">
@@ -209,5 +256,38 @@
   .process-btn:disabled {
     opacity: 0.4;
     cursor: default;
+  }
+
+  .exif-frame-section {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+  }
+
+  .exif-frame-controls {
+    display: flex;
+    gap: 4px;
+    align-items: center;
+  }
+
+  .exif-frame-controls select {
+    flex: 1;
+  }
+
+  .gear-btn {
+    padding: 4px 8px;
+    background: var(--bg-primary);
+    border: 1px solid var(--border-color);
+    color: var(--text-secondary);
+    border-radius: var(--radius-sm);
+    cursor: pointer;
+    font-size: 14px;
+    line-height: 1;
+    flex-shrink: 0;
+  }
+
+  .gear-btn:hover {
+    border-color: var(--accent);
+    color: var(--text-primary);
   }
 </style>
