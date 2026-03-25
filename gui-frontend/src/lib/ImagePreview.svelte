@@ -16,14 +16,30 @@
   let fullImageData = $state<string | null>(null);
   let loading = $state(false);
   let exifInfo = $state<ExifInfo | null>(null);
-  let zoomed = $state(false);
-  let transformOrigin = $state("50% 50%");
   let imageElement: HTMLImageElement | undefined = $state();
+
+  // ズーム状態
+  let zoomed = $state(false);
+  let zoomTransform = $state("");
+  let selecting = $state(false);
+  let selStart = $state({ x: 0, y: 0 });
+  let selEnd = $state({ x: 0, y: 0 });
 
   let currentIndex = $derived(images.findIndex((img) => img.path === image.path));
   let hasPrev = $derived(currentIndex > 0);
   let hasNext = $derived(currentIndex < images.length - 1);
   let isSelected = $derived(selectedPaths.has(image.path));
+
+  // 選択矩形（画像要素相対座標）
+  let selectionRect = $derived.by(() => {
+    if (!selecting) return null;
+    const x = Math.min(selStart.x, selEnd.x);
+    const y = Math.min(selStart.y, selEnd.y);
+    const w = Math.abs(selEnd.x - selStart.x);
+    const h = Math.abs(selEnd.y - selStart.y);
+    if (w < 2 && h < 2) return null;
+    return { x, y, w, h };
+  });
 
   $effect(() => {
     loadFullImage(image.path);
@@ -32,7 +48,7 @@
 
   $effect(() => {
     void image.path;
-    zoomed = false;
+    resetZoom();
   });
 
   async function loadFullImage(path: string) {
@@ -95,7 +111,11 @@
         break;
       case "Escape":
         e.preventDefault();
-        onClose();
+        if (zoomed) {
+          resetZoom();
+        } else {
+          onClose();
+        }
         break;
       case " ":
         e.preventDefault();
@@ -106,7 +126,11 @@
 
   function handleOverlayClick(e: MouseEvent) {
     if ((e.target as HTMLElement).classList.contains("preview-overlay")) {
-      onClose();
+      if (zoomed) {
+        resetZoom();
+      } else {
+        onClose();
+      }
     }
   }
 
@@ -115,38 +139,71 @@
     return `${(bytes / (1024 * 1024)).toFixed(1)}MB`;
   }
 
-  function getZoomScale(): number {
-    if (!imageElement || !image) return 1;
-    const rendered = imageElement.getBoundingClientRect();
-    if (rendered.width === 0) return 1;
-    return imageElement.naturalWidth / rendered.width;
+  function resetZoom() {
+    zoomed = false;
+    zoomTransform = "";
+    selecting = false;
   }
 
-  function handleImageClick(e: MouseEvent) {
-    e.stopPropagation();
-    if (zoomed) {
-      zoomed = false;
-    } else {
-      updateTransformOrigin(e);
-      zoomed = true;
-    }
-  }
-
-  function handleImageMouseMove(e: MouseEvent) {
-    if (!zoomed) return;
-    updateTransformOrigin(e);
-  }
-
-  function updateTransformOrigin(e: MouseEvent) {
-    if (!imageElement) return;
+  function handleImageMouseDown(e: MouseEvent) {
+    if (zoomed || !imageElement) return;
+    e.preventDefault();
     const rect = imageElement.getBoundingClientRect();
-    const x = ((e.clientX - rect.left) / rect.width) * 100;
-    const y = ((e.clientY - rect.top) / rect.height) * 100;
-    transformOrigin = `${x}% ${y}%`;
+    const pos = { x: e.clientX - rect.left, y: e.clientY - rect.top };
+    selStart = pos;
+    selEnd = { ...pos };
+    selecting = true;
+  }
+
+  function handleMouseMove(e: MouseEvent) {
+    if (!selecting || !imageElement) return;
+    const rect = imageElement.getBoundingClientRect();
+    selEnd = {
+      x: Math.max(0, Math.min(e.clientX - rect.left, rect.width)),
+      y: Math.max(0, Math.min(e.clientY - rect.top, rect.height)),
+    };
+  }
+
+  function handleMouseUp(_e: MouseEvent) {
+    if (!selecting || !imageElement) return;
+    selecting = false;
+
+    const rect = imageElement.getBoundingClientRect();
+    const sw = Math.abs(selEnd.x - selStart.x);
+    const sh = Math.abs(selEnd.y - selStart.y);
+
+    // ドラッグ距離が小さすぎる場合は無視
+    if (sw < 15 || sh < 15) return;
+
+    const sx = Math.min(selStart.x, selEnd.x);
+    const sy = Math.min(selStart.y, selEnd.y);
+
+    // コンテナサイズ = 画像の描画サイズ
+    const containerW = rect.width;
+    const containerH = rect.height;
+    const scale = Math.min(containerW / sw, containerH / sh);
+
+    // 選択領域の中心が画面中央に来るように移動
+    const selCenterX = sx + sw / 2;
+    const selCenterY = sy + sh / 2;
+    const tx = containerW / 2 - selCenterX * scale;
+    const ty = containerH / 2 - selCenterY * scale;
+
+    zoomTransform = `translate(${tx}px, ${ty}px) scale(${scale})`;
+    zoomed = true;
+  }
+
+  function handleZoomedClick(e: MouseEvent) {
+    e.stopPropagation();
+    resetZoom();
   }
 </script>
 
-<svelte:window onkeydown={handleKeydown} />
+<svelte:window
+  onkeydown={handleKeydown}
+  onmousemove={handleMouseMove}
+  onmouseup={handleMouseUp}
+/>
 
 <div
   class="preview-overlay"
@@ -191,16 +248,32 @@
     {#if loading}
       <div class="loading">読み込み中...</div>
     {:else if fullImageData}
-      <img
-        bind:this={imageElement}
-        src="data:image/jpeg;base64,{fullImageData}"
-        alt={image.name}
-        class="preview-image"
-        class:zoomed
-        style="transform-origin: {transformOrigin}; {zoomed ? `transform: scale(${getZoomScale()});` : ''}"
-        onclick={handleImageClick}
-        onmousemove={handleImageMouseMove}
-      />
+      {#if zoomed}
+        <!-- ズーム時: クリックでリセット -->
+        <img
+          bind:this={imageElement}
+          src="data:image/jpeg;base64,{fullImageData}"
+          alt={image.name}
+          class="preview-image zoomed"
+          style="transform-origin: 0 0; transform: {zoomTransform};"
+          onclick={handleZoomedClick}
+        />
+      {:else}
+        <!-- 通常時: ドラッグで範囲選択 -->
+        <img
+          bind:this={imageElement}
+          src="data:image/jpeg;base64,{fullImageData}"
+          alt={image.name}
+          class="preview-image"
+          onmousedown={handleImageMouseDown}
+        />
+        {#if selectionRect}
+          <div
+            class="selection-rect"
+            style="left: {selectionRect.x}px; top: {selectionRect.y}px; width: {selectionRect.w}px; height: {selectionRect.h}px;"
+          ></div>
+        {/if}
+      {/if}
     {/if}
   </div>
 
@@ -297,6 +370,7 @@
   }
 
   .image-container {
+    position: relative;
     max-width: calc(100vw - 120px);
     max-height: calc(100vh - 100px);
     display: flex;
@@ -313,13 +387,21 @@
     max-height: calc(100vh - 100px);
     object-fit: contain;
     border-radius: 4px;
-    cursor: zoom-in;
-    transition: transform 0.15s ease-out;
+    cursor: crosshair;
+    user-select: none;
+    -webkit-user-drag: none;
   }
 
   .preview-image.zoomed {
     cursor: zoom-out;
-    transition: none;
+  }
+
+  .selection-rect {
+    position: absolute;
+    border: 2px dashed rgba(255, 255, 255, 0.8);
+    background: rgba(255, 255, 255, 0.08);
+    pointer-events: none;
+    box-shadow: 0 0 0 9999px rgba(0, 0, 0, 0.4);
   }
 
   .loading {

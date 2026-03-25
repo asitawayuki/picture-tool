@@ -119,7 +119,7 @@
     margin: 0;
   }
 
-  input[type="range"]::-webkit-slider-track {
+  input[type="range"]::-webkit-slider-runnable-track {
     height: 4px;
     background: #555;
     border-radius: 2px;

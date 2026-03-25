@@ -88,7 +88,14 @@ pub fn read_exif_info(path: &Path) -> Result<ExifInfo> {
     let get_string = |tag: exif::Tag| -> Option<String> {
         exif_data
             .get_field(tag, exif::In::PRIMARY)
-            .map(|f| f.display_value().with_unit(&exif_data).to_string())
+            .map(|f| {
+                f.display_value()
+                    .with_unit(&exif_data)
+                    .to_string()
+                    .trim_matches('"')
+                    .trim()
+                    .to_string()
+            })
     };
 
     let iso = exif_data
@@ -116,8 +123,10 @@ pub fn read_exif_info(path: &Path) -> Result<ExifInfo> {
             let s = f.display_value().to_string();
             if s.ends_with(" mm") {
                 s.replace(" mm", "mm")
-            } else {
+            } else if s.ends_with("mm") {
                 s
+            } else {
+                format!("{s}mm")
             }
         });
 

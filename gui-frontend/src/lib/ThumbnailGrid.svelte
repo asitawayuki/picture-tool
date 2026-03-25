@@ -249,7 +249,7 @@
     margin: 0;
   }
 
-  .size-slider::-webkit-slider-track {
+  .size-slider::-webkit-slider-runnable-track {
     height: 3px;
     background: #555;
     border-radius: 2px;
