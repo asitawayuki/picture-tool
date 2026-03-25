@@ -1,0 +1,518 @@
+<script lang="ts">
+  import type { ExifFrameConfig, FrameLayout, FrameColor, OutputAspectRatio, DisplayItems } from './types';
+  import { renderExifFramePreview, listPresets, savePreset, deletePreset } from './api';
+
+  interface Props {
+    visible: boolean;
+    previewImagePath: string | null;
+    onClose: () => void;
+    onSave: (config: ExifFrameConfig) => void;
+  }
+
+  let { visible, previewImagePath, onClose, onSave }: Props = $props();
+
+  // Default config factory
+  function defaultConfig(): ExifFrameConfig {
+    return {
+      name: 'default',
+      layout: 'bottom_bar',
+      color: 'white',
+      aspect_ratio: { fixed: [4, 5] },
+      items: {
+        maker_logo: true, brand_logo: true, lens_brand_logo: true,
+        camera_model: true, lens_model: true, focal_length: true,
+        f_number: true, shutter_speed: true, iso: true,
+        date_taken: false, custom_text: false,
+      },
+      font: { font_path: null, primary_size: 0.025, secondary_size: 0.018 },
+      custom_text: '',
+      frame_padding: 0.05,
+    };
+  }
+
+  let config = $state<ExifFrameConfig>(defaultConfig());
+  let presets = $state<ExifFrameConfig[]>([]);
+  let selectedPresetName = $state('default');
+  let previewSrc = $state('');
+  let previewLoading = $state(false);
+
+  // Load presets on mount
+  $effect(() => {
+    if (visible) {
+      listPresets().then(p => { presets = p; });
+    }
+  });
+
+  // Live preview with debounce
+  let debounceTimer: ReturnType<typeof setTimeout>;
+  $effect(() => {
+    const _ = JSON.stringify(config);
+    if (!visible || !previewImagePath) return;
+    clearTimeout(debounceTimer);
+    debounceTimer = setTimeout(async () => {
+      if (!previewImagePath) return;
+      previewLoading = true;
+      try {
+        previewSrc = await renderExifFramePreview(previewImagePath, config);
+      } catch (e) {
+        console.error('Preview failed:', e);
+      } finally {
+        previewLoading = false;
+      }
+    }, 300);
+    return () => clearTimeout(debounceTimer);
+  });
+
+  // Preset selection handler
+  function selectPreset(name: string) {
+    selectedPresetName = name;
+    const preset = presets.find(p => p.name === name);
+    if (preset) {
+      config = { ...preset };
+    }
+  }
+
+  // Layout options
+  const layouts: { value: FrameLayout; label: string }[] = [
+    { value: 'bottom_bar', label: '下部バー' },
+    { value: 'side_bar', label: 'サイドバー' },
+    { value: 'full_border', label: 'フルボーダー' },
+  ];
+
+  // Aspect ratio presets
+  const aspectRatios: { label: string; value: OutputAspectRatio }[] = [
+    { label: '4:5', value: { fixed: [4, 5] } },
+    { label: '1:1', value: { fixed: [1, 1] } },
+    { label: '16:9', value: { fixed: [16, 9] } },
+    { label: '自由', value: 'free' },
+  ];
+
+  // Display item labels
+  const displayItemKeys: { key: keyof DisplayItems; label: string }[] = [
+    { key: 'maker_logo', label: 'ロゴ' },
+    { key: 'brand_logo', label: 'ブランド' },
+    { key: 'lens_brand_logo', label: 'レンズブランド' },
+    { key: 'camera_model', label: 'カメラ' },
+    { key: 'lens_model', label: 'レンズ' },
+    { key: 'focal_length', label: '焦点距離' },
+    { key: 'f_number', label: 'F値' },
+    { key: 'shutter_speed', label: 'SS' },
+    { key: 'iso', label: 'ISO' },
+    { key: 'date_taken', label: '日時' },
+    { key: 'custom_text', label: 'テキスト' },
+  ];
+
+  function isAspectRatioSelected(ar: OutputAspectRatio): boolean {
+    return JSON.stringify(config.aspect_ratio) === JSON.stringify(ar);
+  }
+
+  function handleSave() {
+    onSave(config);
+  }
+</script>
+
+{#if visible}
+  <div class="overlay" onclick={onClose}>
+    <div class="modal" onclick={(e) => e.stopPropagation()}>
+      <header>
+        <h2>Exifフレーム設定</h2>
+        <button class="close-btn" onclick={onClose}>✕</button>
+      </header>
+
+      <div class="body">
+        <!-- Settings -->
+        <div class="settings">
+          <!-- Preset -->
+          <section>
+            <label class="label">プリセット</label>
+            <select value={selectedPresetName} onchange={(e) => selectPreset(e.currentTarget.value)}>
+              {#each presets as preset}
+                <option value={preset.name}>{preset.name}</option>
+              {/each}
+            </select>
+          </section>
+
+          <!-- Layout -->
+          <section>
+            <label class="label">レイアウト</label>
+            <div class="layout-grid">
+              {#each layouts as layout}
+                <button
+                  class="layout-btn"
+                  class:active={config.layout === layout.value}
+                  onclick={() => config.layout = layout.value}
+                >
+                  {layout.label}
+                </button>
+              {/each}
+            </div>
+          </section>
+
+          <!-- Display Items -->
+          <section>
+            <label class="label">表示項目</label>
+            <div class="tags">
+              {#each displayItemKeys as item}
+                <button
+                  class="tag"
+                  class:active={config.items[item.key]}
+                  onclick={() => config.items[item.key] = !config.items[item.key]}
+                >
+                  {item.label}
+                </button>
+              {/each}
+            </div>
+          </section>
+
+          <!-- Aspect Ratio -->
+          <section>
+            <label class="label">アスペクト比</label>
+            <div class="aspect-btns">
+              {#each aspectRatios as ar}
+                <button
+                  class="aspect-btn"
+                  class:active={isAspectRatioSelected(ar.value)}
+                  onclick={() => config.aspect_ratio = ar.value}
+                >
+                  {ar.label}
+                </button>
+              {/each}
+            </div>
+          </section>
+
+          <!-- Frame Color -->
+          <section>
+            <label class="label">フレーム色</label>
+            <div class="color-options">
+              <button
+                class="color-circle white"
+                class:active={config.color === 'white'}
+                onclick={() => config.color = 'white'}
+              ></button>
+              <button
+                class="color-circle black"
+                class:active={config.color === 'black'}
+                onclick={() => config.color = 'black'}
+              ></button>
+            </div>
+          </section>
+
+          <!-- Font Size -->
+          <section>
+            <label class="label">フォントサイズ</label>
+            <div class="slider-row">
+              <span class="slider-label">メイン</span>
+              <input type="range" min="0.015" max="0.05" step="0.001" bind:value={config.font.primary_size} />
+              <span class="slider-value">{(config.font.primary_size * 100).toFixed(1)}%</span>
+            </div>
+            <div class="slider-row">
+              <span class="slider-label">サブ</span>
+              <input type="range" min="0.01" max="0.035" step="0.001" bind:value={config.font.secondary_size} />
+              <span class="slider-value">{(config.font.secondary_size * 100).toFixed(1)}%</span>
+            </div>
+          </section>
+
+          <!-- Custom Text -->
+          <section>
+            <label class="label">カスタムテキスト</label>
+            <input type="text" bind:value={config.custom_text} placeholder="@username" />
+          </section>
+
+          <!-- Frame Padding -->
+          <section>
+            <label class="label">フレーム幅</label>
+            <div class="slider-row">
+              <input type="range" min="0.02" max="0.15" step="0.005" bind:value={config.frame_padding} />
+              <span class="slider-value">{(config.frame_padding * 100).toFixed(1)}%</span>
+            </div>
+          </section>
+        </div>
+
+        <!-- Preview -->
+        <div class="preview">
+          <div class="preview-label">ライブプレビュー</div>
+          {#if previewLoading}
+            <div class="preview-loading">読み込み中...</div>
+          {:else if previewSrc}
+            <img src={previewSrc} alt="Preview" class="preview-img" />
+          {:else}
+            <div class="preview-empty">画像を選択してください</div>
+          {/if}
+        </div>
+      </div>
+
+      <footer>
+        <button class="btn-cancel" onclick={onClose}>キャンセル</button>
+        <button class="btn-save" onclick={handleSave}>保存</button>
+      </footer>
+    </div>
+  </div>
+{/if}
+
+<style>
+  .overlay {
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    background: rgba(0, 0, 0, 0.6);
+    z-index: 1000;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+
+  .modal {
+    background: var(--bg-secondary, #1a1a2e);
+    border: 1px solid var(--border-color, #333);
+    border-radius: 12px;
+    width: 90vw;
+    max-width: 800px;
+    max-height: 85vh;
+    display: flex;
+    flex-direction: column;
+    box-shadow: 0 8px 32px rgba(0, 0, 0, 0.5);
+  }
+
+  header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 16px 20px;
+    border-bottom: 1px solid var(--border-color, #333);
+  }
+
+  header h2 {
+    margin: 0;
+    font-size: 16px;
+    color: var(--text-primary, #e0e0e0);
+  }
+
+  .close-btn {
+    background: var(--bg-hover, #252540);
+    border: none;
+    color: var(--text-secondary, #888);
+    width: 28px;
+    height: 28px;
+    border-radius: var(--radius-sm, 4px);
+    cursor: pointer;
+    font-size: 14px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+
+  .close-btn:hover {
+    color: var(--text-primary, #e0e0e0);
+  }
+
+  .body {
+    display: flex;
+    flex: 1;
+    overflow: hidden;
+    min-height: 0;
+  }
+
+  .settings {
+    flex: 1;
+    padding: 16px 20px;
+    overflow-y: auto;
+  }
+
+  section {
+    margin-bottom: 16px;
+  }
+
+  .label {
+    display: block;
+    font-size: 11px;
+    color: var(--text-secondary, #888);
+    margin-bottom: 6px;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+  }
+
+  select, input[type="text"] {
+    width: 100%;
+    background: var(--bg-primary, #0f0f1a);
+    border: 1px solid var(--border-color, #333);
+    color: var(--text-primary, #e0e0e0);
+    padding: 6px 10px;
+    border-radius: var(--radius-sm, 4px);
+    font-size: 13px;
+  }
+
+  .layout-grid {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 6px;
+  }
+
+  .layout-btn {
+    background: var(--bg-primary, #0f0f1a);
+    border: 1px solid var(--border-color, #333);
+    color: var(--text-secondary, #888);
+    padding: 8px;
+    border-radius: var(--radius-sm, 4px);
+    cursor: pointer;
+    font-size: 11px;
+    transition: all 0.15s;
+  }
+
+  .layout-btn.active {
+    border-color: var(--accent, #818cf8);
+    color: var(--accent, #818cf8);
+    background: var(--accent-bg, rgba(99, 102, 241, 0.15));
+  }
+
+  .tags {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px;
+  }
+
+  .tag {
+    background: var(--bg-primary, #0f0f1a);
+    border: 1px solid var(--border-color, #333);
+    color: var(--text-secondary, #888);
+    padding: 3px 10px;
+    border-radius: 12px;
+    cursor: pointer;
+    font-size: 11px;
+    transition: all 0.15s;
+  }
+
+  .tag.active {
+    background: var(--accent-bg, rgba(99, 102, 241, 0.15));
+    border-color: var(--accent, #818cf8);
+    color: var(--accent, #818cf8);
+  }
+
+  .aspect-btns {
+    display: flex;
+    gap: 6px;
+  }
+
+  .aspect-btn {
+    flex: 1;
+    background: var(--bg-primary, #0f0f1a);
+    border: 1px solid var(--border-color, #333);
+    color: var(--text-secondary, #888);
+    padding: 6px;
+    border-radius: var(--radius-sm, 4px);
+    cursor: pointer;
+    font-size: 12px;
+  }
+
+  .aspect-btn.active {
+    border-color: var(--accent, #818cf8);
+    color: var(--accent, #818cf8);
+    background: var(--accent-bg, rgba(99, 102, 241, 0.15));
+  }
+
+  .color-options {
+    display: flex;
+    gap: 8px;
+  }
+
+  .color-circle {
+    width: 28px;
+    height: 28px;
+    border-radius: 50%;
+    border: 2px solid var(--border-color, #333);
+    cursor: pointer;
+    transition: border-color 0.15s;
+  }
+
+  .color-circle.white { background: #fff; }
+  .color-circle.black { background: #1a1a1a; }
+  .color-circle.active { border-color: var(--accent, #818cf8); }
+
+  .slider-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-bottom: 4px;
+  }
+
+  .slider-label {
+    font-size: 11px;
+    color: var(--text-secondary, #888);
+    min-width: 36px;
+  }
+
+  .slider-value {
+    font-size: 11px;
+    color: var(--text-secondary, #888);
+    min-width: 40px;
+    text-align: right;
+  }
+
+  input[type="range"] {
+    flex: 1;
+    accent-color: var(--accent, #818cf8);
+  }
+
+  .preview {
+    width: 220px;
+    background: var(--bg-primary, #0f0f1a);
+    border-left: 1px solid var(--border-color, #333);
+    padding: 16px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+  }
+
+  .preview-label {
+    font-size: 11px;
+    color: var(--text-secondary, #888);
+    margin-bottom: 12px;
+  }
+
+  .preview-img {
+    max-width: 100%;
+    max-height: 100%;
+    object-fit: contain;
+    border-radius: var(--radius-sm, 4px);
+  }
+
+  .preview-loading, .preview-empty {
+    color: var(--text-secondary, #888);
+    font-size: 12px;
+    text-align: center;
+    padding: 40px 0;
+  }
+
+  footer {
+    display: flex;
+    justify-content: flex-end;
+    gap: 8px;
+    padding: 12px 20px;
+    border-top: 1px solid var(--border-color, #333);
+  }
+
+  .btn-cancel {
+    background: var(--bg-hover, #252540);
+    border: 1px solid var(--border-color, #333);
+    color: var(--text-primary, #e0e0e0);
+    padding: 6px 20px;
+    border-radius: var(--radius, 6px);
+    cursor: pointer;
+    font-size: 13px;
+  }
+
+  .btn-save {
+    background: var(--accent, #818cf8);
+    border: none;
+    color: #fff;
+    padding: 6px 20px;
+    border-radius: var(--radius, 6px);
+    cursor: pointer;
+    font-size: 13px;
+  }
+
+  .btn-save:hover {
+    background: var(--accent-hover, #6366f1);
+  }
+</style>
