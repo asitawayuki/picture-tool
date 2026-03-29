@@ -258,46 +258,50 @@ pub fn calculate_pad_exif_layout(
 
     let (photo_x, photo_y, exif_x, exif_y, exif_w, exif_h) = match placement {
         ExifPlacement::Bottom => {
-            // 写真は左右中央、上に配置
-            let px = rem_w / 2;
-            let py = 0;
-            // Exifバーは写真の下、全幅
-            let ex = 0;
-            let ey = py + final_photo_h;
+            // Exifバーは下部に固定サイズで配置
+            let eh = exif_bar_size.min(rem_h);
             let ew = final_canvas_w;
-            let eh = final_canvas_h.saturating_sub(ey);
+            let ey = final_canvas_h - eh;
+            let ex = 0;
+            // 写真はExifバーの上の領域で上下中央
+            let photo_area_h = final_canvas_h - eh;
+            let py = (photo_area_h.saturating_sub(final_photo_h)) / 2;
+            let px = rem_w / 2;
             (px, py, ex, ey, ew, eh)
         }
         ExifPlacement::Top => {
-            // Exifバーは上
-            let eh = rem_h.max(exif_bar_size);
+            // Exifバーは上部に固定サイズで配置
+            let eh = exif_bar_size.min(rem_h);
+            let ew = final_canvas_w;
             let ex = 0;
             let ey = 0;
-            let ew = final_canvas_w;
-            // 写真はExifバーの下
+            // 写真はExifバーの下の領域で上下中央
+            let photo_area_h = final_canvas_h - eh;
+            let py = eh + (photo_area_h.saturating_sub(final_photo_h)) / 2;
             let px = rem_w / 2;
-            let py = eh;
             (px, py, ex, ey, ew, eh)
         }
         ExifPlacement::Right => {
-            // 写真は上下中央、左に配置
-            let px = 0;
-            let py = rem_h / 2;
-            // Exifバーは写真の右、全高
-            let ex = px + final_photo_w;
-            let ey = 0;
-            let ew = final_canvas_w.saturating_sub(ex);
+            // Exifバーは右に固定サイズで配置
+            let ew = exif_bar_size.min(rem_w);
             let eh = final_canvas_h;
+            let ex = final_canvas_w - ew;
+            let ey = 0;
+            // 写真はExifバーの左の領域で左右中央
+            let photo_area_w = final_canvas_w - ew;
+            let px = (photo_area_w.saturating_sub(final_photo_w)) / 2;
+            let py = rem_h / 2;
             (px, py, ex, ey, ew, eh)
         }
         ExifPlacement::Left => {
-            // Exifバーは左
-            let ew = rem_w.max(exif_bar_size);
+            // Exifバーは左に固定サイズで配置
+            let ew = exif_bar_size.min(rem_w);
+            let eh = final_canvas_h;
             let ex = 0;
             let ey = 0;
-            let eh = final_canvas_h;
-            // 写真はExifバーの右
-            let px = ew;
+            // 写真はExifバーの右の領域で左右中央
+            let photo_area_w = final_canvas_w - ew;
+            let px = ew + (photo_area_w.saturating_sub(final_photo_w)) / 2;
             let py = rem_h / 2;
             (px, py, ex, ey, ew, eh)
         }

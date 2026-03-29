@@ -244,6 +244,7 @@ pub fn render_exif_frame(
     let secondary_text = build_secondary_text(exif, &config.items, &config.custom_text);
 
     // 11. 描画
+    let photo_short_side = layout.photo_width.min(layout.photo_height);
     if layout.is_rotated {
         draw_exif_rotated(
             &mut canvas,
@@ -254,6 +255,7 @@ pub fn render_exif_frame(
             &secondary_text,
             primary_color,
             maker_logo.as_ref(),
+            photo_short_side,
         );
     } else {
         draw_exif_horizontal(
@@ -267,6 +269,7 @@ pub fn render_exif_frame(
             secondary_color,
             maker_logo.as_ref(),
             lens_logo.as_ref(),
+            photo_short_side,
         );
     }
 
@@ -285,6 +288,7 @@ fn draw_exif_horizontal(
     secondary_color: Rgba<u8>,
     maker_logo: Option<&DynamicImage>,
     lens_logo: Option<&DynamicImage>,
+    photo_short_side: u32,
 ) {
     let area_x = layout.exif_area_x;
     let area_y = layout.exif_area_y;
@@ -295,8 +299,8 @@ fn draw_exif_horizontal(
         return;
     }
 
-    // ロゴの高さは exif_area_height の 60%
-    let logo_display_h = (area_h as f32 * 0.6) as u32;
+    // ロゴの高さは exif_area_height の 45%
+    let logo_display_h = (area_h as f32 * 0.45) as u32;
     let logo_display_h = logo_display_h.max(1);
 
     // ロゴ描画 + ロゴが占める横幅
@@ -341,11 +345,13 @@ fn draw_exif_horizontal(
 
     // テキスト垂直中央配置
     // 2行：primary (上) + secondary (下)
-    let primary_size_base = area_h as f32 * config.font.primary_size;
-    let secondary_size_base = area_h as f32 * config.font.secondary_size;
-    // フォントサイズの最小値を area_h の一定割合に設定（小さすぎ防止）
-    let primary_size_base = primary_size_base.max(8.0);
-    let secondary_size_base = secondary_size_base.max(6.0);
+    // フォントサイズは写真の短辺ベース（primary_size はデフォルト 2.5%）
+    let primary_size_base = (photo_short_side as f32 * config.font.primary_size).max(10.0);
+    let secondary_size_base = (photo_short_side as f32 * config.font.secondary_size).max(8.0);
+    // ただし exif_area_height の 40% を上限とする（バーからはみ出さない）
+    let max_font = area_h as f32 * 0.4;
+    let primary_size_base = primary_size_base.min(max_font);
+    let secondary_size_base = secondary_size_base.min(max_font * 0.75);
 
     let (primary_fitted, primary_size) = if !primary_text.is_empty() {
         text::auto_fit_text(font, primary_size_base, primary_text, text_area_w as f32, 0.7)
@@ -391,7 +397,7 @@ fn draw_exif_horizontal(
     // 簡易実装: lens_logo は secondary 行の右端付近に表示
     if let Some(llogo) = lens_logo {
         let ll_h = (secondary_size * 1.2) as u32;
-        let ll_scaled = llogo.resize(u32::MAX, ll_h.max(1), image::imageops::FilterType::Lanczos3);
+        let ll_scaled: DynamicImage = llogo.resize(u32::MAX, ll_h.max(1), image::imageops::FilterType::Lanczos3);
         let ll_x = area_x + area_w - ll_scaled.width() - logo_margin;
         let ll_y = area_y + (area_h.saturating_sub(ll_scaled.height())) / 2;
         image::imageops::overlay(canvas, &ll_scaled, ll_x as i64, ll_y as i64);
@@ -408,6 +414,7 @@ fn draw_exif_rotated(
     secondary_text: &str,
     primary_color: Rgba<u8>,
     maker_logo: Option<&DynamicImage>,
+    photo_short_side: u32,
 ) {
     let area_x = layout.exif_area_x;
     let area_y = layout.exif_area_y;
@@ -422,9 +429,9 @@ fn draw_exif_rotated(
     let max_text_width = area_h as f32 * 0.9;
     let center_x = (area_x + area_w / 2) as i32;
 
-    // メーカーロゴを exif バーの上端付近に配置
+    // メーカーロゴを exif バーの上端付近に配置（90度回転）
     let logo_margin = (area_w as f32 * 0.1) as u32;
-    let logo_display_w = (area_w as f32 * 0.7) as u32;
+    let logo_display_w = (area_w as f32 * 0.5) as u32;
     let mut text_center_y = (area_y + area_h / 2) as i32;
 
     if let Some(logo) = maker_logo {
@@ -433,10 +440,12 @@ fn draw_exif_rotated(
             u32::MAX,
             image::imageops::FilterType::Lanczos3,
         );
-        let logo_h = logo_scaled.height();
-        let logo_x = area_x + (area_w.saturating_sub(logo_scaled.width())) / 2;
+        // ロゴを90度回転してテキストと同じ方向にする
+        let logo_rotated = logo_scaled.rotate90();
+        let logo_h = logo_rotated.height();
+        let logo_x = area_x + (area_w.saturating_sub(logo_rotated.width())) / 2;
         let logo_y = area_y + logo_margin;
-        image::imageops::overlay(canvas, &logo_scaled, logo_x as i64, logo_y as i64);
+        image::imageops::overlay(canvas, &logo_rotated, logo_x as i64, logo_y as i64);
         // ロゴの下からテキスト中央を調整
         let remaining_y_start = logo_y + logo_h + logo_margin;
         let remaining_h = (area_y + area_h).saturating_sub(remaining_y_start);
@@ -456,8 +465,10 @@ fn draw_exif_rotated(
         return;
     }
 
-    let text_size_base = area_w as f32 * config.font.primary_size;
-    let text_size_base = text_size_base.max(8.0);
+    // フォントサイズは写真の短辺ベース、ただしexifバー幅の40%を上限
+    let text_size_base = (photo_short_side as f32 * config.font.primary_size)
+        .max(10.0)
+        .min(area_w as f32 * 0.4);
 
     let (fitted, final_size) =
         text::auto_fit_text(font, text_size_base, &combined, max_text_width, 0.7);
