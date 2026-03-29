@@ -34,7 +34,7 @@ v1ではPad変換後に独立したフレーム領域を追加していたが、
 1. 必要なExif表示領域の高さ（横構図）または幅（縦構図）を算出
 2. 画像を縮小して必要なスペースを確保
 3. 4:5アスペクト比は維持
-4. 縮小率が20%を超える場合はExifフレームをスキップ（画像が過度に小さくなるのを防止）
+4. 縮小率が20%を超える場合（= 元画像の辺の長さが80%未満になる場合）はExifフレームをスキップ（画像が過度に小さくなるのを防止）
 
 ## レイアウト
 
@@ -56,14 +56,16 @@ v1ではPad変換後に独立したフレーム領域を追加していたが、
 │  │                   │  │
 │  └───────────────────┘  │
 │                         │
-│ [Sony] │ ILCE-7M4 ｜ [GM] FE 24-70mm F2.8 GM II │
+│ [Sony] | ILCE-7M4 | [GM] FE 24-70mm F2.8 GM II  │
 │          35mm  f/2.8  1/250s  ISO 400             │
 └─────────────────────────┘
 ```
 
-- 1行目: メーカーロゴ → セパレーター → カメラ型番 → セパレーター → [レンズブランドロゴ] レンズ型番
-- 2行目: 焦点距離 / F値 / シャッタースピード / ISO
-- テキスト色: 背景が明るい → `#333333`（1行目）/ `#888888`（2行目）、背景が暗い → `#ffffff` / `#aaaaaa`
+- 1行目: メーカーロゴ → `|` → カメラ型番 → `|` → [レンズブランドロゴ] レンズ型番
+- 2行目: 焦点距離 / F値 / シャッタースピード / ISO / [date_taken] / [custom_text]
+- `date_taken` と `custom_text` は `DisplayItems` で有効な場合のみ2行目の末尾に追加
+- セパレーターは半角パイプ `|` で統一
+- テキスト色: 背景の輝度（`0.299R + 0.587G + 0.114B`）で判定。閾値128未満（暗い）→ `#ffffff`（1行目）/ `#aaaaaa`（2行目）、128以上（明るい）→ `#333333` / `#888888`。White/Blackの2値だけでなくカスタムRGBにも対応
 
 ### 縦構図：右余白に1行凝縮・90度回転
 
@@ -83,8 +85,13 @@ v1ではPad変換後に独立したフレーム領域を追加していたが、
 
 （テキストは時計回り90度回転。画像を横に傾けた時に自然に読める方向）
 
-- 1行に凝縮: [Sonyロゴ] | カメラ型番 ｜ [GMロゴ] レンズ型番 ｜ 焦点距離 F値 SS ISO
+- 1行に凝縮: [Sonyロゴ] | カメラ型番 | [GMロゴ] レンズ型番 | 焦点距離 F値 SS ISO
 - 余白の縦方向全体を使って配置
+
+**テキストオーバーフロー時の対応:**
+1. まず自動フォントサイズ縮小（`FontConfig.primary_size` の70%まで）
+2. それでも収まらない場合、優先度の低い項目から省略: date_taken → custom_text → shutter_speed → iso → focal_length の順
+3. 最低限 カメラ型番 + レンズ型番 は表示する（これすら入らない場合はExifフレームスキップ）
 
 ### 配置位置の選択
 
@@ -102,6 +109,8 @@ pub enum ExifPosition {
 
 `Auto` がデフォルト。手動指定の場合は構図に関わらず指定位置に配置。横書き/1行回転は配置位置に応じて自動選択（上下→横書き2行、左右→1行回転）。
 
+**手動指定時の余白不足:** 縦構図で `Bottom` を指定した場合など、Padの自然な余白が指定方向にない場合も、余白不足時の画像縮小ロジックが自動適用される（縮小率20%超でスキップ）。つまり手動指定は「この方向に配置してほしい」というリクエストであり、不可能な場合はスキップされる。
+
 ## データモデル
 
 ### ExifFrameConfig（v2）
@@ -109,7 +118,6 @@ pub enum ExifPosition {
 ```rust
 pub struct ExifFrameConfig {
     pub name: String,
-    pub enabled: bool,
     pub position: ExifPosition,
     pub items: DisplayItems,
     pub font: FontConfig,
@@ -117,11 +125,14 @@ pub struct ExifFrameConfig {
 }
 ```
 
+`enabled` フィールドは持たない。有効/無効は呼び出し側で `Option<&ExifFrameConfig>` として制御する。GUIの状態管理で `enabled: bool` が必要な場合は、`process_image` に渡す前に `enabled` なら `Some`、でなければ `None` にフィルタする。
+
 v1から削除されたフィールド:
 - `layout` → 廃止（Padの余白位置で自動決定）
 - `color` → 廃止（Padの背景色を使用）
 - `aspect_ratio` → 廃止（Padのアスペクト比設定を使用）
 - `frame_padding` → 廃止（Padのパディングを使用）
+- `enabled` → 廃止（`Option` で制御）
 
 ### DisplayItems（v2）
 
@@ -151,9 +162,10 @@ pub fn process_image(
     config: &ProcessingConfig,
     exif_frame: Option<&ExifFrameConfig>,
     asset_dirs: Option<&AssetDirs>,
-    progress: &ProgressCallback,
 ) -> Result<ProcessResult>
 ```
+
+注: `progress` コールバックは `process_batch` のみが持つ。`process_image` 単体には不要（v1と同様）。
 
 内部フロー:
 1. `config.mode` が `Pad` かつ `exif_frame.is_some()` → Pad + Exif統合処理
@@ -173,6 +185,8 @@ pub fn process_image(
 | `gmaster.png` | PNG | GM レンズブランドロゴ（暗背景用） |
 | `gmaster_light.png` | PNG | GM レンズブランドロゴ（明背景用） |
 
+注: 現在リポジトリにある `sony_logo.svg` と `sony_gmaster.webp` は上記ファイル名にリネーム・変換する。WebPはPNGに変換して配置（`image` クレートのPNG読み込みを活用、WebP対応は不要）。
+
 ### ロゴ配置
 
 - **メーカーロゴ（Sony）**: Exif情報の左端に配置
@@ -183,13 +197,16 @@ pub fn process_image(
 ```json
 {
   "logo_match": {
-    "SONY": { "maker": "sony.svg" }
+    "SONY": { "maker": "sony.svg" },
+    "Sony": { "maker": "sony.svg" }
   },
   "lens_brand_match": [
     { "pattern": "GM", "match_type": "contains", "logo": "gmaster.png" }
   ]
 }
 ```
+
+`logo_match` のキーは `camera_make` との**完全一致**で判定する。Exifの `Make` フィールドはメーカーにより表記揺れがあるため（例: "SONY" / "Sony" / "Sony Corporation"）、想定されるバリエーションをすべてキーとして登録する。ユーザーは `model_map_custom.json` で追加バリエーションを登録可能。
 
 削除:
 - `camera` セクション（型番→表示名マッピング）
