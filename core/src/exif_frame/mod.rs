@@ -329,8 +329,12 @@ fn draw_exif_horizontal(
         text_start_x += separator_width + logo_margin;
     }
 
-    // テキストエリア幅
-    let text_area_w = area_x + area_w - text_start_x;
+    // テキストエリア幅（text_start_x が area_x+area_w を超えた場合は描画不可）
+    let area_end = area_x + area_w;
+    if text_start_x >= area_end {
+        return;
+    }
+    let text_area_w = area_end - text_start_x;
     if text_area_w == 0 {
         return;
     }
