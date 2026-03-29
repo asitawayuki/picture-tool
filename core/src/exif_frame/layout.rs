@@ -282,26 +282,24 @@ pub fn calculate_pad_exif_layout(
             (px, py, ex, ey, ew, eh)
         }
         ExifPlacement::Right => {
-            // Exifバーは右に固定サイズで配置
+            // Exifバーは右端に固定サイズで配置
             let ew = exif_bar_size.min(rem_w);
             let eh = final_canvas_h;
             let ex = final_canvas_w - ew;
             let ey = 0;
-            // 写真はExifバーの左の領域で左右中央
-            let photo_area_w = final_canvas_w - ew;
-            let px = (photo_area_w.saturating_sub(final_photo_w)) / 2;
+            // 写真はキャンバス全体で中央（視覚的に左右均等に見える）
+            let px = (final_canvas_w.saturating_sub(final_photo_w)) / 2;
             let py = rem_h / 2;
             (px, py, ex, ey, ew, eh)
         }
         ExifPlacement::Left => {
-            // Exifバーは左に固定サイズで配置
+            // Exifバーは左端に固定サイズで配置
             let ew = exif_bar_size.min(rem_w);
             let eh = final_canvas_h;
             let ex = 0;
             let ey = 0;
-            // 写真はExifバーの右の領域で左右中央
-            let photo_area_w = final_canvas_w - ew;
-            let px = ew + (photo_area_w.saturating_sub(final_photo_w)) / 2;
+            // 写真はキャンバス全体で中央
+            let px = (final_canvas_w.saturating_sub(final_photo_w)) / 2;
             let py = rem_h / 2;
             (px, py, ex, ey, ew, eh)
         }
