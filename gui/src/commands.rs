@@ -279,6 +279,7 @@ pub async fn get_exif_info(path: String) -> Result<core::ExifInfo, String> {
 pub async fn render_exif_frame_preview(
     path: String,
     config: ExifFrameConfig,
+    bg_color: core::BackgroundColor,
 ) -> Result<String, String> {
     tokio::task::spawn_blocking(move || {
         let path = std::path::Path::new(&path);
@@ -295,7 +296,7 @@ pub async fn render_exif_frame_preview(
             &thumbnail,
             &exif_info,
             &config,
-            &core::BackgroundColor::White,
+            &bg_color,
             &asset_dirs,
         )
         .map_err(|e| e.to_string())?;
