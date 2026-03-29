@@ -103,7 +103,14 @@ fn main() -> Result<()> {
 
     core::validate_config(&config)?;
 
-    let (exif_frame_config, asset_dirs) = if args.exif_frame {
+    let exif_frame_requested = if args.exif_frame && ConversionMode::from(args.mode) != ConversionMode::Pad {
+        eprintln!("Warning: --exif-frame is only supported with --mode pad. Ignoring.");
+        false
+    } else {
+        args.exif_frame
+    };
+
+    let (exif_frame_config, asset_dirs) = if exif_frame_requested {
         let config = if let Some(ref path) = args.preset_file {
             let json = std::fs::read_to_string(path)
                 .with_context(|| format!("Failed to read preset file: {}", path.display()))?;
