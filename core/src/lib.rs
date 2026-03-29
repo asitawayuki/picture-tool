@@ -208,30 +208,28 @@ pub fn process_image(
 
     let converted = match config.mode {
         ConversionMode::Crop => convert_aspect_ratio_crop(img),
-        ConversionMode::Pad => convert_aspect_ratio_pad(img, config.bg_color),
-        ConversionMode::Quality => img,
-    };
-
-    // Exifフレーム付加（オプション）
-    // EXIF読み取り失敗でもフレーム生成は続行
-    let framed = if let (Some(fc), Some(ad)) = (exif_frame_config, asset_dirs) {
-        let exif = read_exif_info(input_path).unwrap_or_default();
-        match exif_frame::render_exif_frame(&converted, &exif, fc, &config.bg_color, ad) {
-            Ok(result) => result,
-            Err(e) => {
-                eprintln!("Warning: Exif frame rendering failed for {}: {}", input_path.display(), e);
-                converted
+        ConversionMode::Pad => {
+            if let (Some(ef_config), Some(dirs)) = (exif_frame_config, asset_dirs) {
+                let exif = read_exif_info(input_path).unwrap_or_default();
+                match exif_frame::render_exif_frame(&img, &exif, ef_config, &config.bg_color, dirs) {
+                    Ok(framed) => framed,
+                    Err(e) => {
+                        eprintln!("Warning: Exif frame failed, falling back to pad only: {}", e);
+                        convert_aspect_ratio_pad(img, config.bg_color)
+                    }
+                }
+            } else {
+                convert_aspect_ratio_pad(img, config.bg_color)
             }
         }
-    } else {
-        converted
+        ConversionMode::Quality => img,
     };
 
     let output_path = generate_output_path(input_path, output_folder)?;
     let max_size_bytes = config.max_size_mb * 1024 * 1024;
 
     let (final_size, final_quality) =
-        save_with_size_limit(&framed, &output_path, config.quality, max_size_bytes)?;
+        save_with_size_limit(&converted, &output_path, config.quality, max_size_bytes)?;
 
     // 成功時のみ元ファイルを削除
     if config.delete_originals {
