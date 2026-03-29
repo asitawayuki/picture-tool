@@ -98,6 +98,19 @@ pub fn resolve_logo_file(
     None
 }
 
+/// レンズモデル名からレンズブランドロゴを解決して読み込む
+pub fn resolve_lens_brand_logo(
+    user_dir: Option<&Path>,
+    lens_model: &str,
+    model_map: &crate::model_map::ModelMap,
+    use_light: bool,
+    target_size: u32,
+) -> Option<DynamicImage> {
+    model_map
+        .lens_brand_logo(lens_model)
+        .and_then(|logo_file| resolve_and_load_logo(user_dir, logo_file, use_light, target_size))
+}
+
 /// ロゴを解決（ユーザーディレクトリ優先 → バンドルフォールバック）
 pub fn resolve_and_load_logo(
     user_dir: Option<&Path>,
