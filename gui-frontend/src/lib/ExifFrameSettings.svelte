@@ -1,11 +1,11 @@
 <script lang="ts">
-  import type { ExifFrameConfig, FrameLayout, FrameColor, OutputAspectRatio, DisplayItems } from './types';
-  import { renderExifFramePreview, listPresets, savePreset, deletePreset } from './api';
+  import type { ExifFrameConfig, ExifPosition, DisplayItems } from './types';
+  import { renderExifFramePreview, listPresets } from './api';
 
   interface Props {
     visible: boolean;
     previewImagePath: string | null;
-    bgColor?: string;
+    bgColor: "white" | "black";
     onClose: () => void;
     onSave: (config: ExifFrameConfig) => void;
   }
@@ -16,18 +16,21 @@
   function defaultConfig(): ExifFrameConfig {
     return {
       name: 'default',
-      layout: 'bottom_bar',
-      color: 'white',
-      aspect_ratio: { fixed: [4, 5] },
+      position: 'auto',
       items: {
-        maker_logo: true, brand_logo: true, lens_brand_logo: true,
-        camera_model: true, lens_model: true, focal_length: true,
-        f_number: true, shutter_speed: true, iso: true,
-        date_taken: false, custom_text: false,
+        maker_logo: true,
+        lens_brand_logo: true,
+        camera_model: true,
+        lens_model: true,
+        focal_length: true,
+        f_number: true,
+        shutter_speed: true,
+        iso: true,
+        date_taken: false,
+        custom_text: false,
       },
       font: { font_path: null, primary_size: 0.025, secondary_size: 0.018 },
       custom_text: '',
-      frame_padding: 0.05,
     };
   }
 
@@ -54,7 +57,7 @@
       if (!previewImagePath) return;
       previewLoading = true;
       try {
-        previewSrc = await renderExifFramePreview(previewImagePath, config);
+        previewSrc = await renderExifFramePreview(previewImagePath, config, bgColor);
       } catch (e) {
         console.error('Preview failed:', e);
       } finally {
@@ -73,25 +76,18 @@
     }
   }
 
-  // Layout options
-  const layouts: { value: FrameLayout; label: string }[] = [
-    { value: 'bottom_bar', label: '下部バー' },
-    { value: 'side_bar', label: 'サイドバー' },
-    { value: 'full_border', label: 'フルボーダー' },
+  // Position options
+  const positionOptions: { value: ExifPosition; label: string }[] = [
+    { value: 'auto', label: '自動' },
+    { value: 'bottom', label: '下' },
+    { value: 'top', label: '上' },
+    { value: 'right', label: '右' },
+    { value: 'left', label: '左' },
   ];
 
-  // Aspect ratio presets
-  const aspectRatios: { label: string; value: OutputAspectRatio }[] = [
-    { label: '4:5', value: { fixed: [4, 5] } },
-    { label: '1:1', value: { fixed: [1, 1] } },
-    { label: '16:9', value: { fixed: [16, 9] } },
-    { label: '自由', value: 'free' },
-  ];
-
-  // Display item labels
+  // Display item labels (brand_logo removed)
   const displayItemKeys: { key: keyof DisplayItems; label: string }[] = [
     { key: 'maker_logo', label: 'ロゴ' },
-    { key: 'brand_logo', label: 'ブランド' },
     { key: 'lens_brand_logo', label: 'レンズブランド' },
     { key: 'camera_model', label: 'カメラ' },
     { key: 'lens_model', label: 'レンズ' },
@@ -102,10 +98,6 @@
     { key: 'date_taken', label: '日時' },
     { key: 'custom_text', label: 'テキスト' },
   ];
-
-  function isAspectRatioSelected(ar: OutputAspectRatio): boolean {
-    return JSON.stringify(config.aspect_ratio) === JSON.stringify(ar);
-  }
 
   function handleSave() {
     onSave(config);
@@ -135,21 +127,21 @@
             </select>
           </section>
 
-          <!-- Layout -->
-          <section>
-            <span class="label">レイアウト</span>
-            <div class="layout-grid">
-              {#each layouts as layout}
+          <!-- Position -->
+          <div class="setting-group">
+            <label>配置位置</label>
+            <div class="position-selector">
+              {#each positionOptions as opt}
                 <button
-                  class="layout-btn"
-                  class:active={config.layout === layout.value}
-                  onclick={() => config.layout = layout.value}
+                  class="position-btn"
+                  class:active={config.position === opt.value}
+                  onclick={() => config.position = opt.value}
                 >
-                  {layout.label}
+                  {opt.label}
                 </button>
               {/each}
             </div>
-          </section>
+          </div>
 
           <!-- Display Items -->
           <section>
@@ -164,41 +156,6 @@
                   {item.label}
                 </button>
               {/each}
-            </div>
-          </section>
-
-          <!-- Aspect Ratio -->
-          <section>
-            <span class="label">アスペクト比</span>
-            <div class="aspect-btns">
-              {#each aspectRatios as ar}
-                <button
-                  class="aspect-btn"
-                  class:active={isAspectRatioSelected(ar.value)}
-                  onclick={() => config.aspect_ratio = ar.value}
-                >
-                  {ar.label}
-                </button>
-              {/each}
-            </div>
-          </section>
-
-          <!-- Frame Color -->
-          <section>
-            <span class="label">フレーム色</span>
-            <div class="color-options">
-              <button
-                class="color-circle white"
-                class:active={config.color === 'white'}
-                onclick={() => config.color = 'white'}
-                aria-label="白"
-              ></button>
-              <button
-                class="color-circle black"
-                class:active={config.color === 'black'}
-                onclick={() => config.color = 'black'}
-                aria-label="黒"
-              ></button>
             </div>
           </section>
 
@@ -221,15 +178,6 @@
           <section>
             <span class="label">カスタムテキスト</span>
             <input type="text" bind:value={config.custom_text} placeholder="@username" />
-          </section>
-
-          <!-- Frame Padding -->
-          <section>
-            <span class="label">フレーム幅</span>
-            <div class="slider-row">
-              <input type="range" min="0.02" max="0.15" step="0.005" bind:value={config.frame_padding} />
-              <span class="slider-value">{(config.frame_padding * 100).toFixed(1)}%</span>
-            </div>
           </section>
         </div>
 
@@ -348,24 +296,37 @@
     font-size: 13px;
   }
 
-  .layout-grid {
-    display: grid;
-    grid-template-columns: repeat(3, 1fr);
+  .setting-group {
+    margin-bottom: 16px;
+  }
+
+  .setting-group label {
+    display: block;
+    font-size: 11px;
+    color: var(--text-secondary, #888);
+    margin-bottom: 6px;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+  }
+
+  .position-selector {
+    display: flex;
     gap: 6px;
   }
 
-  .layout-btn {
+  .position-btn {
+    flex: 1;
     background: var(--bg-primary, #0f0f1a);
     border: 1px solid var(--border-color, #333);
     color: var(--text-secondary, #888);
-    padding: 8px;
+    padding: 6px 4px;
     border-radius: var(--radius-sm, 4px);
     cursor: pointer;
-    font-size: 11px;
+    font-size: 12px;
     transition: all 0.15s;
   }
 
-  .layout-btn.active {
+  .position-btn.active {
     border-color: var(--accent, #818cf8);
     color: var(--accent, #818cf8);
     background: var(--accent-bg, rgba(99, 102, 241, 0.15));
@@ -393,46 +354,6 @@
     border-color: var(--accent, #818cf8);
     color: var(--accent, #818cf8);
   }
-
-  .aspect-btns {
-    display: flex;
-    gap: 6px;
-  }
-
-  .aspect-btn {
-    flex: 1;
-    background: var(--bg-primary, #0f0f1a);
-    border: 1px solid var(--border-color, #333);
-    color: var(--text-secondary, #888);
-    padding: 6px;
-    border-radius: var(--radius-sm, 4px);
-    cursor: pointer;
-    font-size: 12px;
-  }
-
-  .aspect-btn.active {
-    border-color: var(--accent, #818cf8);
-    color: var(--accent, #818cf8);
-    background: var(--accent-bg, rgba(99, 102, 241, 0.15));
-  }
-
-  .color-options {
-    display: flex;
-    gap: 8px;
-  }
-
-  .color-circle {
-    width: 28px;
-    height: 28px;
-    border-radius: 50%;
-    border: 2px solid var(--border-color, #333);
-    cursor: pointer;
-    transition: border-color 0.15s;
-  }
-
-  .color-circle.white { background: #fff; }
-  .color-circle.black { background: #1a1a1a; }
-  .color-circle.active { border-color: var(--accent, #818cf8); }
 
   .slider-row {
     display: flex;
