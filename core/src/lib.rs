@@ -216,7 +216,7 @@ pub fn process_image(
     // EXIF読み取り失敗でもフレーム生成は続行
     let framed = if let (Some(fc), Some(ad)) = (exif_frame_config, asset_dirs) {
         let exif = read_exif_info(input_path).unwrap_or_default();
-        match exif_frame::render_exif_frame(&converted, &exif, fc, ad) {
+        match exif_frame::render_exif_frame(&converted, &exif, fc, &config.bg_color, ad) {
             Ok(result) => result,
             Err(e) => {
                 eprintln!("Warning: Exif frame rendering failed for {}: {}", input_path.display(), e);

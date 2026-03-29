@@ -291,8 +291,14 @@ pub async fn render_exif_frame_preview(
         let exif_info = core::read_exif_info(path).unwrap_or_default();
         let asset_dirs = exif_frame::AssetDirs::default();
 
-        let result = exif_frame::render_exif_frame(&thumbnail, &exif_info, &config, &asset_dirs)
-            .map_err(|e| e.to_string())?;
+        let result = exif_frame::render_exif_frame(
+            &thumbnail,
+            &exif_info,
+            &config,
+            &core::BackgroundColor::White,
+            &asset_dirs,
+        )
+        .map_err(|e| e.to_string())?;
 
         // base64エンコード
         let mut buf = Vec::new();

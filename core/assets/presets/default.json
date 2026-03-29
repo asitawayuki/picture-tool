@@ -1,11 +1,8 @@
 {
   "name": "default",
-  "layout": "bottom_bar",
-  "color": "white",
-  "aspect_ratio": { "fixed": [4, 5] },
+  "position": "auto",
   "items": {
     "maker_logo": true,
-    "brand_logo": true,
     "lens_brand_logo": true,
     "camera_model": true,
     "lens_model": true,
@@ -21,6 +18,5 @@
     "primary_size": 0.025,
     "secondary_size": 0.018
   },
-  "custom_text": "",
-  "frame_padding": 0.05
+  "custom_text": ""
 }
