@@ -5,11 +5,12 @@
   interface Props {
     visible: boolean;
     previewImagePath: string | null;
+    bgColor?: string;
     onClose: () => void;
     onSave: (config: ExifFrameConfig) => void;
   }
 
-  let { visible, previewImagePath, onClose, onSave }: Props = $props();
+  let { visible, previewImagePath, bgColor, onClose, onSave }: Props = $props();
 
   // Default config factory
   function defaultConfig(): ExifFrameConfig {

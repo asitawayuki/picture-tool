@@ -76,33 +76,35 @@
       <span>元ファイルを削除</span>
     </label>
 
-    <div class="exif-frame-section">
-      <label class="checkbox">
-        <input
-          type="checkbox"
-          checked={exifFrameEnabled}
-          onchange={(e) => onExifFrameEnabledChange((e.target as HTMLInputElement).checked)}
-        />
-        <span>Exifフレーム</span>
-      </label>
+    {#if config.mode === "pad"}
+      <div class="exif-frame-section">
+        <label class="checkbox">
+          <input
+            type="checkbox"
+            checked={exifFrameEnabled}
+            onchange={(e) => onExifFrameEnabledChange((e.target as HTMLInputElement).checked)}
+          />
+          <span>Exifフレーム</span>
+        </label>
 
-      {#if exifFrameEnabled}
-        <div class="exif-frame-controls">
-          <select
-            value={selectedPresetName}
-            onchange={(e) => onPresetChange((e.target as HTMLSelectElement).value)}
-          >
-            {#each presets as preset}
-              <option value={preset.name}>{preset.name}</option>
-            {/each}
-            {#if presets.length === 0}
-              <option value="default">default</option>
-            {/if}
-          </select>
-          <button class="gear-btn" onclick={onOpenExifSettings} title="Exifフレーム設定">⚙</button>
-        </div>
-      {/if}
-    </div>
+        {#if exifFrameEnabled}
+          <div class="exif-frame-controls">
+            <select
+              value={selectedPresetName}
+              onchange={(e) => onPresetChange((e.target as HTMLSelectElement).value)}
+            >
+              {#each presets as preset}
+                <option value={preset.name}>{preset.name}</option>
+              {/each}
+              {#if presets.length === 0}
+                <option value="default">default</option>
+              {/if}
+            </select>
+            <button class="gear-btn" onclick={onOpenExifSettings} title="Exifフレーム設定">⚙</button>
+          </div>
+        {/if}
+      </div>
+    {/if}
   </div>
 
   <div class="action">

@@ -175,11 +175,12 @@
 
     try {
       const files = selectedImages.map((img) => img.path);
+      const efConfig = (config.mode === "pad" && exifFrameEnabled) ? activeExifFrameConfig : null;
       const results = await processImages(
         files,
         outputFolder,
         config,
-        exifFrameEnabled ? activeExifFrameConfig : null
+        efConfig
       );
       alert(`完了: ${results.length}/${selectedImages.length} 枚を変換しました`);
     } catch (e) {
@@ -255,6 +256,7 @@
   <ExifFrameSettings
     visible={showExifFrameSettings}
     previewImagePath={selectedImages[0]?.path ?? null}
+    bgColor={config.bg_color}
     onClose={() => (showExifFrameSettings = false)}
     onSave={async (config) => {
       await savePreset(config);
