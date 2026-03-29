@@ -58,9 +58,10 @@ export async function getExifInfo(path: string): Promise<ExifInfo> {
 
 export async function renderExifFramePreview(
   path: string,
-  config: ExifFrameConfig
+  config: ExifFrameConfig,
+  bgColor: "white" | "black",
 ): Promise<string> {
-  return invoke("render_exif_frame_preview", { path, config });
+  return invoke("render_exif_frame_preview", { path, config, bgColor });
 }
 
 export async function listPresets(): Promise<ExifFrameConfig[]> {

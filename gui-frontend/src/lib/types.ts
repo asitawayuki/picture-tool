@@ -47,18 +47,10 @@ export interface ExifInfo {
 }
 
 // Exif Frame types
-export type FrameLayout = "bottom_bar" | "side_bar" | "full_border";
-
-export type FrameColor =
-  | "white"
-  | "black"
-  | { custom: [number, number, number] };
-
-export type OutputAspectRatio = { fixed: [number, number] } | "free";
+export type ExifPosition = "auto" | "bottom" | "top" | "right" | "left";
 
 export interface DisplayItems {
   maker_logo: boolean;
-  brand_logo: boolean;
   lens_brand_logo: boolean;
   camera_model: boolean;
   lens_model: boolean;
@@ -78,13 +70,10 @@ export interface FontConfig {
 
 export interface ExifFrameConfig {
   name: string;
-  layout: FrameLayout;
-  color: FrameColor;
-  aspect_ratio: OutputAspectRatio;
+  position: ExifPosition;
   items: DisplayItems;
   font: FontConfig;
   custom_text: string;
-  frame_padding: number;
 }
 
 export interface FontInfo {
