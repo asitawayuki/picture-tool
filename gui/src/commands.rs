@@ -1,6 +1,7 @@
 use crate::state::ProcessingState;
 use crate::types::*;
 use picture_tool_core as core;
+use picture_tool_core::exif_frame::{self, ExifFrameConfig, FontInfo, LogoInfo};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::Ordering;
@@ -177,6 +178,7 @@ pub async fn process_images(
     files: Vec<String>,
     output_folder: String,
     config: core::ProcessingConfig,
+    exif_frame_config: Option<core::exif_frame::ExifFrameConfig>,
 ) -> Result<Vec<core::ProcessResult>, String> {
     core::validate_config(&config).map_err(|e| e.to_string())?;
 
@@ -223,7 +225,15 @@ pub async fn process_images(
         });
 
         let output_path = PathBuf::from(&output);
-        core::process_batch(&file_paths, &output_path, &config, Some(on_progress))
+        let asset_dirs = core::exif_frame::AssetDirs::default();
+        core::process_batch(
+            &file_paths,
+            &output_path,
+            &config,
+            exif_frame_config.as_ref(),
+            Some(&asset_dirs),
+            Some(on_progress),
+        )
     })
     .await
     .map_err(|e| e.to_string())?;
@@ -264,3 +274,106 @@ pub async fn get_exif_info(path: String) -> Result<core::ExifInfo, String> {
 
 // 注: pick_folderはTauriコマンドとしては実装しない。
 // フロントエンドから@tauri-apps/plugin-dialogのopen()を直接呼び出す。
+
+#[tauri::command]
+pub async fn render_exif_frame_preview(
+    path: String,
+    config: ExifFrameConfig,
+    bg_color: core::BackgroundColor,
+) -> Result<String, String> {
+    tokio::task::spawn_blocking(move || {
+        let path = std::path::Path::new(&path);
+        let img = image::open(path).map_err(|e| e.to_string())?;
+
+        // 低解像度にリサイズ（プレビュー用）
+        let max_dim = 400u32;
+        let thumbnail = img.resize(max_dim, max_dim, image::imageops::FilterType::Triangle);
+
+        let exif_info = core::read_exif_info(path).unwrap_or_default();
+        let asset_dirs = exif_frame::AssetDirs::default();
+
+        let result = exif_frame::render_exif_frame(
+            &thumbnail,
+            &exif_info,
+            &config,
+            &bg_color,
+            &asset_dirs,
+        )
+        .map_err(|e| e.to_string())?;
+
+        // base64エンコード
+        let mut buf = Vec::new();
+        let mut cursor = std::io::Cursor::new(&mut buf);
+        let mut encoder = image::codecs::jpeg::JpegEncoder::new_with_quality(&mut cursor, 85);
+        encoder
+            .encode_image(&result)
+            .map_err(|e| e.to_string())?;
+
+        use base64::Engine;
+        Ok(format!(
+            "data:image/jpeg;base64,{}",
+            base64::engine::general_purpose::STANDARD.encode(&buf)
+        ))
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+pub async fn list_presets() -> Result<Vec<ExifFrameConfig>, String> {
+    let presets_dir = dirs::config_dir().map(|d| d.join("picture-tool/presets"));
+    Ok(exif_frame::preset::list_all_presets(presets_dir.as_deref()))
+}
+
+#[tauri::command]
+pub async fn save_preset(config: ExifFrameConfig) -> Result<(), String> {
+    let presets_dir = dirs::config_dir()
+        .ok_or("config dir not found".to_string())?
+        .join("picture-tool/presets");
+    exif_frame::preset::save_preset(&presets_dir, &config).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn delete_preset(name: String) -> Result<(), String> {
+    let presets_dir = dirs::config_dir()
+        .ok_or("config dir not found".to_string())?
+        .join("picture-tool/presets");
+    exif_frame::preset::delete_preset(&presets_dir, &name).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn list_available_fonts() -> Result<Vec<FontInfo>, String> {
+    let mut fonts = vec![FontInfo {
+        display_name: "Noto Sans JP (bundled)".to_string(),
+        path: None,
+        is_bundled: true,
+    }];
+    if let Some(user_dir) = dirs::config_dir().map(|d| d.join("picture-tool/assets/fonts")) {
+        if user_dir.exists() {
+            for entry in std::fs::read_dir(&user_dir).into_iter().flatten().flatten() {
+                let path = entry.path();
+                if path
+                    .extension()
+                    .map_or(false, |e| e == "ttf" || e == "otf")
+                {
+                    fonts.push(FontInfo {
+                        display_name: format!(
+                            "User: {}",
+                            path.file_stem()
+                                .unwrap_or_default()
+                                .to_string_lossy()
+                        ),
+                        path: Some(path.to_string_lossy().to_string()),
+                        is_bundled: false,
+                    });
+                }
+            }
+        }
+    }
+    Ok(fonts)
+}
+
+#[tauri::command]
+pub async fn list_available_logos() -> Result<Vec<LogoInfo>, String> {
+    Ok(vec![])
+}

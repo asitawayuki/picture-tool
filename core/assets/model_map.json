@@ -1,0 +1,10 @@
+{
+  "logo_match": {
+    "SONY": { "maker": "sony.svg" },
+    "Sony": { "maker": "sony.svg" },
+    "Sony Corporation": { "maker": "sony.svg" }
+  },
+  "lens_brand_match": [
+    { "pattern": "GM", "match_type": "contains", "logo": "gmaster.png" }
+  ]
+}
