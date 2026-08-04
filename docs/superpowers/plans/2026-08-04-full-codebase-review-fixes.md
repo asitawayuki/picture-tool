@@ -130,6 +130,8 @@ exif-frame v2（コミット30本超、core の約半分）が**検証されな�
       fmt → clippy(`-D warnings`) → test(`--workspace`) の順に実行する。
       frontend build を cargo より前に置くのは、`tauri-build` が
       `frontendDist`（`../gui-frontend/dist`）の存在を要求するため。
+      → **S1 で `actions/checkout` を v4 → v5 に更新した**。v4 は Node.js 20 を対象としており
+        runner 側で Node.js 24 に強制実行されるため、毎回 deprecation の annotation が出ていた。
 - [x] **CI-2** `make test` を `cargo test --workspace` に変更。
       `make lint`（fmt --check + clippy -D warnings）、`make fmt`、`make typecheck`、
       `make check`（lint + test + typecheck）を追加。
