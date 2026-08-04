@@ -186,6 +186,47 @@ mod tests {
         assert!(resolved.unwrap().to_str().unwrap().ends_with(".svg"));
     }
 
+    /// `model_map.json` が参照するロゴは、ユーザーが何も配置していなくても
+    /// バンドルアセットだけで解決できなければならない
+    /// （そうでないとメーカーロゴ項目を有効にしても静かに何も描画されない）。
+    /// さらに背景色は White / Black の双方を選べる仕様なので、
+    /// 暗い背景で不可視にならないよう `_light` バリアントも実在する必要がある。
+    #[test]
+    fn every_logo_referenced_by_model_map_is_bundled() {
+        let json_path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("assets/model_map.json");
+        let json: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&json_path).unwrap()).unwrap();
+
+        let mut referenced: Vec<String> = json["logo_match"]
+            .as_object()
+            .expect("logo_match must be an object")
+            .values()
+            .map(|entry| entry["maker"].as_str().unwrap().to_string())
+            .collect();
+        referenced.extend(
+            json["lens_brand_match"]
+                .as_array()
+                .expect("lens_brand_match must be an array")
+                .iter()
+                .map(|rule| rule["logo"].as_str().unwrap().to_string()),
+        );
+        assert!(!referenced.is_empty());
+
+        for filename in referenced {
+            let (stem, ext) = filename.rsplit_once('.').expect("logo needs an extension");
+            // `resolve_and_load_logo` は light 欠落時に base へフォールバックするため、
+            // light バリアントの実在は個別に検証する
+            for candidate in [filename.clone(), format!("{}_light.{}", stem, ext)] {
+                assert!(
+                    load_bundled_logo(&candidate, 64).is_ok(),
+                    "model_map.json references {:?} but bundled asset {:?} is missing or undecodable",
+                    filename,
+                    candidate
+                );
+            }
+        }
+    }
+
     #[test]
     fn resolve_logo_light_variant() {
         let dir = tempfile::TempDir::new().unwrap();

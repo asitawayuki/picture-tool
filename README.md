@@ -122,3 +122,55 @@ picture-tool-rust/
 - ファイル名: `{元のファイル名}_processed.jpg`（重複時は連番追加）
 - 元の画像ファイルは上書きしない（`--delete-originals`で明示的に削除）
 - 読み込み失敗した画像はスキップして継続
+
+## ライセンス
+
+本ソフトウェアは [MIT License](./LICENSE) で提供されます。
+
+### 同梱アセット
+
+| アセット | 権利者 | ライセンス |
+|---------|--------|-----------|
+| `core/assets/fonts/NotoSansJP-Regular.ttf` | Adobe | [SIL Open Font License 1.1](./core/assets/fonts/OFL.txt) |
+| `core/assets/logos/*` | 各商標権者 | 下記「商標について」を参照 |
+
+### 商標について
+
+`core/assets/logos/` に同梱しているメーカーロゴおよびレンズブランドロゴ
+（SONY、G Master、FUJIFILM）は、それぞれソニーグループ株式会社および
+富士フイルムホールディングス株式会社の**登録商標**であり、権利は各社に帰属します。
+
+- 本ツールは各社とは**一切関係がなく**、提携・後援・承認を受けたものではありません
+- ロゴは、生成される画像において**撮影機材を識別する目的でのみ**使用しています
+- ロゴの著作権・商標権は各社に留保されており、本ソフトウェアの MIT License は
+  これらのロゴには適用されません
+- 商用利用など、各社のブランドガイドラインに抵触しうる用途では、
+  利用者自身の責任で権利者に確認してください
+
+### ロゴを差し替える / 追加する
+
+同梱ロゴを使わず、自分で用意したロゴだけを使うこともできます。
+以下のディレクトリに置いたファイルは**同梱ロゴより優先**されます。
+
+| OS | 配置先 |
+|----|--------|
+| Linux | `~/.config/picture-tool/assets/logos/` |
+| macOS | `~/Library/Application Support/picture-tool/assets/logos/` |
+| Windows | `%APPDATA%\picture-tool\assets\logos\` |
+
+ファイル名は `{名前}.svg` / `{名前}.png`、暗い背景用のバリアントは
+`{名前}_light.svg` / `{名前}_light.png`（SVG 優先）。
+どのメーカー名（Exif の Make タグ）でどのファイルを使うかは、
+`assets/` の1つ上（例: `~/.config/picture-tool/model_map_custom.json`）に置いた
+JSON で上書きできます。`logo_match` と `lens_brand_match` は**両方とも必須**です。
+
+```json
+{
+  "logo_match": {
+    "NIKON CORPORATION": { "maker": "nikon.svg" }
+  },
+  "lens_brand_match": [
+    { "pattern": "NIKKOR Z", "match_type": "contains", "logo": "nikkor_z.svg" }
+  ]
+}
+```

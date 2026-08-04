@@ -68,28 +68,54 @@ exif-frame v2（コミット30本超、core の約半分）が**検証されな�
 
 ## S1. ライセンス・リポジトリ衛生
 
-コード変更なし。法的リスクの解消が目的。
+法的リスクの解消が目的。
 
-- [ ] **C4-a** ルートに `LICENSE` を追加。プロジェクト自体のライセンスが未定義。
-- [ ] **C4-b** `core/assets/fonts/NotoSansJP-Regular.ttf`（9.1MB, git 追跡下）は **SIL OFL 1.1**。
+> **実施済み（2026-08-04）**。以下の実施メモも参照。
+
+- [x] **C4-a** ルートに `LICENSE` を追加。プロジェクト自体のライセンスが未定義。
+      → **MIT**（`Copyright (c) 2026 KOMO`）に決定。ルート `Cargo.toml` に
+        `[workspace.package] license = "MIT"` を置き、core/cli/gui は `license.workspace = true` で継承。
+- [x] **C4-b** `core/assets/fonts/NotoSansJP-Regular.ttf`（9.1MB, git 追跡下）は **SIL OFL 1.1**。
       OFL §2 は再配布時のライセンス全文同梱を要求しており、`rust-embed` でバイナリに埋め込む形態でも同様。
-      → `core/assets/fonts/OFL.txt` を配置する。`rust-embed` の対象に含めるか除外するかを決める
-      （含める場合は `text.rs:19-28` の `.ttf/.otf` 検索に影響しないことを確認）。
-- [ ] **C4-c** `core/assets/logos/{sony,sony_light,gmaster,gmaster_light,fujifilm}` は
-      SONY / FUJIFILM の**登録商標**。「メーカーロゴ入り画像を生成するツール」は出所混同を
-      指摘されやすい類型。
-      → **推奨: バンドルから削除**し、ユーザー配置のみに限定する。
-        `logo.rs:115-150` に既にユーザーディレクトリ読み込み機構があるため、
-        `#[derive(Embed)]` の対象から外すだけで済む。
-      → バンドルを維持する場合は README に免責（各社に権利帰属・本ツールは各社と無関係）を明記。
-- [ ] **REPO-1** `.serena/`（6ファイル）をリポジトリから削除し `.gitignore` に追加。
-      → `.serena/memories/*.md` は「単一ファイル構成: `src/main.rs`」等、ワークスペース化・GUI・
-        exif_frame 以前の記述のまま。CLAUDE.md と矛盾する内容が同居しており、
-        新規参加者と AI エージェントを確実に誤誘導する。
-- [ ] **REPO-2** `.gitignore` に `.claude/settings.local.json`、`.DS_Store`、`*.swp` を追加。
-      （現状は個人のグローバル gitignore で除外されているだけで、他環境では誤コミットされる）
-- [ ] **REPO-3** `gui/icons/ios/`（18枚）と `android/`（15枚）を削除。
-      `tauri.conf.json` にモバイルターゲットが無く完全に未使用。
+      → `core/assets/fonts/OFL.txt` を配置した（**rust-embed の対象に含める**。
+        バイナリ単体配布でも OFL §2 を満たすため。`text.rs` の `.ttf/.otf` 検索は影響なし＝
+        `load_bundled_font` テスト green）。
+- [x] **C4-c** `core/assets/logos/{sony,sony_light,gmaster,gmaster_light,fujifilm}` は
+      SONY / FUJIFILM の**登録商標**。
+      → **ユーザー判断: バンドル維持 + README に免責明記**（2026-08-04）。
+        README に「ライセンス」節を新設し、同梱アセット表・商標帰属・非提携の明示・
+        ユーザーロゴでの差し替え手順（配置先 OS 別パス、`_light` 命名規則、
+        `model_map_custom.json` の例）を記載した。
+- [x] **REPO-1** `.serena/`（6ファイル）をリポジトリから削除し `.gitignore` に追加。
+      → `git rm -r --cached .serena` で**追跡解除のみ**（ローカルファイルは残置）。
+        内容が古いことは確認済み（`project_overview.md` が「単一ファイル構成: `src/main.rs`」のまま）。
+        ローカルの stale な memories は Serena 側で再生成すること。
+- [x] **REPO-2** `.gitignore` に `.claude/settings.local.json`、`.DS_Store`、`*.swp` を追加。
+      → あわせて `.serena/` を追加し、全体をコメント付きでセクション分けした。
+- [x] **REPO-3** `gui/icons/ios/`（18枚）と `android/`（15枚）を削除。
+      → `tauri.conf.json` には `bundle` セクション自体が無く、Tauri のデフォルト
+        （`32x32.png` / `128x128.png` / `128x128@2x.png` / `icon.icns` / `icon.ico`）だけが使われる。
+        ルート直下の PNG 群は残し、`ios/` `android/` のみ削除した。
+
+### S1 実施メモ（2026-08-04）
+
+- **DEAD-5 を解消した**（S2 からの持ち越し）。C4-c で「バンドル維持」と決まったため、
+  `model_map.json` に `FUJIFILM` / `Fujifilm` / `FUJIFILM Corporation` を配線し、
+  `fujifilm_light.svg` を新規作成した（`fujifilm.svg` の `fill:#000000` 16箇所を
+  `#ffffff` に置換。ブランドレッド `#ed1a3a` は保持。`sony_light.svg` と同じ生成規則）。
+- **再発防止テストを追加**（`test-integrity` skill 適用、Rigor: Standard）:
+  - `model_map::tests::maker_logo_fujifilm_variants` — FUJIFILM 3表記が `fujifilm.svg` を返す
+  - `exif_frame::logo::tests::every_logo_referenced_by_model_map_is_bundled` —
+    **`model_map.json` を実際に読んで**、参照される全ロゴが base と `_light` の両方で
+    バンドルから解決できることを検証。JSON 駆動なので将来メーカーを追加しても自動でカバーされる。
+    `resolve_and_load_logo` は light 欠落時に base へフォールバックしてしまうため、
+    light の実在は `load_bundled_logo` で直接検証している。
+    `fujifilm_light.svg` を一時削除して**実際に赤くなることを確認済み**。
+- テスト数 78 → **80**。`make check` は green（clippy/fmt green, 80 passed,
+  svelte-check 0 errors / 6 warnings = S5-M12 のまま）。
+- **S2 の CI が green であることを確認した**（run 30910677408 / `80c9e1e` / conclusion: success）。
+  ubuntu-22.04 のパッケージ名という唯一の未検証点は解消。
+- **新規発見 → S4-L7 に起票**: 同梱フォントの中身がファイル名と食い違っている。
 
 ---
 
@@ -129,11 +155,11 @@ exif-frame v2（コミット30本超、core の約半分）が**検証されな�
 - [x] **DEAD-4** **残す**方針に決定。`list_available_fonts` / `deletePreset` は
       バックエンドが正しく動作し、フォント選択は v2 spec:247 の要求機能。
       → **S5 に「フォント選択 UI とプリセット削除ボタンを追加する」タスクを追加すること。**
-- [ ] **DEAD-5** `core/assets/logos/fujifilm.svg` は**到達不能**。
+- [x] **DEAD-5** `core/assets/logos/fujifilm.svg` は**到達不能**。
       `model_map.json` の `logo_match` は `SONY`/`Sony`/`Sony Corporation` のみで FUJIFILM のエントリが無く、
       `fujifilm_light.svg` も存在しない（コミット `c8beb03` でアセットだけ追加してマッピングを忘れている）。
-      → **S1-C4-c の商標判断待ちとして S2 では保留**。削除するなら本項は消滅、
-        維持するなら `model_map.json` に配線し `_light` を用意する。
+      → **S1 で解消**。C4-c が「バンドル維持」に決まったため、`model_map.json` に配線し
+        `fujifilm_light.svg` を作成。再発防止テストも追加した（S1 実施メモ参照）。
 
 ### S2 で S5 から前倒しした項目
 
@@ -338,6 +364,21 @@ exif-frame v2（コミット30本超、core の約半分）が**検証されな�
       静かに切り詰められる（`:214`, `:262` の `min(rem_h)`）。C1 修正後に到達可能性を再検証。
 - [ ] **L6** 9.1MB の CJK フォントが exif-frame を使わない CLI ユーザーのバイナリにも常に乗る
       （`text.rs:7-9` の無条件 `#[derive(Embed)]`）。Cargo feature での切り分けを検討。
+- [ ] **L7 同梱フォントの中身がファイル名と食い違っている**（S1 で発見 / 2026-08-04）
+
+  `core/assets/fonts/NotoSansJP-Regular.ttf` の name テーブルは以下の通りで、
+  実体は **Regular ではなく Thin ウェイト**。Exif テキストが意図より極細で描画されている。
+
+  | name ID | 値 |
+  |---|---|
+  | 0 (copyright) | `(c) 2014-2021 Adobe (http://www.adobe.com/), with Reserved Font Name 'Source'.` |
+  | 1 (family) | `Noto Sans JP Thin` |
+  | 6 (postscript) | `NotoSansJP-Thin` |
+  | 5 (version) | `Version 2.004-H2` |
+
+  → Regular ウェイトを取得して差し替える（ファイル名は据え置きでよい）。
+    差し替え時は `OFL.txt` の著作権表記が新ファイルの name ID 0 と一致するか再確認すること。
+    L6 の feature 切り分けと同時にやると差分が読みやすい。
 
 ---
 
@@ -487,6 +528,9 @@ exif-frame v2（コミット30本超、core の約半分）が**検証されな�
 
 **S1〜S6 完了後に実施すること**（先にやると再度ズレる）。
 
+> S1 で README 末尾に「ライセンス」節（同梱アセット表 / 商標免責 / ユーザーロゴ配置手順）を
+> 追加済み。DOC-1 で exif-frame の記述を足すときに消さないこと。
+
 - [ ] **DOC-1 exif-frame 機能が README.md / CLAUDE.md に一切存在しない**（`grep -i exif` で0件）
   - 未記載の CLI オプション: `--exif-frame`/`-e`, `--preset`/`-p`, `--preset-file`, `--custom-text`
   - **「Pad モード限定」という v2 の最重要制約**がどこにも書かれていない
@@ -535,6 +579,7 @@ exif-frame v2（コミット30本超、core の約半分）が**検証されな�
 - [ ] `cargo clippy --workspace --all-targets -- -D warnings` が green
 - [ ] `cargo fmt --all -- --check` が green
 - [ ] `bunx svelte-check` が green
-- [ ] CI で上記すべてが自動実行され、**gui クレートが Linux でビルドされている**
+- [x] CI で上記すべてが自動実行され、**gui クレートが Linux でビルドされている**
+      （run 30910677408 / `80c9e1e` で success 確認済み）
 - [ ] README / CLAUDE.md / v2 spec が実装と一致
-- [ ] `LICENSE` と `OFL.txt` が存在し、商標素材の扱いが決定済み
+- [x] `LICENSE` と `OFL.txt` が存在し、商標素材の扱いが決定済み（S1 / バンドル維持 + 免責）

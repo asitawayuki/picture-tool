@@ -89,6 +89,16 @@ mod tests {
     }
 
     #[test]
+    fn maker_logo_fujifilm_variants() {
+        let map = ModelMap::load_bundled();
+        for make in ["FUJIFILM", "Fujifilm", "FUJIFILM Corporation"] {
+            let logo = map.maker_logo(make);
+            assert!(logo.is_some(), "no maker logo for Exif Make {:?}", make);
+            assert_eq!(logo.unwrap().maker, "fujifilm.svg");
+        }
+    }
+
+    #[test]
     fn maker_logo_unknown() {
         let map = ModelMap::load_bundled();
         assert!(map.maker_logo("UNKNOWN_MAKER").is_none());

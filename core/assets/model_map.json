@@ -2,7 +2,10 @@
   "logo_match": {
     "SONY": { "maker": "sony.svg" },
     "Sony": { "maker": "sony.svg" },
-    "Sony Corporation": { "maker": "sony.svg" }
+    "Sony Corporation": { "maker": "sony.svg" },
+    "FUJIFILM": { "maker": "fujifilm.svg" },
+    "Fujifilm": { "maker": "fujifilm.svg" },
+    "FUJIFILM Corporation": { "maker": "fujifilm.svg" }
   },
   "lens_brand_match": [
     { "pattern": "GM", "match_type": "contains", "logo": "gmaster.png" }

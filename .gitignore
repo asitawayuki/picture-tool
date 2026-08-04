@@ -1,6 +1,19 @@
+# Rust
 /target
+
+# フロントエンド
 gui-frontend/node_modules/
 gui-frontend/dist/
-gui/gen/
-.superpowers/
 gui-frontend/bun.lockb
+
+# Tauri 生成物
+gui/gen/
+
+# ツールのローカル状態
+.superpowers/
+.serena/
+.claude/settings.local.json
+
+# OS / エディタ
+.DS_Store
+*.swp
