@@ -23,7 +23,6 @@ fn main() {
             commands::save_preset,
             commands::delete_preset,
             commands::list_available_fonts,
-            commands::list_available_logos,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

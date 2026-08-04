@@ -40,26 +40,6 @@ const EXIF_BAR_RATIO: f64 = 0.06;
 // Exifバーの最小ピクセル
 const EXIF_BAR_MIN_PX: u32 = 30;
 
-/// 写真の縦横比からExifPlacementを決定する
-/// width/height > 1.0 = 横構図→底辺、< 1.0 = 縦構図→右、== 1.0 = 正方形→底辺扱い
-pub fn resolve_placement(photo_w: u32, photo_h: u32, position: ExifPosition) -> ExifPlacement {
-    match position {
-        ExifPosition::Bottom => ExifPlacement::Bottom,
-        ExifPosition::Top => ExifPlacement::Top,
-        ExifPosition::Right => ExifPlacement::Right,
-        ExifPosition::Left => ExifPlacement::Left,
-        ExifPosition::Auto => {
-            if photo_w > photo_h {
-                // 横構図
-                ExifPlacement::Bottom
-            } else {
-                // 縦構図または正方形
-                ExifPlacement::Bottom
-            }
-        }
-    }
-}
-
 /// Auto判定の内部ロジック（写真比率による自動選択）
 fn auto_placement(photo_w: u32, photo_h: u32) -> ExifPlacement {
     if photo_w > photo_h {
@@ -94,8 +74,8 @@ pub fn fit_to_4_5(photo_w: u32, photo_h: u32) -> (u32, u32) {
     // canvas = k*4 x k*5 として、photo_w <= k*4 かつ photo_h <= k*5 を満たす最小 k を求める
     // k >= photo_w / 4 かつ k >= photo_h / 5
     // k = ceil(photo_w / 4) と ceil(photo_h / 5) の大きい方
-    let k_from_w = (photo_w + 3) / 4; // ceil(photo_w / 4)
-    let k_from_h = (photo_h + 4) / 5; // ceil(photo_h / 5)
+    let k_from_w = photo_w.div_ceil(4); // ceil(photo_w / 4)
+    let k_from_h = photo_h.div_ceil(5); // ceil(photo_h / 5)
     let k = k_from_w.max(k_from_h).max(1);
     (k * 4, k * 5)
 }
@@ -187,67 +167,74 @@ pub fn calculate_pad_exif_layout(
         ExifPlacement::Right | ExifPlacement::Left => pad_w,
     };
 
-    let (final_photo_w, final_photo_h, final_canvas_w, final_canvas_h) =
-        if available >= exif_bar_size {
-            // 余白が十分 → 写真はそのまま
-            (photo_width, photo_height, canvas_w, canvas_h)
-        } else {
-            // 余白不足 → 写真を縮小してExifバーを収める
-            let deficit = exif_bar_size - available;
-            let (new_photo_w, new_photo_h) =
-                shrink_photo_for_exif(photo_width, photo_height, deficit, placement);
+    let (final_photo_w, final_photo_h, final_canvas_w, final_canvas_h) = if available
+        >= exif_bar_size
+    {
+        // 余白が十分 → 写真はそのまま
+        (photo_width, photo_height, canvas_w, canvas_h)
+    } else {
+        // 余白不足 → 写真を縮小してExifバーを収める
+        let deficit = exif_bar_size - available;
+        let (new_photo_w, new_photo_h) =
+            shrink_photo_for_exif(photo_width, photo_height, deficit, placement);
 
-            // 縮小率チェック（20%超えたらスキップ）
-            let shrink_w = (photo_width as f64 - new_photo_w as f64) / photo_width as f64;
-            let shrink_h = (photo_height as f64 - new_photo_h as f64) / photo_height as f64;
-            let max_shrink = shrink_w.max(shrink_h);
-            if max_shrink > MAX_SHRINK_RATIO {
-                return skip_layout(photo_width, photo_height);
-            }
+        // 縮小率チェック（20%超えたらスキップ）
+        let shrink_w = (photo_width as f64 - new_photo_w as f64) / photo_width as f64;
+        let shrink_h = (photo_height as f64 - new_photo_h as f64) / photo_height as f64;
+        let max_shrink = shrink_w.max(shrink_h);
+        if max_shrink > MAX_SHRINK_RATIO {
+            return skip_layout(photo_width, photo_height);
+        }
 
-            // 縮小後の4:5キャンバスを再計算
-            let (new_canvas_w, new_canvas_h) = fit_to_4_5(new_photo_w, new_photo_h);
+        // 縮小後の4:5キャンバスを再計算
+        let (new_canvas_w, new_canvas_h) = fit_to_4_5(new_photo_w, new_photo_h);
 
-            // 再計算後のキャンバスでExifバーが収まるか確認
-            let new_available = match placement {
+        // 再計算後のキャンバスでExifバーが収まるか確認
+        let new_available = match placement {
+            ExifPlacement::Bottom | ExifPlacement::Top => new_canvas_h.saturating_sub(new_photo_h),
+            ExifPlacement::Right | ExifPlacement::Left => new_canvas_w.saturating_sub(new_photo_w),
+        };
+
+        if new_available < exif_bar_size {
+            // まだ足りなければ強制的にキャンバスを拡張（整数4:5比を保って）
+            match placement {
                 ExifPlacement::Bottom | ExifPlacement::Top => {
-                    new_canvas_h.saturating_sub(new_photo_h)
+                    let need_h = new_photo_h + exif_bar_size;
+                    // 4の倍数に切り上げ
+                    let canvas_h_expanded = need_h.div_ceil(4) * 4;
+                    let canvas_w_expanded = canvas_h_expanded * 4 / 5;
+                    if canvas_w_expanded >= new_photo_w {
+                        (
+                            new_photo_w,
+                            new_photo_h,
+                            canvas_w_expanded,
+                            canvas_h_expanded,
+                        )
+                    } else {
+                        (new_photo_w, new_photo_h, new_canvas_w, new_canvas_h)
+                    }
                 }
                 ExifPlacement::Right | ExifPlacement::Left => {
-                    new_canvas_w.saturating_sub(new_photo_w)
-                }
-            };
-
-            if new_available < exif_bar_size {
-                // まだ足りなければ強制的にキャンバスを拡張（整数4:5比を保って）
-                match placement {
-                    ExifPlacement::Bottom | ExifPlacement::Top => {
-                        let need_h = new_photo_h + exif_bar_size;
-                        // 4の倍数に切り上げ
-                        let canvas_h_expanded = ((need_h + 3) / 4) * 4;
-                        let canvas_w_expanded = canvas_h_expanded * 4 / 5;
-                        if canvas_w_expanded >= new_photo_w {
-                            (new_photo_w, new_photo_h, canvas_w_expanded, canvas_h_expanded)
-                        } else {
-                            (new_photo_w, new_photo_h, new_canvas_w, new_canvas_h)
-                        }
-                    }
-                    ExifPlacement::Right | ExifPlacement::Left => {
-                        let need_w = new_photo_w + exif_bar_size;
-                        // 5の倍数に切り上げ
-                        let canvas_w_expanded = ((need_w + 4) / 5) * 5;
-                        let canvas_h_expanded = canvas_w_expanded * 5 / 4;
-                        if canvas_h_expanded >= new_photo_h {
-                            (new_photo_w, new_photo_h, canvas_w_expanded, canvas_h_expanded)
-                        } else {
-                            (new_photo_w, new_photo_h, new_canvas_w, new_canvas_h)
-                        }
+                    let need_w = new_photo_w + exif_bar_size;
+                    // 5の倍数に切り上げ
+                    let canvas_w_expanded = need_w.div_ceil(5) * 5;
+                    let canvas_h_expanded = canvas_w_expanded * 5 / 4;
+                    if canvas_h_expanded >= new_photo_h {
+                        (
+                            new_photo_w,
+                            new_photo_h,
+                            canvas_w_expanded,
+                            canvas_h_expanded,
+                        )
+                    } else {
+                        (new_photo_w, new_photo_h, new_canvas_w, new_canvas_h)
                     }
                 }
-            } else {
-                (new_photo_w, new_photo_h, new_canvas_w, new_canvas_h)
             }
-        };
+        } else {
+            (new_photo_w, new_photo_h, new_canvas_w, new_canvas_h)
+        }
+    };
 
     // 写真とExifエリアの座標を配置
     let is_rotated = matches!(placement, ExifPlacement::Right | ExifPlacement::Left);
@@ -327,7 +314,10 @@ mod tests {
     use crate::BackgroundColor;
 
     fn default_config() -> (crate::exif_frame::ExifFrameConfig, BackgroundColor) {
-        (crate::exif_frame::ExifFrameConfig::default(), BackgroundColor::Black)
+        (
+            crate::exif_frame::ExifFrameConfig::default(),
+            BackgroundColor::Black,
+        )
     }
 
     #[test]
@@ -420,8 +410,10 @@ mod tests {
 
     #[test]
     fn manual_position_bottom_on_portrait() {
-        let mut config = crate::exif_frame::ExifFrameConfig::default();
-        config.position = crate::exif_frame::ExifPosition::Bottom;
+        let config = crate::exif_frame::ExifFrameConfig {
+            position: crate::exif_frame::ExifPosition::Bottom,
+            ..Default::default()
+        };
         let bg = BackgroundColor::Black;
         let result = calculate_pad_exif_layout(800, 1200, &config, &bg);
         assert_eq!(
@@ -509,26 +501,39 @@ mod tests {
         // pad_w=0, exif_bar=12→30, deficit=30
         // shrink_photo_for_exif(200,250,30,Right) → new_w=170, new_h=213
         // shrink_ratio = 30/200 = 15% < 20% → skip にならない
-        assert!(!result.skip_exif, "200x250 should not skip exif (shrink is within 20%)");
+        assert!(
+            !result.skip_exif,
+            "200x250 should not skip exif (shrink is within 20%)"
+        );
         assert_eq!(result.canvas_width * 5, result.canvas_height * 4);
     }
 
     // 追加テスト: Right配置でis_rotated == true
     #[test]
     fn right_placement_is_rotated() {
-        let mut config = crate::exif_frame::ExifFrameConfig::default();
-        config.position = crate::exif_frame::ExifPosition::Right;
+        let config = crate::exif_frame::ExifFrameConfig {
+            position: crate::exif_frame::ExifPosition::Right,
+            ..Default::default()
+        };
         let bg = BackgroundColor::Black;
         let result = calculate_pad_exif_layout(1200, 800, &config, &bg);
-        assert!(result.is_rotated, "Right placement should set is_rotated=true");
+        assert!(
+            result.is_rotated,
+            "Right placement should set is_rotated=true"
+        );
     }
 
     #[test]
     fn left_placement_is_rotated() {
-        let mut config = crate::exif_frame::ExifFrameConfig::default();
-        config.position = crate::exif_frame::ExifPosition::Left;
+        let config = crate::exif_frame::ExifFrameConfig {
+            position: crate::exif_frame::ExifPosition::Left,
+            ..Default::default()
+        };
         let bg = BackgroundColor::Black;
         let result = calculate_pad_exif_layout(1200, 800, &config, &bg);
-        assert!(result.is_rotated, "Left placement should set is_rotated=true");
+        assert!(
+            result.is_rotated,
+            "Left placement should set is_rotated=true"
+        );
     }
 }

@@ -7,7 +7,6 @@ import type {
   ExifInfo,
   ExifFrameConfig,
   FontInfo,
-  LogoInfo,
 } from "./types";
 
 export async function listDirectory(path: string): Promise<FileEntry[]> {
@@ -78,8 +77,4 @@ export async function deletePreset(name: string): Promise<void> {
 
 export async function listAvailableFonts(): Promise<FontInfo[]> {
   return invoke("list_available_fonts");
-}
-
-export async function listAvailableLogos(): Promise<LogoInfo[]> {
-  return invoke("list_available_logos");
 }

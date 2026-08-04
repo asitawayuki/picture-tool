@@ -36,7 +36,7 @@
   }
 
   async function initStore() {
-    store = await load("favorites.json", { autoSave: false });
+    store = await load("favorites.json", { defaults: {}, autoSave: false });
     const saved = await store.get<string[]>("favorites");
     if (saved) {
       favorites = saved;

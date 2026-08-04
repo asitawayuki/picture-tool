@@ -81,9 +81,3 @@ export interface FontInfo {
   path: string | null;
   is_bundled: boolean;
 }
-
-export interface LogoInfo {
-  filename: string;
-  matched_to: string | null;
-  is_bundled: boolean;
-}

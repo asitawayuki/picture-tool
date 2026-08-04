@@ -29,7 +29,7 @@ pub fn load_user_presets(presets_dir: &Path) -> Vec<ExifFrameConfig> {
     if let Ok(entries) = fs::read_dir(presets_dir) {
         for entry in entries.flatten() {
             let path = entry.path();
-            if path.extension().map_or(false, |e| e == "json") {
+            if path.extension().is_some_and(|e| e == "json") {
                 if let Ok(data) = fs::read_to_string(&path) {
                     if let Ok(config) = serde_json::from_str::<ExifFrameConfig>(&data) {
                         presets.push(config);
@@ -44,9 +44,7 @@ pub fn load_user_presets(presets_dir: &Path) -> Vec<ExifFrameConfig> {
 /// 全プリセット一覧（バンドル + ユーザー、ユーザー側が優先）
 pub fn list_all_presets(user_presets_dir: Option<&Path>) -> Vec<ExifFrameConfig> {
     let bundled = load_bundled_presets();
-    let user = user_presets_dir
-        .map(|d| load_user_presets(d))
-        .unwrap_or_default();
+    let user = user_presets_dir.map(load_user_presets).unwrap_or_default();
 
     let mut result = bundled;
     for u in user {
@@ -81,7 +79,13 @@ pub fn delete_preset(presets_dir: &Path, name: &str) -> Result<()> {
 
 fn sanitize_filename(name: &str) -> String {
     name.chars()
-        .map(|c| if c.is_alphanumeric() || c == '-' || c == '_' { c } else { '_' })
+        .map(|c| {
+            if c.is_alphanumeric() || c == '-' || c == '_' {
+                c
+            } else {
+                '_'
+            }
+        })
         .collect()
 }
 
@@ -132,8 +136,10 @@ mod tests {
     #[test]
     fn list_all_presets_merges_bundled_and_user() {
         let dir = TempDir::new().unwrap();
-        let mut user_preset = ExifFrameConfig::default();
-        user_preset.name = "my_custom".to_string();
+        let user_preset = ExifFrameConfig {
+            name: "my_custom".to_string(),
+            ..Default::default()
+        };
         save_preset(dir.path(), &user_preset).unwrap();
         let all = list_all_presets(Some(dir.path()));
         assert!(all.iter().any(|p| p.name == "default"));

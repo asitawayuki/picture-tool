@@ -1,4 +1,4 @@
-use ab_glyph::{Font, FontArc, Glyph, PxScale, ScaleFont, point};
+use ab_glyph::{point, Font, FontArc, Glyph, PxScale, ScaleFont};
 use anyhow::{Context, Result};
 use image::{Rgba, RgbaImage};
 use rust_embed::Embed;
@@ -21,10 +21,8 @@ pub fn load_font(path: Option<&str>) -> Result<FontArc> {
                 let font_file = FontAssets::iter()
                     .find(|f| f.ends_with(".ttf") || f.ends_with(".otf"))
                     .expect("no bundled font found");
-                let data = FontAssets::get(&font_file)
-                    .expect("failed to load bundled font");
-                FontArc::try_from_vec(data.data.to_vec())
-                    .expect("invalid bundled font")
+                let data = FontAssets::get(&font_file).expect("failed to load bundled font");
+                FontArc::try_from_vec(data.data.to_vec()).expect("invalid bundled font")
             });
             Ok(font.clone())
         }
@@ -104,10 +102,8 @@ pub fn draw_text_on_image(
             cursor_x += scaled.kern(prev_id, glyph_id);
         }
 
-        let glyph: Glyph = glyph_id.with_scale_and_position(
-            PxScale::from(size),
-            point(cursor_x, ascent),
-        );
+        let glyph: Glyph =
+            glyph_id.with_scale_and_position(PxScale::from(size), point(cursor_x, ascent));
 
         if let Some(outlined) = font.outline_glyph(glyph) {
             let bounds = outlined.px_bounds();
@@ -205,7 +201,7 @@ pub fn draw_text_rotated_90(
                 (pixel[0] as f32 * alpha + existing[0] as f32 * inv) as u8,
                 (pixel[1] as f32 * alpha + existing[1] as f32 * inv) as u8,
                 (pixel[2] as f32 * alpha + existing[2] as f32 * inv) as u8,
-                255u8.min((existing[3] as f32 + pixel[3] as f32 * alpha) as u8),
+                (existing[3] as f32 + pixel[3] as f32 * alpha) as u8,
             ]);
             img.put_pixel(px as u32, py as u32, blended);
         }
@@ -276,7 +272,12 @@ mod tests {
     #[test]
     fn truncate_long_text() {
         let font = load_font(None).unwrap();
-        let result = truncate_text(&font, 24.0, "This is a very long text that should be truncated", 100.0);
+        let result = truncate_text(
+            &font,
+            24.0,
+            "This is a very long text that should be truncated",
+            100.0,
+        );
         assert!(result.ends_with("..."));
         let width = measure_text_width(&font, 24.0, &result);
         assert!(width <= 100.0 + 1.0);
@@ -286,7 +287,15 @@ mod tests {
     fn draw_text_no_panic() {
         let mut img = image::RgbaImage::new(200, 50);
         let font = load_font(None).unwrap();
-        draw_text_on_image(&mut img, &font, 16.0, "Test Text", 10, 10, image::Rgba([0, 0, 0, 255]));
+        draw_text_on_image(
+            &mut img,
+            &font,
+            16.0,
+            "Test Text",
+            10,
+            10,
+            image::Rgba([0, 0, 0, 255]),
+        );
     }
 
     // --- New tests for draw_text_rotated_90 and auto_fit_text ---
@@ -296,9 +305,12 @@ mod tests {
         let font = test_font();
         let mut img = RgbaImage::new(200, 800);
         draw_text_rotated_90(
-            &mut img, &font, 16.0,
+            &mut img,
+            &font,
+            16.0,
             "ILCE-7M4 | FE 24-70mm F2.8 GM II | 35mm f/2.8",
-            100, 400,
+            100,
+            400,
             Rgba([255, 255, 255, 255]),
         );
     }
@@ -314,7 +326,12 @@ mod tests {
     fn truncate_text_with_ellipsis() {
         let font = test_font();
         let full_width = measure_text_width(&font, 20.0, "Very long text that should be truncated");
-        let truncated = truncate_text(&font, 20.0, "Very long text that should be truncated", full_width * 0.5);
+        let truncated = truncate_text(
+            &font,
+            20.0,
+            "Very long text that should be truncated",
+            full_width * 0.5,
+        );
         assert!(truncated.ends_with("..."));
         assert!(truncated.len() < "Very long text that should be truncated".len());
     }
@@ -336,7 +353,10 @@ mod tests {
         let text = "Hi";
         let (fitted, final_size) = auto_fit_text(&font, 20.0, text, 500.0, 0.7);
         assert_eq!(fitted, "Hi");
-        assert!((final_size - 20.0).abs() < 0.01, "Font size should not change");
+        assert!(
+            (final_size - 20.0).abs() < 0.01,
+            "Font size should not change"
+        );
     }
 
     #[test]
@@ -344,8 +364,13 @@ mod tests {
         let font = test_font();
         let mut img = RgbaImage::new(100, 500);
         draw_text_rotated_90(
-            &mut img, &font, 14.0, "Test text",
-            50, 250, Rgba([255, 0, 0, 255]),
+            &mut img,
+            &font,
+            14.0,
+            "Test text",
+            50,
+            250,
+            Rgba([255, 0, 0, 255]),
         );
         // Should not panic - bounds checking is implicit
     }

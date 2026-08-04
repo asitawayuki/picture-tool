@@ -34,10 +34,9 @@ pub struct ModelMap {
 
 impl ModelMap {
     pub fn load_bundled() -> Self {
-        let data = ModelMapAssets::get("model_map.json")
-            .expect("bundled model_map.json not found");
-        let json: ModelMapJson = serde_json::from_slice(&data.data)
-            .expect("invalid bundled model_map.json");
+        let data = ModelMapAssets::get("model_map.json").expect("bundled model_map.json not found");
+        let json: ModelMapJson =
+            serde_json::from_slice(&data.data).expect("invalid bundled model_map.json");
         Self {
             logo_match: json.logo_match,
             lens_brand_match: json.lens_brand_match,
@@ -50,7 +49,7 @@ impl ModelMap {
             self.logo_match.insert(k, v);
         }
         let mut merged = custom.lens_brand_match;
-        merged.extend(self.lens_brand_match.drain(..));
+        merged.append(&mut self.lens_brand_match);
         self.lens_brand_match = merged;
         Ok(())
     }
@@ -61,13 +60,8 @@ impl ModelMap {
 
     pub fn lens_brand_logo(&self, lens_model: &str) -> Option<&str> {
         for rule in &self.lens_brand_match {
-            match rule.match_type.as_str() {
-                "contains" => {
-                    if lens_model.contains(&rule.pattern) {
-                        return Some(&rule.logo);
-                    }
-                }
-                _ => {}
+            if rule.match_type.as_str() == "contains" && lens_model.contains(&rule.pattern) {
+                return Some(&rule.logo);
             }
         }
         None

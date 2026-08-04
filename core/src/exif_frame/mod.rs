@@ -10,21 +10,16 @@ use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
 /// Exif情報の配置位置
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "snake_case")]
 pub enum ExifPosition {
     /// デフォルト: 横構図→下、縦構図→右
+    #[default]
     Auto,
     Bottom,
     Top,
     Right,
     Left,
-}
-
-impl Default for ExifPosition {
-    fn default() -> Self {
-        Self::Auto
-    }
 }
 
 /// 表示項目のON/OFF
@@ -130,14 +125,6 @@ pub struct FontInfo {
     pub is_bundled: bool,
 }
 
-/// ロゴ情報（GUI一覧表示用）
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct LogoInfo {
-    pub filename: String,
-    pub matched_to: Option<String>,
-    pub is_bundled: bool,
-}
-
 /// Exifフレーム付き画像を生成
 pub fn render_exif_frame(
     image: &DynamicImage,
@@ -156,7 +143,12 @@ pub fn render_exif_frame(
     if layout.skip_exif {
         let bg_pixel = bg_color.to_rgba();
         let mut canvas = RgbaImage::from_pixel(layout.canvas_width, layout.canvas_height, bg_pixel);
-        image::imageops::overlay(&mut canvas, image, layout.photo_x as i64, layout.photo_y as i64);
+        image::imageops::overlay(
+            &mut canvas,
+            image,
+            layout.photo_x as i64,
+            layout.photo_y as i64,
+        );
         return Ok(DynamicImage::ImageRgba8(canvas));
     }
 
@@ -178,7 +170,12 @@ pub fn render_exif_frame(
     let mut canvas = RgbaImage::from_pixel(layout.canvas_width, layout.canvas_height, bg_pixel);
 
     // 5. 写真をオーバーレイ
-    image::imageops::overlay(&mut canvas, photo, layout.photo_x as i64, layout.photo_y as i64);
+    image::imageops::overlay(
+        &mut canvas,
+        photo,
+        layout.photo_x as i64,
+        layout.photo_y as i64,
+    );
 
     // 6. ModelMap 読み込み（カスタムマップをオプションでマージ）
     let mut model_map = crate::model_map::ModelMap::load_bundled();
@@ -191,9 +188,8 @@ pub fn render_exif_frame(
     }
 
     // 7. テキスト色（背景輝度に基づく）
-    let luminance = 0.299 * bg_pixel[0] as f32
-        + 0.587 * bg_pixel[1] as f32
-        + 0.114 * bg_pixel[2] as f32;
+    let luminance =
+        0.299 * bg_pixel[0] as f32 + 0.587 * bg_pixel[1] as f32 + 0.114 * bg_pixel[2] as f32;
     let is_dark = luminance < 128.0;
     let primary_color = if is_dark {
         Rgba([255u8, 255, 255, 255])
@@ -279,6 +275,8 @@ pub fn render_exif_frame(
 }
 
 /// 水平レイアウト（Bottom/Top）でExif情報を描画する
+// TODO(S4-H4): draw_exif_rotated との重複を解消し、引数をコンテキスト構造体にまとめた時点で allow を外す
+#[allow(clippy::too_many_arguments)]
 fn draw_exif_horizontal(
     canvas: &mut RgbaImage,
     layout: &layout::PadExifLayout,
@@ -356,13 +354,25 @@ fn draw_exif_horizontal(
     let secondary_size_base = secondary_size_base.min(max_font * 0.75);
 
     let (primary_fitted, primary_size) = if !primary_text.is_empty() {
-        text::auto_fit_text(font, primary_size_base, primary_text, text_area_w as f32, 0.7)
+        text::auto_fit_text(
+            font,
+            primary_size_base,
+            primary_text,
+            text_area_w as f32,
+            0.7,
+        )
     } else {
         (String::new(), primary_size_base)
     };
 
     let (secondary_fitted, secondary_size) = if !secondary_text.is_empty() {
-        text::auto_fit_text(font, secondary_size_base, secondary_text, text_area_w as f32, 0.7)
+        text::auto_fit_text(
+            font,
+            secondary_size_base,
+            secondary_text,
+            text_area_w as f32,
+            0.7,
+        )
     } else {
         (String::new(), secondary_size_base)
     };
@@ -399,7 +409,8 @@ fn draw_exif_horizontal(
     // 簡易実装: lens_logo は secondary 行の右端付近に表示
     if let Some(llogo) = lens_logo {
         let ll_h = (secondary_size * 1.2) as u32;
-        let ll_scaled: DynamicImage = llogo.resize(u32::MAX, ll_h.max(1), image::imageops::FilterType::Lanczos3);
+        let ll_scaled: DynamicImage =
+            llogo.resize(u32::MAX, ll_h.max(1), image::imageops::FilterType::Lanczos3);
         let ll_x = area_x + area_w - ll_scaled.width() - logo_margin;
         let ll_y = area_y + (area_h.saturating_sub(ll_scaled.height())) / 2;
         image::imageops::overlay(canvas, &ll_scaled, ll_x as i64, ll_y as i64);
@@ -408,6 +419,8 @@ fn draw_exif_horizontal(
 
 /// 回転レイアウト（Right/Left）でExif情報を描画する
 /// 横構図と同じ2段レイアウトを一時バッファに描画し、90度回転してキャンバスに合成
+// TODO(S4-H4): draw_exif_horizontal との重複を解消し、引数をコンテキスト構造体にまとめた時点で allow を外す
+#[allow(clippy::too_many_arguments)]
 fn draw_exif_rotated(
     canvas: &mut RgbaImage,
     layout: &layout::PadExifLayout,
@@ -484,13 +497,25 @@ fn draw_exif_rotated(
         let secondary_size_base = secondary_size_base.min(max_font * 0.75);
 
         let (primary_fitted, primary_size) = if !primary_text.is_empty() {
-            text::auto_fit_text(font, primary_size_base, primary_text, text_area_w as f32, 0.7)
+            text::auto_fit_text(
+                font,
+                primary_size_base,
+                primary_text,
+                text_area_w as f32,
+                0.7,
+            )
         } else {
             (String::new(), primary_size_base)
         };
 
         let (secondary_fitted, secondary_size) = if !secondary_text.is_empty() {
-            text::auto_fit_text(font, secondary_size_base, secondary_text, text_area_w as f32, 0.7)
+            text::auto_fit_text(
+                font,
+                secondary_size_base,
+                secondary_text,
+                text_area_w as f32,
+                0.7,
+            )
         } else {
             (String::new(), secondary_size_base)
         };
@@ -501,21 +526,32 @@ fn draw_exif_rotated(
 
         if !primary_fitted.is_empty() {
             text::draw_text_on_image(
-                &mut buf, font, primary_size, &primary_fitted,
-                text_start_x as i32, text_block_y as i32, primary_color,
+                &mut buf,
+                font,
+                primary_size,
+                &primary_fitted,
+                text_start_x as i32,
+                text_block_y as i32,
+                primary_color,
             );
         }
         if !secondary_fitted.is_empty() {
             text::draw_text_on_image(
-                &mut buf, font, secondary_size, &secondary_fitted,
-                text_start_x as i32, (text_block_y + primary_size + 2.0) as i32, secondary_color,
+                &mut buf,
+                font,
+                secondary_size,
+                &secondary_fitted,
+                text_start_x as i32,
+                (text_block_y + primary_size + 2.0) as i32,
+                secondary_color,
             );
         }
 
         // レンズブランドロゴ
         if let Some(llogo) = lens_logo {
             let ll_h = (secondary_size * 1.2) as u32;
-            let ll_scaled: DynamicImage = llogo.resize(u32::MAX, ll_h.max(1), image::imageops::FilterType::Lanczos3);
+            let ll_scaled: DynamicImage =
+                llogo.resize(u32::MAX, ll_h.max(1), image::imageops::FilterType::Lanczos3);
             let ll_x = buf_end.saturating_sub(ll_scaled.width() + logo_margin);
             let ll_y = (buf_h.saturating_sub(ll_scaled.height())) / 2;
             image::imageops::overlay(&mut buf, &ll_scaled, ll_x as i64, ll_y as i64);
@@ -574,11 +610,7 @@ fn build_primary_text(exif: &crate::ExifInfo, items: &DisplayItems) -> String {
     parts.join(" | ")
 }
 
-fn build_secondary_text(
-    exif: &crate::ExifInfo,
-    items: &DisplayItems,
-    custom_text: &str,
-) -> String {
+fn build_secondary_text(exif: &crate::ExifInfo, items: &DisplayItems, custom_text: &str) -> String {
     let mut parts = Vec::new();
     if items.focal_length {
         if let Some(ref v) = exif.focal_length {

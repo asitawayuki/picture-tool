@@ -89,16 +89,14 @@ pub fn read_exif_info(path: &Path) -> Result<ExifInfo> {
     };
 
     let get_string = |tag: exif::Tag| -> Option<String> {
-        exif_data
-            .get_field(tag, exif::In::PRIMARY)
-            .map(|f| {
-                f.display_value()
-                    .with_unit(&exif_data)
-                    .to_string()
-                    .trim_matches('"')
-                    .trim()
-                    .to_string()
-            })
+        exif_data.get_field(tag, exif::In::PRIMARY).map(|f| {
+            f.display_value()
+                .with_unit(&exif_data)
+                .to_string()
+                .trim_matches('"')
+                .trim()
+                .to_string()
+        })
     };
 
     let iso = exif_data
@@ -211,10 +209,14 @@ pub fn process_image(
         ConversionMode::Pad => {
             if let (Some(ef_config), Some(dirs)) = (exif_frame_config, asset_dirs) {
                 let exif = read_exif_info(input_path).unwrap_or_default();
-                match exif_frame::render_exif_frame(&img, &exif, ef_config, &config.bg_color, dirs) {
+                match exif_frame::render_exif_frame(&img, &exif, ef_config, &config.bg_color, dirs)
+                {
                     Ok(framed) => framed,
                     Err(e) => {
-                        eprintln!("Warning: Exif frame failed, falling back to pad only: {}", e);
+                        eprintln!(
+                            "Warning: Exif frame failed, falling back to pad only: {}",
+                            e
+                        );
                         convert_aspect_ratio_pad(img, config.bg_color)
                     }
                 }
@@ -888,7 +890,7 @@ mod tests {
             .filter(|r| {
                 r.as_ref()
                     .err()
-                    .map_or(false, |e| e.to_string().contains("cancelled"))
+                    .is_some_and(|e| e.to_string().contains("cancelled"))
             })
             .count();
 
@@ -953,7 +955,7 @@ mod tests {
         let bytes = base64::engine::general_purpose::STANDARD
             .decode(&result)
             .unwrap();
-        assert!(bytes.len() > 0);
+        assert!(!bytes.is_empty());
     }
 
     #[test]

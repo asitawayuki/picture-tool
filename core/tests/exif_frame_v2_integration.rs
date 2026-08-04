@@ -1,6 +1,6 @@
 //! Exifフレーム v2 統合テスト
-use picture_tool_core::*;
 use picture_tool_core::exif_frame::*;
+use picture_tool_core::*;
 use std::path::PathBuf;
 use tempfile::TempDir;
 
@@ -101,7 +101,10 @@ fn pad_exif_no_exif_data_doesnt_crash() {
     let bg = BackgroundColor::Black;
     let dirs = default_asset_dirs();
     let result = render_exif_frame(&img, &exif, &config, &bg, &dirs);
-    assert!(result.is_ok(), "render_exif_frame should not crash with empty ExifInfo");
+    assert!(
+        result.is_ok(),
+        "render_exif_frame should not crash with empty ExifInfo"
+    );
 }
 
 // ---- Test 5: Cropモードは exif_frame 設定を無視する ----
@@ -123,7 +126,11 @@ fn crop_mode_ignores_exif_frame_config() {
     let dirs = default_asset_dirs();
 
     let result = process_image(&input, &out_dir, &config, Some(&ef_config), Some(&dirs));
-    assert!(result.is_ok(), "Crop mode with exif config should succeed: {:?}", result.err());
+    assert!(
+        result.is_ok(),
+        "Crop mode with exif config should succeed: {:?}",
+        result.err()
+    );
 }
 
 // ---- Test 6: Qualityモードは exif_frame 設定を無視する ----
@@ -145,5 +152,9 @@ fn quality_mode_ignores_exif_frame_config() {
     let dirs = default_asset_dirs();
 
     let result = process_image(&input, &out_dir, &config, Some(&ef_config), Some(&dirs));
-    assert!(result.is_ok(), "Quality mode with exif config should succeed: {:?}", result.err());
+    assert!(
+        result.is_ok(),
+        "Quality mode with exif config should succeed: {:?}",
+        result.err()
+    );
 }

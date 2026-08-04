@@ -103,12 +103,13 @@ fn main() -> Result<()> {
 
     core::validate_config(&config)?;
 
-    let exif_frame_requested = if args.exif_frame && ConversionMode::from(args.mode) != ConversionMode::Pad {
-        eprintln!("Warning: --exif-frame is only supported with --mode pad. Ignoring.");
-        false
-    } else {
-        args.exif_frame
-    };
+    let exif_frame_requested =
+        if args.exif_frame && ConversionMode::from(args.mode) != ConversionMode::Pad {
+            eprintln!("Warning: --exif-frame is only supported with --mode pad. Ignoring.");
+            false
+        } else {
+            args.exif_frame
+        };
 
     let (exif_frame_config, asset_dirs) = if exif_frame_requested {
         let config = if let Some(ref path) = args.preset_file {
@@ -116,8 +117,7 @@ fn main() -> Result<()> {
                 .with_context(|| format!("Failed to read preset file: {}", path.display()))?;
             serde_json::from_str::<core::exif_frame::ExifFrameConfig>(&json)?
         } else {
-            let presets_dir = dirs::config_dir()
-                .map(|d| d.join("picture-tool/presets"));
+            let presets_dir = dirs::config_dir().map(|d| d.join("picture-tool/presets"));
             let all = core::exif_frame::preset::list_all_presets(presets_dir.as_deref());
             all.into_iter()
                 .find(|p| p.name == args.preset)

@@ -17,9 +17,13 @@ pub fn load_bundled_logo(filename: &str, target_size: u32) -> Result<DynamicImag
     match ext {
         "svg" => load_svg_from_bytes(&data.data, target_size),
         _ => {
-            let img = image::load_from_memory(&data.data)
-                .context("failed to decode bundled logo")?;
-            Ok(img.resize(target_size, target_size, image::imageops::FilterType::Lanczos3))
+            let img =
+                image::load_from_memory(&data.data).context("failed to decode bundled logo")?;
+            Ok(img.resize(
+                target_size,
+                target_size,
+                image::imageops::FilterType::Lanczos3,
+            ))
         }
     }
 }
@@ -31,7 +35,11 @@ pub fn load_logo_file(path: &Path, target_size: u32) -> Result<DynamicImage> {
         "svg" => load_svg(path, target_size)?,
         _ => {
             let img = image::open(path).context("failed to open logo file")?;
-            img.resize(target_size, target_size, image::imageops::FilterType::Lanczos3)
+            img.resize(
+                target_size,
+                target_size,
+                image::imageops::FilterType::Lanczos3,
+            )
         }
     };
     Ok(img)
@@ -48,14 +56,14 @@ fn load_svg_from_bytes(svg_data: &[u8], target_size: u32) -> Result<DynamicImage
     let rtree = resvg::Tree::from_usvg(&utree);
 
     let orig_size = rtree.size;
-    let orig_w = orig_size.width() as f32;
-    let orig_h = orig_size.height() as f32;
+    let orig_w = orig_size.width();
+    let orig_h = orig_size.height();
     let scale = target_size as f32 / orig_w.max(orig_h);
     let width = (orig_w * scale).round() as u32;
     let height = (orig_h * scale).round() as u32;
 
-    let mut pixmap = resvg::tiny_skia::Pixmap::new(width, height)
-        .context("failed to create pixmap")?;
+    let mut pixmap =
+        resvg::tiny_skia::Pixmap::new(width, height).context("failed to create pixmap")?;
     let transform = resvg::tiny_skia::Transform::from_scale(scale, scale);
     rtree.render(transform, &mut pixmap.as_mut());
 
@@ -65,11 +73,7 @@ fn load_svg_from_bytes(svg_data: &[u8], target_size: u32) -> Result<DynamicImage
 }
 
 /// ロゴファイルのパスを解決（SVG優先、lightバリアント対応）
-pub fn resolve_logo_file(
-    dir: Option<&Path>,
-    base_name: &str,
-    use_light: bool,
-) -> Option<PathBuf> {
+pub fn resolve_logo_file(dir: Option<&Path>, base_name: &str, use_light: bool) -> Option<PathBuf> {
     let dir = dir?;
     if !dir.exists() {
         return None;
@@ -83,10 +87,7 @@ pub fn resolve_logo_file(
             format!("{}.png", base_name),
         ]
     } else {
-        vec![
-            format!("{}.svg", base_name),
-            format!("{}.png", base_name),
-        ]
+        vec![format!("{}.svg", base_name), format!("{}.png", base_name)]
     };
 
     for candidate in candidates {
@@ -136,10 +137,7 @@ pub fn resolve_and_load_logo(
             format!("{}.png", base_name),
         ]
     } else {
-        vec![
-            format!("{}.svg", base_name),
-            format!("{}.png", base_name),
-        ]
+        vec![format!("{}.svg", base_name), format!("{}.png", base_name)]
     };
     for candidate in candidates {
         if let Ok(img) = load_bundled_logo(&candidate, target_size) {
@@ -156,8 +154,7 @@ mod tests {
 
     #[test]
     fn load_svg_logo() {
-        let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join("tests/fixtures/test_logo.svg");
+        let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/test_logo.svg");
         let img = load_logo_file(&path, 64).unwrap();
         assert_eq!(img.width(), 64);
         assert_eq!(img.height(), 64);

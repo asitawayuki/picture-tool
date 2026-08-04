@@ -1,0 +1,68 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  check:
+    # webkit2gtk-4.1 / libsoup-3.0 が標準リポジトリで手に入る最古の LTS に合わせる
+    runs-on: ubuntu-22.04
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # gui クレート（Tauri v2）を Linux でビルドするために必須
+      - name: Install Tauri system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            libayatana-appindicator3-dev \
+            librsvg2-dev \
+            libxdo-dev \
+            libssl-dev \
+            build-essential \
+            curl \
+            wget \
+            file
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - name: Setup Rust cache
+        uses: Swatinem/rust-cache@v2
+
+      - name: Setup bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - name: Install frontend dependencies
+        working-directory: gui-frontend
+        run: bun install --frozen-lockfile
+
+      - name: Typecheck frontend
+        working-directory: gui-frontend
+        run: bun run typecheck
+
+      # tauri-build は frontendDist (../gui-frontend/dist) の存在を要求するため、
+      # gui クレートに触れる cargo コマンドより前に必ずビルドしておく
+      - name: Build frontend
+        working-directory: gui-frontend
+        run: bun run build
+
+      - name: cargo fmt
+        run: cargo fmt --all -- --check
+
+      - name: cargo clippy
+        run: cargo clippy --workspace --all-targets -- -D warnings
+
+      - name: cargo test
+        run: cargo test --workspace

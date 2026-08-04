@@ -1,7 +1,7 @@
 use crate::state::ProcessingState;
 use crate::types::*;
 use picture_tool_core as core;
-use picture_tool_core::exif_frame::{self, ExifFrameConfig, FontInfo, LogoInfo};
+use picture_tool_core::exif_frame::{self, ExifFrameConfig, FontInfo};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::Ordering;
@@ -114,7 +114,7 @@ pub async fn list_images(path: String) -> Result<Vec<ImageEntry>, String> {
             });
         }
 
-        entries.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
+        entries.sort_by_key(|a| a.name.to_lowercase());
 
         Ok(entries)
     })
@@ -292,22 +292,15 @@ pub async fn render_exif_frame_preview(
         let exif_info = core::read_exif_info(path).unwrap_or_default();
         let asset_dirs = exif_frame::AssetDirs::default();
 
-        let result = exif_frame::render_exif_frame(
-            &thumbnail,
-            &exif_info,
-            &config,
-            &bg_color,
-            &asset_dirs,
-        )
-        .map_err(|e| e.to_string())?;
+        let result =
+            exif_frame::render_exif_frame(&thumbnail, &exif_info, &config, &bg_color, &asset_dirs)
+                .map_err(|e| e.to_string())?;
 
         // base64エンコード
         let mut buf = Vec::new();
         let mut cursor = std::io::Cursor::new(&mut buf);
         let mut encoder = image::codecs::jpeg::JpegEncoder::new_with_quality(&mut cursor, 85);
-        encoder
-            .encode_image(&result)
-            .map_err(|e| e.to_string())?;
+        encoder.encode_image(&result).map_err(|e| e.to_string())?;
 
         use base64::Engine;
         Ok(format!(
@@ -352,16 +345,11 @@ pub async fn list_available_fonts() -> Result<Vec<FontInfo>, String> {
         if user_dir.exists() {
             for entry in std::fs::read_dir(&user_dir).into_iter().flatten().flatten() {
                 let path = entry.path();
-                if path
-                    .extension()
-                    .map_or(false, |e| e == "ttf" || e == "otf")
-                {
+                if path.extension().is_some_and(|e| e == "ttf" || e == "otf") {
                     fonts.push(FontInfo {
                         display_name: format!(
                             "User: {}",
-                            path.file_stem()
-                                .unwrap_or_default()
-                                .to_string_lossy()
+                            path.file_stem().unwrap_or_default().to_string_lossy()
                         ),
                         path: Some(path.to_string_lossy().to_string()),
                         is_bundled: false,
@@ -371,9 +359,4 @@ pub async fn list_available_fonts() -> Result<Vec<FontInfo>, String> {
         }
     }
     Ok(fonts)
-}
-
-#[tauri::command]
-pub async fn list_available_logos() -> Result<Vec<LogoInfo>, String> {
-    Ok(vec![])
 }

@@ -1,4 +1,7 @@
-.PHONY: build build-cli build-gui build-frontend dev test test-core clean install release
+.PHONY: build build-cli build-gui build-frontend dev test test-core lint fmt typecheck check clean install release
+
+# ローカルに固定インストールした Tauri CLI（gui-frontend の devDependency）
+TAURI := $(CURDIR)/gui-frontend/node_modules/.bin/tauri
 
 # デフォルト: 全ビルド
 build: build-cli build-gui
@@ -17,14 +20,31 @@ build-frontend:
 
 # GUI開発サーバー起動
 dev:
-	cd gui && bunx @tauri-apps/cli dev
+	cd gui && $(TAURI) dev
 
-# 全テスト実行
-test: test-core
+# 全テスト実行（core / cli / gui）
+test:
+	cargo test --workspace
 
-# coreライブラリのテスト
+# coreライブラリのテストのみ
 test-core:
 	cargo test -p picture-tool-core -- --nocapture
+
+# Rust の lint（CI と同じ条件）
+lint:
+	cargo fmt --all -- --check
+	cargo clippy --workspace --all-targets -- -D warnings
+
+# フォーマット適用
+fmt:
+	cargo fmt --all
+
+# フロントエンドの型検査
+typecheck:
+	cd gui-frontend && bun run typecheck
+
+# CI と同等の検証を一括実行
+check: lint test typecheck
 
 # フロントエンド依存インストール
 install:
