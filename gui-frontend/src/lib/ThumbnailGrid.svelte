@@ -4,7 +4,8 @@
   interface Props {
     images: ImageEntry[];
     selectedPaths: Set<string>;
-    thumbnailCache: Map<string, string>;
+    /** サムネイルは解像度ごとに別物なので path と maxDimension の両方で引く */
+    thumbnailFor: (path: string, maxDimension: number) => string | undefined;
     currentPage: number;
     onToggleSelect: (image: ImageEntry) => void;
     onRequestThumbnail: (path: string, maxDimension: number) => void;
@@ -12,15 +13,22 @@
     onPageChange: (page: number) => void;
   }
 
-  let { images, selectedPaths, thumbnailCache, currentPage, onToggleSelect, onRequestThumbnail, onPreview, onPageChange }: Props = $props();
+  let { images, selectedPaths, thumbnailFor, currentPage, onToggleSelect, onRequestThumbnail, onPreview, onPageChange }: Props = $props();
 
   const PAGE_SIZE = 50;
   let columnCount = $state(4);
   let gridElement: HTMLDivElement | undefined = $state();
+  // 生の列幅をそのままキャッシュキーにすると 1px の差で別エントリになるため、
+  // 64px 刻みに丸めて再利用できるようにする。
+  const SIZE_STEP = 64;
+  const MIN_SIZE = 96;
+  const MAX_SIZE = 512;
+
   let thumbSize = $derived.by(() => {
-    void columnCount;
     const containerWidth = gridElement?.clientWidth ?? window.innerWidth * 0.5;
-    return Math.ceil(containerWidth / columnCount);
+    const raw = containerWidth / columnCount;
+    const stepped = Math.ceil(raw / SIZE_STEP) * SIZE_STEP;
+    return Math.min(MAX_SIZE, Math.max(MIN_SIZE, stepped));
   });
 
   let pagedImages = $derived(
@@ -28,20 +36,46 @@
   );
   let totalPages = $derived(Math.ceil(images.length / PAGE_SIZE));
 
-  function observeThumbnail(node: HTMLElement, path: string) {
-    const observer = new IntersectionObserver(
-      (entries) => {
-        if (entries[0].isIntersecting) {
-          onRequestThumbnail(path, thumbSize);
-          observer.disconnect();
-        }
-      },
-      { rootMargin: "200px" }
-    );
-    observer.observe(node);
+  /**
+   * 画面に入った時点でサムネイルを要求する。
+   * 列数を変えて要求解像度が上がった場合は、既に表示済みでも取り直す
+   * （そうしないと低解像度のまま引き伸ばされたままになる）。
+   */
+  function observeThumbnail(node: HTMLElement, params: { path: string; size: number }) {
+    let observer: IntersectionObserver | null = null;
+    let intersected = false;
+    let current = params;
+
+    function start(next: { path: string; size: number }) {
+      current = next;
+      if (intersected) {
+        onRequestThumbnail(next.path, next.size);
+        return;
+      }
+      observer?.disconnect();
+      observer = new IntersectionObserver(
+        (entries) => {
+          if (!entries[0].isIntersecting) return;
+          intersected = true;
+          onRequestThumbnail(current.path, current.size);
+          observer?.disconnect();
+          observer = null;
+        },
+        { rootMargin: "200px" }
+      );
+      observer.observe(node);
+    }
+
+    start(params);
+
     return {
+      update(next: { path: string; size: number }) {
+        if (next.path === current.path && next.size === current.size) return;
+        if (next.path !== current.path) intersected = false;
+        start(next);
+      },
       destroy() {
-        observer.disconnect();
+        observer?.disconnect();
       },
     };
   }
@@ -52,8 +86,9 @@
     <span class="count">{images.length} 枚</span>
     <div class="toolbar-right">
       <div class="size-control">
-        <span class="size-label">列</span>
+        <label class="size-label" for="grid-columns">列</label>
         <input
+          id="grid-columns"
           type="range"
           min="2"
           max="8"
@@ -64,10 +99,12 @@
       {#if totalPages > 1}
         <div class="pagination">
           <button
+            aria-label="前のページ"
             onclick={() => onPageChange(Math.max(0, currentPage - 1))}
             disabled={currentPage === 0}>←</button>
           <span>{currentPage + 1} / {totalPages}</span>
           <button
+            aria-label="次のページ"
             onclick={() => onPageChange(Math.min(totalPages - 1, currentPage + 1))}
             disabled={currentPage >= totalPages - 1}>→</button>
         </div>
@@ -77,19 +114,18 @@
 
   <div class="grid" bind:this={gridElement} style="grid-template-columns: repeat({columnCount}, 1fr);">
     {#each pagedImages as image (image.path)}
+      {@const thumb = thumbnailFor(image.path, thumbSize)}
       <button
         class="grid-item"
         class:selected={selectedPaths.has(image.path)}
+        aria-pressed={selectedPaths.has(image.path)}
         onclick={() => onToggleSelect(image)}
         ondblclick={(e) => { e.preventDefault(); onPreview(image); }}
-        use:observeThumbnail={image.path}
+        use:observeThumbnail={{ path: image.path, size: thumbSize }}
       >
         <div class="thumb-wrapper">
-          {#if thumbnailCache.has(image.path)}
-            <img
-              src="data:image/jpeg;base64,{thumbnailCache.get(image.path)}"
-              alt={image.name}
-            />
+          {#if thumb}
+            <img src="data:image/jpeg;base64,{thumb}" alt={image.name} />
           {:else}
             <div class="placeholder">📷</div>
           {/if}
@@ -214,7 +250,7 @@
   }
 
   .filename {
-    font-size: 10px;
+    font-size: 11px;
     color: var(--text-secondary);
     overflow: hidden;
     text-overflow: ellipsis;

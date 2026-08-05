@@ -1,6 +1,8 @@
 <script lang="ts">
+  import { onMount } from "svelte";
   import { listen } from "@tauri-apps/api/event";
   import { open } from "@tauri-apps/plugin-dialog";
+  import { SvelteMap } from "svelte/reactivity";
   import type { UnlistenFn } from "@tauri-apps/api/event";
   import FolderTree from "./lib/FolderTree.svelte";
   import ThumbnailGrid from "./lib/ThumbnailGrid.svelte";
@@ -9,8 +11,12 @@
   import ProgressOverlay from "./lib/ProgressOverlay.svelte";
   import ImagePreview from "./lib/ImagePreview.svelte";
   import ExifFrameSettings from "./lib/ExifFrameSettings.svelte";
-  import { listImages, processImages, cancelProcessing, getThumbnail, listPresets, savePreset } from "./lib/api";
-  import type { ImageEntry, ProcessingConfig, ProgressPayload, ExifFrameConfig } from "./lib/types";
+  import ConfirmDialog from "./lib/ConfirmDialog.svelte";
+  import ResultDialog from "./lib/ResultDialog.svelte";
+  import Toast from "./lib/Toast.svelte";
+  import { toast, describeError } from "./lib/toasts.svelte";
+  import { listImages, processImages, cancelProcessing, getThumbnail, listPresets, savePreset, deletePreset } from "./lib/api";
+  import type { ImageEntry, ProcessingConfig, ProcessResult, ProgressPayload, ExifFrameConfig } from "./lib/types";
 
   // --- 状態 ---
   let images = $state<ImageEntry[]>([]);
@@ -25,21 +31,36 @@
   });
   let processing = $state(false);
   let progress = $state<ProgressPayload | null>(null);
-  let thumbnailCache = $state<Map<string, string>>(new Map());
+
+  // サムネイルは解像度ごとに別物なので `path:maxDimension` をキーにする。
+  // path だけで持つと列数を変えても再取得されず、低解像度が引き伸ばされる。
+  let thumbnailCache = new SvelteMap<string, string>();
+
+  function thumbnailKey(path: string, maxDimension: number): string {
+    return `${path}:${maxDimension}`;
+  }
+
+  function thumbnailFor(path: string, maxDimension: number): string | undefined {
+    return thumbnailCache.get(thumbnailKey(path, maxDimension));
+  }
 
   // --- Exifフレーム状態 ---
+  // プリセット一覧は App が唯一の保持者。ExifFrameSettings は props で受け取る。
   let exifFrameEnabled = $state(false);
   let selectedPresetName = $state("default");
   let exifFramePresets = $state<ExifFrameConfig[]>([]);
   let showExifFrameSettings = $state(false);
 
-  $effect(() => {
-    listPresets().then((presets) => {
-      exifFramePresets = presets;
-    }).catch((e) => {
-      console.error("Failed to load presets:", e);
-    });
-  });
+  async function reloadPresets() {
+    try {
+      exifFramePresets = await listPresets();
+      if (!exifFramePresets.some((p) => p.name === selectedPresetName)) {
+        selectedPresetName = exifFramePresets[0]?.name ?? "default";
+      }
+    } catch (e) {
+      toast.error(`プリセットの読み込みに失敗しました: ${describeError(e)}`);
+    }
+  }
 
   let activeExifFrameConfig = $derived(
     exifFramePresets.find((p) => p.name === selectedPresetName) ?? null
@@ -49,18 +70,28 @@
   let activeRequests = 0;
   const MAX_CONCURRENT = 3;
   const pendingQueue: { path: string; maxDimension: number }[] = [];
+  // 同一キーの失敗を繰り返し再要求しないための記録
+  const failedThumbnails = new Set<string>();
+  let thumbnailErrorReported = false;
 
   function processQueue() {
     while (activeRequests < MAX_CONCURRENT && pendingQueue.length > 0) {
       const { path, maxDimension } = pendingQueue.shift()!;
-      if (thumbnailCache.has(path)) continue;
+      const key = thumbnailKey(path, maxDimension);
+      if (thumbnailCache.has(key)) continue;
       activeRequests++;
       getThumbnail(path, maxDimension)
         .then((base64) => {
-          thumbnailCache.set(path, base64);
-          thumbnailCache = new Map(thumbnailCache);
+          thumbnailCache.set(key, base64);
         })
-        .catch(() => {})
+        .catch((e) => {
+          failedThumbnails.add(key);
+          // 1枚ごとにトーストを出すと壊れたフォルダーで埋め尽くされるため最初の1件だけ通知する
+          if (!thumbnailErrorReported) {
+            thumbnailErrorReported = true;
+            toast.error(`サムネイルを生成できない画像があります: ${describeError(e)}`);
+          }
+        })
         .finally(() => {
           activeRequests--;
           processQueue();
@@ -69,8 +100,9 @@
   }
 
   function handleRequestThumbnail(path: string, maxDimension: number) {
-    if (thumbnailCache.has(path)) return;
-    if (!pendingQueue.some(item => item.path === path)) {
+    const key = thumbnailKey(path, maxDimension);
+    if (thumbnailCache.has(key) || failedThumbnails.has(key)) return;
+    if (!pendingQueue.some((item) => item.path === path && item.maxDimension === maxDimension)) {
       pendingQueue.push({ path, maxDimension });
     }
     processQueue();
@@ -107,40 +139,49 @@
   );
 
   // --- イベントリスナー ---
-  let unlisten: UnlistenFn | null = null;
-
-  $effect(() => {
+  onMount(() => {
+    let unlisten: UnlistenFn | null = null;
     let cancelled = false;
+
     listen<ProgressPayload>("processing-progress", (event) => {
       progress = event.payload;
-    }).then((fn) => {
-      if (cancelled) {
-        fn();
-      } else {
-        unlisten = fn;
-      }
-    }).catch((e) => {
-      console.error("Failed to listen for progress:", e);
-    });
+    })
+      .then((fn) => {
+        if (cancelled) {
+          fn();
+        } else {
+          unlisten = fn;
+        }
+      })
+      .catch((e) => {
+        toast.error(`進捗の購読に失敗しました: ${describeError(e)}`);
+      });
+
+    reloadPresets();
 
     return () => {
       cancelled = true;
       unlisten?.();
-      unlisten = null;
     };
   });
 
   // --- ハンドラー ---
   let currentFolder = $state("");
+  // フォルダー連打で古い listImages の応答が新しい一覧を上書きしないようトークンで守る
+  let listImagesToken = 0;
 
   async function handleSelectFolder(path: string) {
     currentFolder = path;
     currentPage = 0;
+    const token = ++listImagesToken;
     try {
-      images = await listImages(path);
+      const result = await listImages(path);
+      if (token !== listImagesToken) return;
+      images = result;
     } catch (e) {
-      console.error("Failed to list images:", e);
+      if (token !== listImagesToken) return;
       images = [];
+      toast.error(`フォルダーを開けませんでした: ${describeError(e)}`);
     }
   }
 
@@ -158,33 +199,55 @@
   }
 
   async function handlePickOutputFolder() {
-    const selected = await open({
-      directory: true,
-      multiple: false,
-      defaultPath: currentFolder || undefined,
-    });
-    if (selected) {
-      outputFolder = selected as string;
+    try {
+      const selected = await open({
+        directory: true,
+        multiple: false,
+        defaultPath: currentFolder || undefined,
+      });
+      if (selected) {
+        outputFolder = selected as string;
+      }
+    } catch (e) {
+      toast.error(`出力先の選択に失敗しました: ${describeError(e)}`);
     }
   }
 
-  async function handleProcess() {
+  // --- 変換実行 ---
+  let showDeleteConfirm = $state(false);
+  let batchResults = $state<ProcessResult[] | null>(null);
+  let batchRequested = $state<ImageEntry[]>([]);
+  let batchCancelled = $state(false);
+  let cancelRequested = false;
+
+  function handleProcess() {
     if (!canProcess) return;
+    // 元ファイルの一括削除は取り消せないため必ず確認を挟む
+    if (config.delete_originals) {
+      showDeleteConfirm = true;
+      return;
+    }
+    runProcess();
+  }
+
+  async function runProcess() {
+    showDeleteConfirm = false;
+    if (!canProcess) return;
+
+    const requested = selectedImages;
     processing = true;
-    progress = { current: 0, total: selectedImages.length, file_name: "" };
+    cancelRequested = false;
+    progress = { current: 0, total: requested.length, file_name: "" };
 
     try {
-      const files = selectedImages.map((img) => img.path);
-      const efConfig = (config.mode === "pad" && exifFrameEnabled) ? activeExifFrameConfig : null;
-      const results = await processImages(
-        files,
-        outputFolder,
-        config,
-        efConfig
-      );
-      alert(`完了: ${results.length}/${selectedImages.length} 枚を変換しました`);
+      const files = requested.map((img) => img.path);
+      const efConfig = config.mode === "pad" && exifFrameEnabled ? activeExifFrameConfig : null;
+      const results = await processImages(files, outputFolder, config, efConfig);
+      batchRequested = requested;
+      batchResults = results;
+      batchCancelled = cancelRequested;
     } catch (e) {
-      alert(`エラー: ${e}`);
+      toast.error(`変換に失敗しました: ${describeError(e)}`);
     } finally {
       processing = false;
       progress = null;
@@ -192,7 +255,34 @@
   }
 
   async function handleCancel() {
-    await cancelProcessing();
+    try {
+      cancelRequested = true;
+      await cancelProcessing();
+    } catch (e) {
+      toast.error(`キャンセルに失敗しました: ${describeError(e)}`);
+    }
+  }
+
+  async function handleSavePreset(preset: ExifFrameConfig) {
+    try {
+      await savePreset(preset);
+      selectedPresetName = preset.name;
+      await reloadPresets();
+      showExifFrameSettings = false;
+      toast.success(`プリセット「${preset.name}」を保存しました`);
+    } catch (e) {
+      toast.error(`プリセットの保存に失敗しました: ${describeError(e)}`);
+    }
+  }
+
+  async function handleDeletePreset(name: string) {
+    try {
+      await deletePreset(name);
+      await reloadPresets();
+      toast.success(`プリセット「${name}」を削除しました`);
+    } catch (e) {
+      toast.error(`プリセットの削除に失敗しました: ${describeError(e)}`);
+    }
   }
 </script>
 
@@ -205,7 +295,7 @@
     <ThumbnailGrid
       {images}
       {selectedPaths}
-      {thumbnailCache}
+      {thumbnailFor}
       {currentPage}
       onToggleSelect={handleToggleSelect}
       onRequestThumbnail={handleRequestThumbnail}
@@ -217,7 +307,7 @@
   <div class="right-panel">
     <SelectionList
       {selectedImages}
-      {thumbnailCache}
+      {thumbnailFor}
       onRemove={handleRemove}
       onRequestThumbnail={handleRequestThumbnail}
       onPreview={handlePreview}
@@ -226,7 +316,6 @@
       bind:config
       {outputFolder}
       {canProcess}
-      {currentFolder}
       onPickOutputFolder={handlePickOutputFolder}
       onProcess={handleProcess}
       {exifFrameEnabled}
@@ -254,17 +343,38 @@
 
 {#if showExifFrameSettings}
   <ExifFrameSettings
-    visible={showExifFrameSettings}
+    presets={exifFramePresets}
+    {selectedPresetName}
     previewImagePath={selectedImages[0]?.path ?? null}
     bgColor={config.bg_color}
     onClose={() => (showExifFrameSettings = false)}
-    onSave={async (config) => {
-      await savePreset(config);
-      exifFramePresets = await listPresets();
-      showExifFrameSettings = false;
-    }}
+    onSave={handleSavePreset}
+    onDelete={handleDeletePreset}
   />
 {/if}
+
+{#if showDeleteConfirm}
+  <ConfirmDialog
+    title="元ファイルを削除します"
+    message={`変換に成功した ${selectedImages.length} 枚の元ファイルを削除します。`}
+    detail="削除したファイルはゴミ箱に入らず、元に戻せません。"
+    confirmLabel="削除して変換"
+    danger
+    onConfirm={runProcess}
+    onCancel={() => (showDeleteConfirm = false)}
+  />
+{/if}
+
+{#if batchResults}
+  <ResultDialog
+    requested={batchRequested}
+    results={batchResults}
+    cancelled={batchCancelled}
+    onClose={() => (batchResults = null)}
+  />
+{/if}
+
+<Toast />
 
 <style>
   .app {

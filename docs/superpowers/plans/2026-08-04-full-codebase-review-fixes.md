@@ -39,7 +39,7 @@ cd gui-frontend && bun install && bunx svelte-check
 | `cargo test --workspace` | core のみ 78 passed | **107 passed**（S1 で +2、S3 で +10、S4 で +17） |
 | `cargo clippy --workspace --all-targets -- -D warnings` | 21 warnings（gui は未検査） | **green**（gui にも2件あり修正済み） |
 | `cargo fmt --all -- --check` | 失敗（実際は10ファイル） | **green** |
-| `bunx svelte-check` | 未導入 | **0 errors / 6 warnings**（warnings は S5-M12） |
+| `bunx svelte-check` | 未導入 | **0 errors / 0 warnings**（S5 で解消） |
 | CI | **無し** | `.github/workflows/ci.yml`（ubuntu-22.04） |
 | `make test` | core のみ | `cargo test --workspace` |
 
@@ -60,7 +60,7 @@ exif-frame v2（コミット30本超、core の約半分）が**検証されな�
 | S2 | CI 整備 + lint/fmt + デッドコード掃除 ✅ | `.github/`, `Makefile`, 各所 | なし（最優先で実施） |
 | S3 | core 画像処理の正しさ ✅ | `core/src/lib.rs` | S2 |
 | S4 | exif_frame レイアウト・描画の正しさ ✅ | `core/src/exif_frame/` | S2 |
-| S5 | フロントエンドの正しさ・安全性 | `gui-frontend/src/` | S2 |
+| S5 | フロントエンドの正しさ・安全性 ✅ | `gui-frontend/src/` | S2 |
 | S6 | Tauri バックエンドのセキュリティ | `gui/src/`, `capabilities/` | S2 |
 | S7 | ドキュメント整合 | `README.md`, `CLAUDE.md`, `docs/` | S1〜S6 完了後 |
 
@@ -573,7 +573,7 @@ GUI では `eprintln!` するだけで UI に出ていない。`ProcessResult.wa
 
 ## S5. フロントエンド（`gui-frontend/src/`）
 
-- [ ] **F1 プリセットのシャローコピーによる汚染** `lib/ExifFrameSettings.svelte:71-77`
+- [x] **F1 プリセットのシャローコピーによる汚染** `lib/ExifFrameSettings.svelte:71-77`
 
   ```ts
   config = { ...preset };   // items / font が presets 配列内のオブジェクトと同一参照
@@ -583,7 +583,7 @@ GUI では `eprintln!` するだけで UI に出ていない。`ProcessResult.wa
   プリセットを切り替えて戻すと編集が残る／別プリセットのつもりで保存すると別ファイルが汚染される。
   → `structuredClone(preset)` にする。
 
-- [ ] **F2 歯車から開いた設定に選択中プリセットが引き継がれない** `lib/ExifFrameSettings.svelte:5-13`, `:37-39`
+- [x] **F2 歯車から開いた設定に選択中プリセットが引き継がれない** `lib/ExifFrameSettings.svelte:5-13`, `:37-39`
 
   `Props` に選択中プリセット名を受け取る口が無く、`config` は常に `defaultConfig()`（`name: 'default'`）
   で初期化される。`SettingsPanel` で "portrait" を選んで歯車を押しても `default` の内容から始まり、
@@ -591,13 +591,13 @@ GUI では `eprintln!` するだけで UI に出ていない。`ProcessResult.wa
   **`default` プリセットを意図せず上書きする**（`preset.rs:63-70` は同名で上書き）。
   → 選択中プリセット名を prop で渡し、初期 `config` をそれに合わせる。
 
-- [ ] **F3 `delete_originals` に確認フローが無い** `lib/SettingsPanel.svelte:74-77` → `App.svelte:171-192`
+- [x] **F3 `delete_originals` に確認フローが無い** `lib/SettingsPanel.svelte:74-77` → `App.svelte:171-192`
 
   チェックボックス1つで元ファイル一括削除が走る。確認ダイアログも二段階確認も無い。
   CLAUDE.md の「`--delete-originals` で明示的に削除」という方針が GUI で担保されていない。
   → 実行前にモーダル確認を挟む（削除対象件数を明示する）。
 
-- [ ] **F4 レースコンディション（2箇所）**
+- [x] **F4 レースコンディション（2箇所）**
   - `App.svelte:136-145` `handleSelectFolder`: フォルダー連打で古い `listImages` の応答が
     新しい一覧を上書きし、表示中フォルダーとサムネイルが食い違う
   - `lib/ImagePreview.svelte:44-47`: 矢印キー高速ナビで別画像の EXIF / 全体画像が表示される
@@ -606,7 +606,7 @@ GUI では `eprintln!` するだけで UI に出ていない。`ProcessResult.wa
   ガード無しで繰り返されている。`App.svelte:112-131` は `cancelled` フラグで正しく処理しているので、
   同じ方式（リクエストトークン or `path` 一致チェック）に揃える。
 
-- [ ] **F5 サムネイルキャッシュのキーに解像度が含まれない** `App.svelte:28`, `:53-77`
+- [x] **F5 サムネイルキャッシュのキーに解像度が含まれない** `App.svelte:28`, `:53-77`
 
   フロントは `Map<path, base64>`、Rust 側（`gui/src/commands.rs:126-158`）は
   `format!("{}:{}", path, max_dimension)`。`handleRequestThumbnail` が `has(path)` で早期リターン
@@ -619,43 +619,103 @@ GUI では `eprintln!` するだけで UI に出ていない。`ProcessResult.wa
   svelte-check を CI に入れるとこの1件だけで CI が red になるため、S2 に前倒しした。
   `{ defaults: {}, autoSave: false }` に修正（ランタイム挙動は不変）。
 
-- [ ] **F12 フォント選択 UI とプリセット削除ボタンが無い**（S2-DEAD-4 から派生）
+- [x] **F12 フォント選択 UI とプリセット削除ボタンが無い**（S2-DEAD-4 から派生）
 
   `list_available_fonts` / `delete_preset` は Rust・`api.ts` まで実装済みだが UI が無い。
   S2 で「バックエンドを残す」と決定したので、ここで UI を作って配線を完成させる。
   フォント選択は v2 spec:247 の要求機能。
 
-- [ ] **F7 Exif プレビューで `bgColor` の変更が追跡されない** `lib/ExifFrameSettings.svelte:52-68`
+- [x] **F7 Exif プレビューで `bgColor` の変更が追跡されない** `lib/ExifFrameSettings.svelte:52-68`
 
   `bgColor` を `setTimeout` コールバック（非同期）内でのみ参照しているため、
   `$effect` の同期実行フェーズで読まれず**リアクティブ依存として追跡されない**。
   → 同期部分で `const bg = bgColor;` を読む。
 
-- [ ] **F8 エラーの握りつぶし**
+- [x] **F8 エラーの握りつぶし**
   - `lib/FolderTree.svelte:109-125`, `:130-134`: `catch (e) { node.children = [] }` と
     `.catch(() => {})`。権限エラーでも「空のフォルダー」にしか見えず原因が分からない
   - `App.svelte:72` サムネイル取得の `.catch(() => {})`
   - `App.svelte:160-169`, `:194-196`: `handlePickOutputFolder` / `handleCancel` が try/catch なしで
     fire-and-forget（他のハンドラーは try/catch しており不統一）
 
-- [ ] **M10 プリセット一覧の状態が2箇所で重複管理** `App.svelte:33`, `:36-42` と
+- [x] **M10 プリセット一覧の状態が2箇所で重複管理** `App.svelte:33`, `:36-42` と
       `lib/ExifFrameSettings.svelte:38`, `:44-48`（それぞれ独立に `listPresets()` を呼ぶ）
       → props 経由で一本化。
-- [ ] **M11 `SelectionList.svelte:14-20` の `$effect` が `thumbnailCache` を読むため、
+- [x] **M11 `SelectionList.svelte:14-20` の `$effect` が `thumbnailCache` を読むため、
       サムネイル1枚ロードごとに選択済み全件をループ**（実質 O(n²)）。
-- [ ] **M12 アクセシビリティ**（`bun run build` で Svelte コンパイラが実際に警告を出力）
+- [x] **M12 アクセシビリティ**（`bun run build` で Svelte コンパイラが実際に警告を出力）
   - `lib/ImagePreview.svelte:208` `role="dialog"` に `tabindex` もフォーカストラップも無く、
     Escape 以外でキーボードから閉じられない
   - 同 `:253`, `:263` `<img>` にマウスイベントのみ
   - `lib/ExifFrameSettings.svelte:132` `<label>` がコントロールと未紐付け
   - `lib/FolderTree.svelte:68-85`, `:173` お気に入り追加/削除が右クリックのみでキーボード不可
-- [ ] **L7** `app.css:1-17` `--text-muted: #666` を `font-size: 10px` で多用（コントラスト・視認性）。
+- [x] **L7** `app.css:1-17` `--text-muted: #666` を `font-size: 10px` で多用（コントラスト・視認性）。
       ライト/ダーク切替も未対応（常に固定ダーク）。
-- [ ] **L8** `App.svelte:185`, `:187` の `alert()` をトースト等に置換。
-- [ ] **L9** `types.ts:14` `ImageEntry.thumbnail_base64` はデッドフィールド（Rust 側も常に `None`）。
-- [ ] **L10** `ThumbnailGrid.svelte:21` の `void columnCount;` は直後に読んでいるため冗長。
-- [ ] **L11** `App.svelte:36-42`, `FolderTree.svelte:141-144` の「マウント時1回」`$effect` は
+- [x] **L8** `App.svelte:185`, `:187` の `alert()` をトースト等に置換。
+- [x] **L9** `types.ts:14` `ImageEntry.thumbnail_base64` はデッドフィールド（Rust 側も常に `None`）。
+- [x] **L10** `ThumbnailGrid.svelte:21` の `void columnCount;` は直後に読んでいるため冗長。
+- [x] **L11** `App.svelte:36-42`, `FolderTree.svelte:141-144` の「マウント時1回」`$effect` は
       `onMount` の方が意図が明確。
+- [x] **F13（着手時に追加）** 「横断的な設計決定 1」が S5 に持ち越すと明記していた
+      `ProcessResult.warnings` / `size_limit_exceeded` の表示 UI。チェックリストから漏れていた。
+      L8（`alert()` 置換）と一体で `ResultDialog` として実装。
+
+### S5 実施メモ（2026-08-05）
+
+**新規ファイル**（4つのモーダルで重複しないよう共通部品に集約した）
+
+| ファイル | 目的 | 対応項目 |
+|---|---|---|
+| `lib/focusTrap.ts` | モーダル共通のフォーカストラップ Svelte action | M12 |
+| `lib/toasts.svelte.ts` + `lib/Toast.svelte` | 握りつぶしていた例外と `alert()` の置換先 | F8, L8 |
+| `lib/ConfirmDialog.svelte` | 破壊的操作の確認（初期フォーカスはキャンセル側） | F3 |
+| `lib/ResultDialog.svelte` | 成功/失敗/サイズ超過/警告の内訳 | F13, L8 |
+
+**判断のメモ**
+
+- **F5 のキー変更に伴う副作用を潰した。** `path:maxDimension` にしただけだと、列数変更で
+  要求解像度が変わっても `IntersectionObserver` が既に切断済みで再取得されない。
+  action に `update` を持たせて再要求するようにし、併せて要求サイズを 64px 刻みに丸めて
+  キャッシュの再利用率を確保した（`ThumbnailGrid.svelte`）。
+- **`Map` の再代入ハックを `SvelteMap` に置換**（`svelte/reactivity`）。
+  子には生の Map ではなく `thumbnailFor(path, size)` を渡し、キーの組み立てを App に閉じ込めた。
+- **M12 のお気に入り操作は、右クリックにキーボード経路を足すのではなく常設トグルに置換した。**
+  同じ操作の入口が2つある状態を避けるためコンテキストメニューは削除（約40行減）。
+- **F12 に「プリセット名」入力を追加した。** F2 の修正（選択中プリセットを初期値にする）だけだと
+  常に選択中を上書きすることになり、**新規プリセットを作る経路が存在しなくなる**ため。
+  併せて削除ボタンは `default`（バンドル）に対しては無効化している。
+- **L7 のライト/ダーク切替は S5 では実施しない。** コントラスト（`--text-secondary` / `--text-muted`
+  を AA 準拠に引き上げ、10px 併用箇所を 11px 化）のみ対応。テーマ切替は新機能でありセッションの
+  主旨（正しさ・安全性）から外れるため UX 改善側で扱う。
+- `SettingsPanel` の未使用 prop `currentFolder` を削除（触っている箇所に隣接するデッドコード）。
+
+**S6 への申し送り**
+
+- `gui/src/commands.rs:174-258` に `TODO(S5-F8)` コメントがあるが、これは `ExifAssets::load` の
+  警告を `eprintln!` している箇所で **バックエンド側の話**。S6 の M15 と併せて片付けること。
+- `process_images` は成功分しか返さず、失敗は件数だけ `processing-error` で emit している。
+  フロントはこのイベントを購読していない（`ResultDialog` が要求リストとの差分で失敗を復元するため）。
+  S6 で `emit` を整理するならこの死に配線も一緒に判断すること。
+- `types.ts` から `ImageEntry.thumbnail_base64` を削除した（L9）。Rust 側の同名フィールドは
+  未削除なので S6 で落とすこと。
+
+**検証**（2026-08-05）
+
+| コマンド | 結果 |
+|---|---|
+| `bunx svelte-check` | **0 errors / 0 warnings**（S5 前は 0 errors / 6 warnings） |
+| `bun run build` | 成功。Svelte コンパイラ警告なし |
+| `cargo test --workspace` | 107 passed（ベースライン維持） |
+| `cargo fmt --all -- --check` | green |
+
+Tauri 無しでは到達できない経路は `vite dev` + Playwright で実機確認した。
+
+- 起動時の4つの失敗（進捗購読 / ドライブ一覧 / プリセット / お気に入り）がすべてトースト表示に
+  なることを確認（従来は `console.error` か完全な握りつぶし）
+- `ConfirmDialog`: 初期フォーカスがキャンセル、Tab がダイアログ内で巻き戻る、
+  Escape で閉じてトリガー要素へフォーカスが戻る
+- `ResultDialog`: 要求リストとの差分から失敗ファイルを復元、`size_limit_exceeded` と
+  `warnings` を表示、キャンセル時は「失敗」ではなく「未処理」と表記
 
 ---
 
@@ -753,7 +813,8 @@ GUI では `eprintln!` するだけで UI に出ていない。`ProcessResult.wa
    CLI は stderr、GUI は `ProcessResult` 経由でフロントに渡す。S3-H1/H2/M3、S4-H4 が全てこれに依存する。
    **→ S3 で実装済み（2026-08-05）**。`warnings: Vec<String>` と `size_limit_exceeded: bool` が
    `ProcessResult` にある。以降のセッションで新たな警告を出す必要が生じたら、`eprintln!` を
-   足さずここに push すること。GUI の**表示 UI は S5 に持ち越し**（型は配線済み）。
+   足さずここに push すること。GUI の表示 UI は **S5-F13 で実装済み**（`lib/ResultDialog.svelte`）。
+   新しい警告を足せば追加実装なしでそこに出る。
 2. **default の単一の真実** — **`ExifFrameConfig::default()` を正とする**（S4-M4 で決定 / 2026-08-05）。
    `core/assets/presets/default.json` は削除し、`load_bundled_presets()` は
    `vec![ExifFrameConfig::default()]` を返す。以後、デフォルト値は Rust 側だけを直すこと。
