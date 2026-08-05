@@ -111,7 +111,7 @@ fn main() -> Result<()> {
             args.exif_frame
         };
 
-    let (exif_frame_config, asset_dirs) = if exif_frame_requested {
+    let (exif_frame_config, exif_assets) = if exif_frame_requested {
         let config = if let Some(ref path) = args.preset_file {
             let json = std::fs::read_to_string(path)
                 .with_context(|| format!("Failed to read preset file: {}", path.display()))?;
@@ -133,7 +133,16 @@ fn main() -> Result<()> {
             config.items.custom_text = true;
         }
 
-        (Some(config), Some(core::exif_frame::AssetDirs::default()))
+        // アセットはバッチ全体で1回だけ構築する（画像ごとに model_map を
+        // 読み直さないため）。構築時の警告は core が握りつぶさず返してくるので
+        // ここで stderr に出す。
+        let assets = core::exif_frame::ExifAssets::load(core::exif_frame::AssetDirs::default())
+            .context("Failed to load exif frame assets")?;
+        for warning in &assets.warnings {
+            eprintln!("Warning: {}", warning);
+        }
+
+        (Some(config), Some(assets))
     } else {
         (None, None)
     };
@@ -185,7 +194,7 @@ fn main() -> Result<()> {
         &args.output,
         &config,
         exif_frame_config.as_ref(),
-        asset_dirs.as_ref(),
+        exif_assets.as_ref(),
         Some(Box::new(on_progress)),
     );
 

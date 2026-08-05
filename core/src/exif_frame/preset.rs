@@ -1,26 +1,17 @@
 use super::ExifFrameConfig;
 use anyhow::Result;
-use rust_embed::Embed;
 use std::fs;
 use std::path::Path;
 
-#[derive(Embed)]
-#[folder = "assets/presets/"]
-struct PresetAssets;
-
-/// バンドルプリセットを読み込み
+/// バンドルプリセット。
+///
+/// **デフォルト値の単一の真実は `ExifFrameConfig::default()` である**（S4-M4）。
+/// 以前は同じ内容が `assets/presets/default.json` にも書かれており、
+/// 片方だけ更新される事故を待っている状態だった。JSON を持たないことで
+/// 「プリセットが見つからないときは Rust の Default にフォールバックする」
+/// という CLI の挙動（`cli/src/main.rs`）とも定義上ズレなくなる。
 pub fn load_bundled_presets() -> Vec<ExifFrameConfig> {
-    let mut presets = Vec::new();
-    for file in PresetAssets::iter() {
-        if file.ends_with(".json") {
-            if let Some(data) = PresetAssets::get(&file) {
-                if let Ok(config) = serde_json::from_slice::<ExifFrameConfig>(&data.data) {
-                    presets.push(config);
-                }
-            }
-        }
-    }
-    presets
+    vec![ExifFrameConfig::default()]
 }
 
 /// ユーザープリセットディレクトリから読み込み

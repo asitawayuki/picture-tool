@@ -277,7 +277,7 @@ pub fn process_image(
     output_folder: &Path,
     config: &ProcessingConfig,
     exif_frame_config: Option<&exif_frame::ExifFrameConfig>,
-    asset_dirs: Option<&exif_frame::AssetDirs>,
+    assets: Option<&exif_frame::ExifAssets>,
 ) -> Result<ProcessResult> {
     // core はライブラリであり stdout/stderr を持たない（GUI には届かない）。
     // 処理は続行するが利用者に伝えるべき事象はここに積み、ProcessResult で呼び出し元へ返す。
@@ -305,9 +305,14 @@ pub fn process_image(
     let converted = match config.mode {
         ConversionMode::Crop => convert_aspect_ratio_crop(img),
         ConversionMode::Pad => {
-            if let (Some(ef_config), Some(dirs)) = (exif_frame_config, asset_dirs) {
-                match exif_frame::render_exif_frame(&img, &exif, ef_config, &config.bg_color, dirs)
-                {
+            if let (Some(ef_config), Some(assets)) = (exif_frame_config, assets) {
+                match exif_frame::render_exif_frame(
+                    &img,
+                    &exif,
+                    ef_config,
+                    &config.bg_color,
+                    assets,
+                ) {
                     Ok(framed) => framed,
                     Err(e) => {
                         warnings.push(format!(
@@ -368,7 +373,7 @@ pub fn process_batch(
     output_folder: &Path,
     config: &ProcessingConfig,
     exif_frame_config: Option<&exif_frame::ExifFrameConfig>,
-    asset_dirs: Option<&exif_frame::AssetDirs>,
+    assets: Option<&exif_frame::ExifAssets>,
     on_progress: Option<ProgressCallback>,
 ) -> Vec<Result<ProcessResult>> {
     let total = files.len();
@@ -382,7 +387,7 @@ pub fn process_batch(
                 return Err(anyhow::anyhow!("Processing cancelled"));
             }
 
-            let result = process_image(path, output_folder, config, exif_frame_config, asset_dirs);
+            let result = process_image(path, output_folder, config, exif_frame_config, assets);
 
             let current = processed_count.fetch_add(1, Ordering::SeqCst) + 1;
             if let Some(ref cb) = on_progress {

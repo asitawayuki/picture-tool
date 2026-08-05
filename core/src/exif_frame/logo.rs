@@ -58,12 +58,21 @@ fn load_svg_from_bytes(svg_data: &[u8], target_size: u32) -> Result<DynamicImage
     let orig_size = rtree.size;
     let orig_w = orig_size.width();
     let orig_h = orig_size.height();
+    // 幅・高さが0のSVGだとスケールが NaN / Inf になり、そのまま as u32 で
+    // 0 に潰れて意味不明な "failed to create pixmap" になる。ここで弾く。
+    if !(orig_w.is_finite() && orig_h.is_finite()) || orig_w <= 0.0 || orig_h <= 0.0 {
+        anyhow::bail!("svg has a non-positive canvas size ({}x{})", orig_w, orig_h);
+    }
+    if target_size == 0 {
+        anyhow::bail!("svg target size must be greater than 0");
+    }
     let scale = target_size as f32 / orig_w.max(orig_h);
     let width = (orig_w * scale).round() as u32;
     let height = (orig_h * scale).round() as u32;
 
-    let mut pixmap =
-        resvg::tiny_skia::Pixmap::new(width, height).context("failed to create pixmap")?;
+    let mut pixmap = resvg::tiny_skia::Pixmap::new(width.max(1), height.max(1))
+        .context("failed to create pixmap")?;
+    let (width, height) = (width.max(1), height.max(1));
     let transform = resvg::tiny_skia::Transform::from_scale(scale, scale);
     rtree.render(transform, &mut pixmap.as_mut());
 
@@ -75,6 +84,9 @@ fn load_svg_from_bytes(svg_data: &[u8], target_size: u32) -> Result<DynamicImage
 /// ロゴファイルのパスを解決（SVG優先、lightバリアント対応）
 pub fn resolve_logo_file(dir: Option<&Path>, base_name: &str, use_light: bool) -> Option<PathBuf> {
     let dir = dir?;
+    // base_name はユーザーが差し替え可能な model_map から来るため、
+    // `dir.join()` に渡す前に単純なファイル名であることを保証する（S4-M8）。
+    crate::model_map::validate_asset_filename(base_name).ok()?;
     if !dir.exists() {
         return None;
     }
@@ -120,6 +132,8 @@ pub fn resolve_and_load_logo(
     target_size: u32,
 ) -> Option<DynamicImage> {
     let base_name = filename.trim_end_matches(".svg").trim_end_matches(".png");
+    // pub API なので model_map 側の検証に依存せず、ここでも自衛する（S4-M8）
+    crate::model_map::validate_asset_filename(base_name).ok()?;
 
     // 1. ユーザーディレクトリから検索
     if let Some(path) = resolve_logo_file(user_dir, base_name, use_light) {
@@ -225,6 +239,43 @@ mod tests {
                 );
             }
         }
+    }
+
+    /// 仕様: ロゴ名はアセットディレクトリ内のファイルしか指せない（S4-M8）。
+    /// `model_map_custom.json` はユーザーが書き換えられるので、
+    /// `"../.."` を書かれてディレクトリの外を読めてはならない。
+    #[test]
+    fn logo_names_cannot_escape_the_asset_directory() {
+        let root = tempfile::TempDir::new().unwrap();
+        let logos = root.path().join("logos");
+        std::fs::create_dir(&logos).unwrap();
+        // ロゴディレクトリの「外」に、狙われうるファイルを置く
+        let outside = root.path().join("secret.png");
+        image::RgbaImage::from_pixel(4, 4, image::Rgba([1, 2, 3, 255]))
+            .save(&outside)
+            .unwrap();
+
+        for evil in ["../secret", "../../secret", "/etc/passwd", "sub/secret"] {
+            assert!(
+                resolve_logo_file(Some(&logos), evil, false).is_none(),
+                "{:?} must not resolve to a path outside the logo directory",
+                evil
+            );
+            assert!(
+                resolve_and_load_logo(Some(&logos), evil, false, 32).is_none(),
+                "{:?} must not load anything",
+                evil
+            );
+        }
+    }
+
+    /// 仕様: 壊れたSVG（幅・高さが0）はエラーとして扱う。
+    /// ゼロ除算で scale が NaN/Inf になったまま先へ進めてはならない（S4-L4）。
+    #[test]
+    fn zero_sized_svg_is_rejected() {
+        let svg = br#"<svg xmlns="http://www.w3.org/2000/svg" width="0" height="0"></svg>"#;
+        let result = load_svg_from_bytes(svg, 64);
+        assert!(result.is_err(), "zero-sized svg must be an error");
     }
 
     #[test]

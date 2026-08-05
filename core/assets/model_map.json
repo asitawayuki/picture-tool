@@ -1,11 +1,8 @@
 {
+  "_comment": "logo_match のキーは trim + 大文字化して比較され、完全一致しなければ先頭トークンでも照合される。'Sony' / 'Sony Corporation' のような表記揺れを列挙する必要はない。",
   "logo_match": {
     "SONY": { "maker": "sony.svg" },
-    "Sony": { "maker": "sony.svg" },
-    "Sony Corporation": { "maker": "sony.svg" },
-    "FUJIFILM": { "maker": "fujifilm.svg" },
-    "Fujifilm": { "maker": "fujifilm.svg" },
-    "FUJIFILM Corporation": { "maker": "fujifilm.svg" }
+    "FUJIFILM": { "maker": "fujifilm.svg" }
   },
   "lens_brand_match": [
     { "pattern": "GM", "match_type": "contains", "logo": "gmaster.png" }

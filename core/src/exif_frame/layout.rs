@@ -40,6 +40,14 @@ const EXIF_BAR_RATIO: f64 = 0.06;
 // Exifバーの最小ピクセル
 const EXIF_BAR_MIN_PX: u32 = 30;
 
+/// Exifバーの太さ（Bottom/Top なら高さ、Right/Left なら幅）。
+/// 仕様: 写真の短辺の6%、ただし最低 30px。
+/// レイアウト結果の `exif_area_height` / `exif_area_width` は
+/// skip_exif でない限り必ずこの値と一致する（切り詰められない）。
+pub fn exif_bar_size(photo_short_side: u32) -> u32 {
+    ((photo_short_side as f64 * EXIF_BAR_RATIO).round() as u32).max(EXIF_BAR_MIN_PX)
+}
+
 /// Auto判定の内部ロジック（写真比率による自動選択）
 fn auto_placement(photo_w: u32, photo_h: u32) -> ExifPlacement {
     if photo_w > photo_h {
@@ -152,7 +160,7 @@ pub fn calculate_pad_exif_layout(
     let placement = resolve_placement_auto(photo_width, photo_height, config.position);
 
     // Exifバーのサイズ
-    let exif_bar_size = ((short_side as f64 * EXIF_BAR_RATIO).round() as u32).max(EXIF_BAR_MIN_PX);
+    let exif_bar_size = exif_bar_size(short_side);
 
     // 4:5 キャンバスを算出（写真原寸で）
     let (canvas_w, canvas_h) = fit_to_4_5(photo_width, photo_height);
@@ -196,39 +204,36 @@ pub fn calculate_pad_exif_layout(
         };
 
         if new_available < exif_bar_size {
-            // まだ足りなければ強制的にキャンバスを拡張（整数4:5比を保って）
+            // まだ足りなければ強制的にキャンバスを拡張（整数4:5比を保って）。
+            //
+            // キャンバスは常に k*4 x k*5 でなければならない（fit_to_4_5 と同じ不変条件）。
+            // そのため「拡張したい側の辺」を先に決めるのではなく、
+            // **k が整数になる側の辺**を切り上げてからもう一方を割り切って導出する:
+            //   高さを伸ばしたい (Bottom/Top) → 高さを5の倍数に切り上げ → 幅 = 高さ*4/5（割り切れる）
+            //   幅を伸ばしたい (Right/Left)   → 幅を4の倍数に切り上げ   → 高さ = 幅*5/4（割り切れる）
+            // 逆にすると割り切れず切り捨てが発生し、4:5 が 1px 単位で崩れる。
             match placement {
                 ExifPlacement::Bottom | ExifPlacement::Top => {
                     let need_h = new_photo_h + exif_bar_size;
-                    // 4の倍数に切り上げ
-                    let canvas_h_expanded = need_h.div_ceil(4) * 4;
-                    let canvas_w_expanded = canvas_h_expanded * 4 / 5;
-                    if canvas_w_expanded >= new_photo_w {
-                        (
-                            new_photo_w,
-                            new_photo_h,
-                            canvas_w_expanded,
-                            canvas_h_expanded,
-                        )
-                    } else {
-                        (new_photo_w, new_photo_h, new_canvas_w, new_canvas_h)
-                    }
+                    let canvas_h_expanded = need_h.div_ceil(5) * 5;
+                    let canvas_w_expanded = canvas_h_expanded / 5 * 4;
+                    (
+                        new_photo_w,
+                        new_photo_h,
+                        canvas_w_expanded,
+                        canvas_h_expanded,
+                    )
                 }
                 ExifPlacement::Right | ExifPlacement::Left => {
                     let need_w = new_photo_w + exif_bar_size;
-                    // 5の倍数に切り上げ
-                    let canvas_w_expanded = need_w.div_ceil(5) * 5;
-                    let canvas_h_expanded = canvas_w_expanded * 5 / 4;
-                    if canvas_h_expanded >= new_photo_h {
-                        (
-                            new_photo_w,
-                            new_photo_h,
-                            canvas_w_expanded,
-                            canvas_h_expanded,
-                        )
-                    } else {
-                        (new_photo_w, new_photo_h, new_canvas_w, new_canvas_h)
-                    }
+                    let canvas_w_expanded = need_w.div_ceil(4) * 4;
+                    let canvas_h_expanded = canvas_w_expanded / 4 * 5;
+                    (
+                        new_photo_w,
+                        new_photo_h,
+                        canvas_w_expanded,
+                        canvas_h_expanded,
+                    )
                 }
             }
         } else {
@@ -242,6 +247,24 @@ pub fn calculate_pad_exif_layout(
     // 利用可能な余白（縮小後）
     let rem_w = final_canvas_w.saturating_sub(final_photo_w);
     let rem_h = final_canvas_h.saturating_sub(final_photo_h);
+
+    // ここに到達する全経路で「Exifバーがまるごと入る余白がある」ことが保証されている:
+    //   - 余白が十分だった経路: available >= exif_bar_size
+    //   - 縮小後に収まった経路: new_available >= exif_bar_size
+    //   - キャンバス拡張経路  : canvas は need = photo + exif_bar_size 以上に切り上げ済み
+    // つまり Exif バーが黙って切り詰められることはない（S4-L5）。
+    debug_assert!(
+        match placement {
+            ExifPlacement::Bottom | ExifPlacement::Top => rem_h,
+            ExifPlacement::Right | ExifPlacement::Left => rem_w,
+        } >= exif_bar_size,
+        "exif bar would be truncated: photo={}x{} canvas={}x{} bar={}",
+        final_photo_w,
+        final_photo_h,
+        final_canvas_w,
+        final_canvas_h,
+        exif_bar_size
+    );
 
     let (photo_x, photo_y, exif_x, exif_y, exif_w, exif_h) = match placement {
         ExifPlacement::Bottom => {
@@ -274,8 +297,11 @@ pub fn calculate_pad_exif_layout(
             let eh = final_canvas_h;
             let ex = final_canvas_w - ew;
             let ey = 0;
-            // 写真はキャンバス全体で中央（視覚的に左右均等に見える）
-            let px = (final_canvas_w.saturating_sub(final_photo_w)) / 2;
+            // 写真はExifバーの左の領域で左右中央。
+            // キャンバス全体で中央にすると余白がバー幅ちょうどのときに
+            // 写真がバーの下へ潜り込み、Exifテキストが写真に重なる。
+            let photo_area_w = final_canvas_w - ew;
+            let px = (photo_area_w.saturating_sub(final_photo_w)) / 2;
             let py = rem_h / 2;
             (px, py, ex, ey, ew, eh)
         }
@@ -285,8 +311,9 @@ pub fn calculate_pad_exif_layout(
             let eh = final_canvas_h;
             let ex = 0;
             let ey = 0;
-            // 写真はキャンバス全体で中央
-            let px = (final_canvas_w.saturating_sub(final_photo_w)) / 2;
+            // 写真はExifバーの右の領域で左右中央（Right と対称）
+            let photo_area_w = final_canvas_w - ew;
+            let px = ew + (photo_area_w.saturating_sub(final_photo_w)) / 2;
             let py = rem_h / 2;
             (px, py, ex, ey, ew, eh)
         }
@@ -534,6 +561,150 @@ mod tests {
         assert!(
             result.is_rotated,
             "Left placement should set is_rotated=true"
+        );
+    }
+
+    // ---- 仕様不変条件（S4-C1 / S4-L5） ----
+    //
+    // 出力は Instagram の 4:5 でなければならない。これは「おおむね 0.8」ではなく
+    // `canvas_w * 5 == canvas_h * 4` の厳密な整数条件である。
+    // C1 が検出されずに main へ入ったのは、テストが 20 の倍数だけを使っていて
+    // たまたま割り切れていたため。ここでは意図的に割り切れないサイズを並べる。
+
+    /// 仕様: Exifバーの太さは写真の短辺の6%、ただし最低 30px。
+    /// （比率と下限の両方を、実装式の再現ではなく固定値で押さえる）
+    #[test]
+    fn exif_bar_is_six_percent_of_short_side_with_30px_floor() {
+        assert_eq!(exif_bar_size(1000), 60, "6% of 1000");
+        assert_eq!(exif_bar_size(800), 48, "6% of 800");
+        assert_eq!(exif_bar_size(500), 30, "6% of 500 == floor");
+        assert_eq!(
+            exif_bar_size(200),
+            30,
+            "6% of 200 is 12 -> raised to the 30px floor"
+        );
+    }
+
+    /// レイアウト結果が満たすべき不変条件をすべて検査する。
+    fn assert_layout_invariants(
+        photo_w: u32,
+        photo_h: u32,
+        position: crate::exif_frame::ExifPosition,
+    ) {
+        let config = crate::exif_frame::ExifFrameConfig {
+            position,
+            ..Default::default()
+        };
+        let l = calculate_pad_exif_layout(photo_w, photo_h, &config, &BackgroundColor::Black);
+        let ctx = format!("photo={}x{} position={:?}", photo_w, photo_h, position);
+
+        // 1. キャンバスは厳密に 4:5
+        assert_eq!(
+            l.canvas_width * 5,
+            l.canvas_height * 4,
+            "canvas {}x{} is not exactly 4:5 ({})",
+            l.canvas_width,
+            l.canvas_height,
+            ctx
+        );
+
+        // 2. 写真がキャンバスに完全に収まる（はみ出し＝画像の欠損）
+        assert!(
+            l.photo_x + l.photo_width <= l.canvas_width
+                && l.photo_y + l.photo_height <= l.canvas_height,
+            "photo {}x{} at ({},{}) overflows canvas {}x{} ({})",
+            l.photo_width,
+            l.photo_height,
+            l.photo_x,
+            l.photo_y,
+            l.canvas_width,
+            l.canvas_height,
+            ctx
+        );
+
+        if l.skip_exif {
+            return;
+        }
+
+        // 3. Exifバーは仕様どおりの太さで、黙って切り詰められない。
+        //    比率の基準は「入力写真の短辺」。縮小量そのものがバーの太さから決まるため、
+        //    縮小後の寸法を基準にすることは定義上ありえない。
+        let expected_bar = exif_bar_size(photo_w.min(photo_h));
+        let actual_bar = if l.is_rotated {
+            l.exif_area_width
+        } else {
+            l.exif_area_height
+        };
+        assert_eq!(
+            actual_bar, expected_bar,
+            "exif bar was truncated to {} (spec: {}) ({})",
+            actual_bar, expected_bar, ctx
+        );
+
+        // 4. Exifバーが写真に重ならない
+        let photo_r = l.photo_x + l.photo_width;
+        let photo_b = l.photo_y + l.photo_height;
+        let exif_r = l.exif_area_x + l.exif_area_width;
+        let exif_b = l.exif_area_y + l.exif_area_height;
+        let disjoint = photo_r <= l.exif_area_x
+            || exif_r <= l.photo_x
+            || photo_b <= l.exif_area_y
+            || exif_b <= l.photo_y;
+        assert!(
+            disjoint,
+            "exif area ({},{},{}x{}) overlaps photo ({},{},{}x{}) ({})",
+            l.exif_area_x,
+            l.exif_area_y,
+            l.exif_area_width,
+            l.exif_area_height,
+            l.photo_x,
+            l.photo_y,
+            l.photo_width,
+            l.photo_height,
+            ctx
+        );
+    }
+
+    #[test]
+    fn layout_invariants_hold_for_non_round_sizes() {
+        use crate::exif_frame::ExifPosition::*;
+        // 4の倍数・5の倍数のどちらにも揃っていない現実的なサイズを中心に並べる
+        let sizes = [
+            (400, 501), // 計画書が挙げた再現ケース（Auto -> Right）
+            (399, 502),
+            (401, 499),
+            (503, 401),
+            (1001, 1000),
+            (999, 1001),
+            (251, 250),
+            (250, 251),
+            (4031, 3023),
+            (3023, 4031),
+            (1920, 1081),
+            (1081, 1920),
+            (207, 203),
+            (800, 1000), // ぴったり4:5（余白ゼロ＝縮小経路）
+            (1000, 800),
+        ];
+        for (w, h) in sizes {
+            for position in [Auto, Bottom, Top, Right, Left] {
+                assert_layout_invariants(w, h, position);
+            }
+        }
+    }
+
+    /// 計画書 S4-C1 の再現ケースを単独で残す（失敗時に原因が一目で分かるように）。
+    /// 修正前は canvas=405x506 になり 405*5=2025 != 506*4=2024 だった。
+    #[test]
+    fn fallback_canvas_expansion_keeps_exact_4_5() {
+        let config = crate::exif_frame::ExifFrameConfig::default();
+        let l = calculate_pad_exif_layout(400, 501, &config, &BackgroundColor::Black);
+        assert_eq!(
+            l.canvas_width * 5,
+            l.canvas_height * 4,
+            "400x501 must still produce an exact 4:5 canvas, got {}x{}",
+            l.canvas_width,
+            l.canvas_height
         );
     }
 }

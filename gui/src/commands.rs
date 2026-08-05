@@ -231,18 +231,33 @@ pub async fn process_images(
         });
 
         let output_path = PathBuf::from(&output);
-        let asset_dirs = core::exif_frame::AssetDirs::default();
-        core::process_batch(
+        // Exif アセットはバッチ全体で1回だけ構築する（画像ごとに model_map を
+        // 読み直さないため）。Exif フレームを使わない場合は構築自体を行わない。
+        let assets = match exif_frame_config.as_ref() {
+            Some(_) => Some(core::exif_frame::ExifAssets::load(
+                core::exif_frame::AssetDirs::default(),
+            )?),
+            None => None,
+        };
+        if let Some(ref a) = assets {
+            // core は eprintln! しない方針なので、提示は呼び出し元の責務。
+            // TODO(S5-F8): ProcessResult.warnings と併せて UI に出す。
+            for warning in &a.warnings {
+                eprintln!("Warning: {}", warning);
+            }
+        }
+        Ok::<_, anyhow::Error>(core::process_batch(
             &file_paths,
             &output_path,
             &config,
             exif_frame_config.as_ref(),
-            Some(&asset_dirs),
+            assets.as_ref(),
             Some(on_progress),
-        )
+        ))
     })
     .await
-    .map_err(|e| e.to_string())?;
+    .map_err(|e| e.to_string())?
+    .map_err(|e| format!("{:#}", e))?;
 
     let mut successes = Vec::new();
     let mut error_count = 0u32;
@@ -298,10 +313,14 @@ pub async fn render_exif_frame_preview(
         let thumbnail = img.resize(max_dim, max_dim, image::imageops::FilterType::Triangle);
 
         let exif_info = core::read_exif_info(path).unwrap_or_default();
-        let asset_dirs = exif_frame::AssetDirs::default();
+        let assets = exif_frame::ExifAssets::load(exif_frame::AssetDirs::default())
+            .map_err(|e| e.to_string())?;
+        for warning in &assets.warnings {
+            eprintln!("Warning: {}", warning);
+        }
 
         let result =
-            exif_frame::render_exif_frame(&thumbnail, &exif_info, &config, &bg_color, &asset_dirs)
+            exif_frame::render_exif_frame(&thumbnail, &exif_info, &config, &bg_color, &assets)
                 .map_err(|e| e.to_string())?;
 
         // base64エンコード

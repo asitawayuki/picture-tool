@@ -4,6 +4,12 @@ version = "0.1.0"
 edition = "2021"
 license.workspace = true
 
+[features]
+default = ["bundled-font"]
+# 同梱の CJK フォント（約4MB）をバイナリに埋め込む。
+# 切ると Exif フレームは font_path を明示した場合のみ描画できる。
+bundled-font = []
+
 [dependencies]
 image = "0.24"
 ab_glyph = "0.2"

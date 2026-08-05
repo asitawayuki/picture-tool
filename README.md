@@ -131,7 +131,7 @@ picture-tool-rust/
 
 | アセット | 権利者 | ライセンス |
 |---------|--------|-----------|
-| `core/assets/fonts/NotoSansJP-Regular.ttf` | Adobe | [SIL Open Font License 1.1](./core/assets/fonts/OFL.txt) |
+| `core/assets/fonts/NotoSansJP-Regular.otf` | Adobe | [SIL Open Font License 1.1](./core/assets/fonts/OFL.txt) |
 | `core/assets/logos/*` | 各商標権者 | 下記「商標について」を参照 |
 
 ### 商標について

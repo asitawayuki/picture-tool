@@ -117,6 +117,55 @@ fn dirs_config_dir() -> Option<PathBuf> {
     dirs::config_dir().map(|d| d.join("picture-tool"))
 }
 
+/// Exifフレーム描画に必要なアセット一式。
+///
+/// **画像1枚ごとではなく、バッチの前に1回だけ構築すること。** 以前は
+/// `render_exif_frame` の中で毎回 `ModelMap` を組み立てており、並列ワーカーが
+/// それぞれ同じ埋め込み JSON をパースし、同じユーザーファイルを読み直していた。
+pub struct ExifAssets {
+    pub dirs: AssetDirs,
+    model_map: crate::model_map::ModelMap,
+    /// 構築時の非致命的な問題（カスタム model_map の読み込み失敗など）。
+    /// core は `eprintln!` しないので、呼び出し元が利用者へ伝えること。
+    pub warnings: Vec<String>,
+}
+
+impl ExifAssets {
+    pub fn load(dirs: AssetDirs) -> Result<Self> {
+        let mut model_map = crate::model_map::ModelMap::load_bundled()?;
+        let mut warnings = Vec::new();
+
+        if let Some(ref custom_path) = dirs.user_model_map {
+            if custom_path.exists() {
+                // カスタムマップが壊れていても描画自体は続行するが、
+                // 「書いたのに効いていない」に気づけるよう必ず警告を残す。
+                match std::fs::read_to_string(custom_path) {
+                    Ok(json_str) => {
+                        if let Err(e) = model_map.merge_custom(&json_str) {
+                            warnings.push(format!(
+                                "Ignoring custom model map {}: {:#}",
+                                custom_path.display(),
+                                e
+                            ));
+                        }
+                    }
+                    Err(e) => warnings.push(format!(
+                        "Failed to read custom model map {}: {}",
+                        custom_path.display(),
+                        e
+                    )),
+                }
+            }
+        }
+
+        Ok(Self {
+            dirs,
+            model_map,
+            warnings,
+        })
+    }
+}
+
 /// フォント情報（GUI一覧表示用）
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FontInfo {
@@ -131,7 +180,7 @@ pub fn render_exif_frame(
     exif: &crate::ExifInfo,
     config: &ExifFrameConfig,
     bg_color: &crate::BackgroundColor,
-    asset_dirs: &AssetDirs,
+    assets: &ExifAssets,
 ) -> Result<DynamicImage> {
     let photo_w = image.width();
     let photo_h = image.height();
@@ -177,15 +226,8 @@ pub fn render_exif_frame(
         layout.photo_y as i64,
     );
 
-    // 6. ModelMap 読み込み（カスタムマップをオプションでマージ）
-    let mut model_map = crate::model_map::ModelMap::load_bundled();
-    if let Some(ref custom_path) = asset_dirs.user_model_map {
-        if custom_path.exists() {
-            if let Ok(json_str) = std::fs::read_to_string(custom_path) {
-                let _ = model_map.merge_custom(&json_str);
-            }
-        }
-    }
+    // 6. ModelMap は ExifAssets として呼び出し元が1回だけ構築済み
+    let model_map = &assets.model_map;
 
     // 7. テキスト色（背景輝度に基づく）
     let luminance =
@@ -208,7 +250,7 @@ pub fn render_exif_frame(
     // 9. ロゴ読み込み
     let logo_size = layout.exif_area_height.min(layout.exif_area_width) * 3 / 5;
     let logo_size = logo_size.max(16);
-    let user_logos = asset_dirs.user_logos_dir.as_deref();
+    let user_logos = assets.dirs.user_logos_dir.as_deref();
 
     let maker_logo = if config.items.maker_logo {
         if let Some(ref make) = exif.camera_make {
@@ -227,7 +269,7 @@ pub fn render_exif_frame(
 
     let lens_logo = if config.items.lens_brand_logo {
         if let Some(ref lens) = exif.lens_model {
-            logo::resolve_lens_brand_logo(user_logos, lens, &model_map, is_dark, logo_size)
+            logo::resolve_lens_brand_logo(user_logos, lens, model_map, is_dark, logo_size)
         } else {
             None
         }
@@ -240,358 +282,211 @@ pub fn render_exif_frame(
     let secondary_text = build_secondary_text(exif, &config.items, &config.custom_text);
 
     // 11. 描画
-    let photo_short_side = layout.photo_width.min(layout.photo_height);
-    if layout.is_rotated {
-        draw_exif_rotated(
-            &mut canvas,
-            &layout,
-            &font,
-            config,
-            &primary_text,
-            &secondary_text,
-            primary_color,
-            secondary_color,
-            maker_logo.as_ref(),
-            lens_logo.as_ref(),
-            photo_short_side,
-        );
-    } else {
-        draw_exif_horizontal(
-            &mut canvas,
-            &layout,
-            &font,
-            config,
-            &primary_text,
-            &secondary_text,
-            primary_color,
-            secondary_color,
-            maker_logo.as_ref(),
-            lens_logo.as_ref(),
-            photo_short_side,
-        );
-    }
+    let bar = ExifBar {
+        font: &font,
+        config,
+        primary_text: &primary_text,
+        secondary_text: &secondary_text,
+        primary_color,
+        secondary_color,
+        maker_logo: maker_logo.as_ref(),
+        lens_logo: lens_logo.as_ref(),
+        photo_short_side: layout.photo_width.min(layout.photo_height),
+    };
+    draw_exif_area(&mut canvas, &layout, &bar);
 
     Ok(DynamicImage::ImageRgba8(canvas))
 }
 
-/// 水平レイアウト（Bottom/Top）でExif情報を描画する
-// TODO(S4-H4): draw_exif_rotated との重複を解消し、引数をコンテキスト構造体にまとめた時点で allow を外す
-#[allow(clippy::too_many_arguments)]
-fn draw_exif_horizontal(
-    canvas: &mut RgbaImage,
-    layout: &layout::PadExifLayout,
-    font: &FontArc,
-    config: &ExifFrameConfig,
-    primary_text: &str,
-    secondary_text: &str,
+/// Exifバー1本を描くのに必要な情報。
+/// 水平（Bottom/Top）と回転（Right/Left）で共通。
+struct ExifBar<'a> {
+    font: &'a FontArc,
+    config: &'a ExifFrameConfig,
+    primary_text: &'a str,
+    secondary_text: &'a str,
     primary_color: Rgba<u8>,
     secondary_color: Rgba<u8>,
-    maker_logo: Option<&DynamicImage>,
-    lens_logo: Option<&DynamicImage>,
+    maker_logo: Option<&'a DynamicImage>,
+    lens_logo: Option<&'a DynamicImage>,
     photo_short_side: u32,
-) {
-    let area_x = layout.exif_area_x;
-    let area_y = layout.exif_area_y;
+}
+
+/// レイアウトが示す Exif エリアにバーを描き込む。
+///
+/// バーの中身は常に「横長」として1つの透明バッファに描画し、
+/// Right/Left のときだけ90度回転してから合成する。
+/// 水平版と回転版を別々に実装していた頃は、セパレータ線が
+/// 片方だけ不透明になる等の不整合が生まれていた（S4-H5/H7）。
+fn draw_exif_area(canvas: &mut RgbaImage, layout: &layout::PadExifLayout, bar: &ExifBar) {
     let area_w = layout.exif_area_width;
     let area_h = layout.exif_area_height;
-
     if area_w == 0 || area_h == 0 {
         return;
     }
 
-    // ロゴの高さは exif_area_height の 45%
-    let logo_display_h = (area_h as f32 * 0.45) as u32;
-    let logo_display_h = logo_display_h.max(1);
+    // 回転後に Exif エリアと一致するよう、バッファは長辺×短辺で作る
+    let (buf_w, buf_h) = if layout.is_rotated {
+        (area_h, area_w)
+    } else {
+        (area_w, area_h)
+    };
 
-    // ロゴ描画 + ロゴが占める横幅
-    let mut text_start_x = area_x;
+    let buf = render_exif_bar(buf_w, buf_h, bar);
+    let bar_image = if layout.is_rotated {
+        image::imageops::rotate90(&buf)
+    } else {
+        buf
+    };
+
+    // overlay はアルファ合成する。半透明のセパレータ線が
+    // 背景と正しく混ざるのはこの経路を通るため（S4-H5）。
+    image::imageops::overlay(
+        canvas,
+        &bar_image,
+        layout.exif_area_x as i64,
+        layout.exif_area_y as i64,
+    );
+}
+
+/// 横長のExifバーを透明バッファに描画する。
+///
+/// レイアウト（左から右）:
+///   [余白][メーカーロゴ][余白][セパレータ][余白][2段テキスト ... ][レンズロゴ][余白]
+fn render_exif_bar(buf_w: u32, buf_h: u32, bar: &ExifBar) -> RgbaImage {
+    let mut buf = RgbaImage::new(buf_w, buf_h);
+
+    let margin = (buf_h as f32 * 0.1) as u32;
     let separator_width = 2u32;
-    let logo_margin = (area_h as f32 * 0.1) as u32;
+    let logo_display_h = ((buf_h as f32 * 0.45) as u32).max(1);
 
-    if let Some(logo) = maker_logo {
+    // --- 左: メーカーロゴ + セパレータ ---
+    let mut text_start_x = margin;
+    if let Some(logo) = bar.maker_logo {
         let logo_scaled = logo.resize(
             u32::MAX,
             logo_display_h,
             image::imageops::FilterType::Lanczos3,
         );
-        let logo_w = logo_scaled.width();
-        let logo_x = area_x + logo_margin;
-        let logo_y = area_y + (area_h.saturating_sub(logo_display_h)) / 2;
-        image::imageops::overlay(canvas, &logo_scaled, logo_x as i64, logo_y as i64);
-        text_start_x = logo_x + logo_w + logo_margin;
+        let logo_y = (buf_h.saturating_sub(logo_scaled.height())) / 2;
+        image::imageops::overlay(&mut buf, &logo_scaled, margin as i64, logo_y as i64);
+        text_start_x = margin + logo_scaled.width() + margin;
 
-        // セパレータ線
         let sep_x = text_start_x;
-        let sep_top = area_y + area_h / 6;
-        let sep_bot = area_y + area_h * 5 / 6;
-        for py in sep_top..sep_bot.min(canvas.height()) {
-            for px in sep_x..(sep_x + separator_width).min(canvas.width()) {
-                let sep_color = Rgba([primary_color[0], primary_color[1], primary_color[2], 100]);
-                canvas.put_pixel(px, py, sep_color);
+        let sep_top = buf_h / 6;
+        let sep_bot = buf_h * 5 / 6;
+        let sep_color = Rgba([
+            bar.primary_color[0],
+            bar.primary_color[1],
+            bar.primary_color[2],
+            100,
+        ]);
+        for py in sep_top..sep_bot.min(buf_h) {
+            for px in sep_x..(sep_x + separator_width).min(buf_w) {
+                buf.put_pixel(px, py, sep_color);
             }
         }
-        text_start_x += separator_width + logo_margin;
+        text_start_x += separator_width + margin;
     }
 
-    // テキストエリア幅（text_start_x が area_x+area_w を超えた場合は描画不可）
-    let area_end = area_x + area_w;
-    if text_start_x >= area_end {
-        return;
-    }
-    let text_area_w = area_end - text_start_x;
-    if text_area_w == 0 {
-        return;
-    }
+    // --- フォントサイズの基準（写真の短辺ベース、バー高さで頭打ち） ---
+    let max_font = buf_h as f32 * 0.4;
+    let primary_size_base = (bar.photo_short_side as f32 * bar.config.font.primary_size)
+        .max(10.0)
+        .min(max_font);
+    let secondary_size_base = (bar.photo_short_side as f32 * bar.config.font.secondary_size)
+        .max(8.0)
+        .min(max_font * 0.75);
 
-    // テキスト垂直中央配置
-    // 2行：primary (上) + secondary (下)
-    // フォントサイズは写真の短辺ベース（primary_size はデフォルト 2.5%）
-    let primary_size_base = (photo_short_side as f32 * config.font.primary_size).max(10.0);
-    let secondary_size_base = (photo_short_side as f32 * config.font.secondary_size).max(8.0);
-    // ただし exif_area_height の 40% を上限とする（バーからはみ出さない）
-    let max_font = area_h as f32 * 0.4;
-    let primary_size_base = primary_size_base.min(max_font);
-    let secondary_size_base = secondary_size_base.min(max_font * 0.75);
-
-    let (primary_fitted, primary_size) = if !primary_text.is_empty() {
-        text::auto_fit_text(
-            font,
-            primary_size_base,
-            primary_text,
-            text_area_w as f32,
-            0.7,
+    // --- 右: レンズブランドロゴ ---
+    // テキストをフィットさせる *前* に確定させ、その幅をテキスト領域から差し引く。
+    // 後から重ねるだけだと、テキストが領域幅いっぱいに広がったときに
+    // ロゴがテキストの上に被る（S4-H6）。
+    let lens_logo_scaled = bar.lens_logo.map(|llogo| {
+        llogo.resize(
+            u32::MAX,
+            ((secondary_size_base * 1.2) as u32).max(1),
+            image::imageops::FilterType::Lanczos3,
         )
-    } else {
+    });
+
+    let mut text_end_x = buf_w.saturating_sub(margin);
+    if let Some(ref ll) = lens_logo_scaled {
+        text_end_x = text_end_x.saturating_sub(ll.width() + margin);
+    }
+
+    if text_start_x >= text_end_x {
+        // テキストを置く幅が残っていない。ロゴだけ描いて返す。
+        overlay_lens_logo(&mut buf, buf_w, buf_h, margin, lens_logo_scaled.as_ref());
+        return buf;
+    }
+    let text_area_w = (text_end_x - text_start_x) as f32;
+
+    let (primary_fitted, primary_size) = if bar.primary_text.is_empty() {
         (String::new(), primary_size_base)
-    };
-
-    let (secondary_fitted, secondary_size) = if !secondary_text.is_empty() {
+    } else {
         text::auto_fit_text(
-            font,
-            secondary_size_base,
-            secondary_text,
-            text_area_w as f32,
+            bar.font,
+            primary_size_base,
+            bar.primary_text,
+            text_area_w,
             0.7,
         )
-    } else {
+    };
+    let (secondary_fitted, secondary_size) = if bar.secondary_text.is_empty() {
         (String::new(), secondary_size_base)
+    } else {
+        text::auto_fit_text(
+            bar.font,
+            secondary_size_base,
+            bar.secondary_text,
+            text_area_w,
+            0.7,
+        )
     };
 
     // 2行まとめて縦中央
     let total_text_h = primary_size + secondary_size + 2.0;
-    let text_block_y = area_y as f32 + (area_h as f32 - total_text_h) / 2.0;
+    let text_block_y = (buf_h as f32 - total_text_h) / 2.0;
 
     if !primary_fitted.is_empty() {
         text::draw_text_on_image(
-            canvas,
-            font,
+            &mut buf,
+            bar.font,
             primary_size,
             &primary_fitted,
             text_start_x as i32,
             text_block_y as i32,
-            primary_color,
+            bar.primary_color,
         );
     }
-
     if !secondary_fitted.is_empty() {
         text::draw_text_on_image(
-            canvas,
-            font,
+            &mut buf,
+            bar.font,
             secondary_size,
             &secondary_fitted,
             text_start_x as i32,
             (text_block_y + primary_size + 2.0) as i32,
-            secondary_color,
+            bar.secondary_color,
         );
     }
 
-    // レンズブランドロゴ（primary textの後ろに追加）
-    // 簡易実装: lens_logo は secondary 行の右端付近に表示
-    if let Some(llogo) = lens_logo {
-        let ll_h = (secondary_size * 1.2) as u32;
-        let ll_scaled: DynamicImage =
-            llogo.resize(u32::MAX, ll_h.max(1), image::imageops::FilterType::Lanczos3);
-        let ll_x = area_x + area_w - ll_scaled.width() - logo_margin;
-        let ll_y = area_y + (area_h.saturating_sub(ll_scaled.height())) / 2;
-        image::imageops::overlay(canvas, &ll_scaled, ll_x as i64, ll_y as i64);
-    }
+    overlay_lens_logo(&mut buf, buf_w, buf_h, margin, lens_logo_scaled.as_ref());
+    buf
 }
 
-/// 回転レイアウト（Right/Left）でExif情報を描画する
-/// 横構図と同じ2段レイアウトを一時バッファに描画し、90度回転してキャンバスに合成
-// TODO(S4-H4): draw_exif_horizontal との重複を解消し、引数をコンテキスト構造体にまとめた時点で allow を外す
-#[allow(clippy::too_many_arguments)]
-fn draw_exif_rotated(
-    canvas: &mut RgbaImage,
-    layout: &layout::PadExifLayout,
-    font: &FontArc,
-    config: &ExifFrameConfig,
-    primary_text: &str,
-    secondary_text: &str,
-    primary_color: Rgba<u8>,
-    secondary_color: Rgba<u8>,
-    maker_logo: Option<&DynamicImage>,
+fn overlay_lens_logo(
+    buf: &mut RgbaImage,
+    buf_w: u32,
+    buf_h: u32,
+    margin: u32,
     lens_logo: Option<&DynamicImage>,
-    photo_short_side: u32,
 ) {
-    let area_x = layout.exif_area_x;
-    let area_y = layout.exif_area_y;
-    let area_w = layout.exif_area_width;
-    let area_h = layout.exif_area_height;
-
-    if area_w == 0 || area_h == 0 {
-        return;
-    }
-
-    // 一時バッファ: 回転前は「横長」のExifバーとして描画
-    // 回転後: 幅→高さ、高さ→幅 になるので、
-    // バッファ幅 = area_h（回転後にExifバーの縦全体をカバー）
-    // バッファ高さ = area_w（回転後にExifバーの横幅になる）
-    let buf_w = area_h;
-    let buf_h = area_w;
-    let mut buf = RgbaImage::new(buf_w, buf_h);
-    // バッファは透明（キャンバスの背景色がすでに塗られているため）
-
-    // 横構図と同じロジックでバッファに描画
-    let logo_display_h = (buf_h as f32 * 0.45) as u32;
-    let logo_margin = (buf_h as f32 * 0.1) as u32;
-    let separator_width = 2u32;
-    let mut text_start_x: u32 = logo_margin;
-
-    if let Some(logo) = maker_logo {
-        let logo_scaled = logo.resize(
-            u32::MAX,
-            logo_display_h.max(1),
-            image::imageops::FilterType::Lanczos3,
-        );
-        let logo_w = logo_scaled.width();
-        let logo_x = logo_margin;
-        let logo_y = (buf_h.saturating_sub(logo_display_h)) / 2;
-        image::imageops::overlay(&mut buf, &logo_scaled, logo_x as i64, logo_y as i64);
-        text_start_x = logo_x + logo_w + logo_margin;
-
-        // セパレータ線
-        let sep_x = text_start_x;
-        let sep_top = buf_h / 6;
-        let sep_bot = buf_h * 5 / 6;
-        for py in sep_top..sep_bot.min(buf_h) {
-            for px in sep_x..(sep_x + separator_width).min(buf_w) {
-                let sep_color = Rgba([primary_color[0], primary_color[1], primary_color[2], 100]);
-                buf.put_pixel(px, py, sep_color);
-            }
-        }
-        text_start_x += separator_width + logo_margin;
-    }
-
-    let buf_end = buf_w.saturating_sub(logo_margin);
-    if text_start_x >= buf_end {
-        // テキスト領域なし — バッファをそのまま回転して貼り付け
-    } else {
-        let text_area_w = buf_end - text_start_x;
-
-        // フォントサイズは写真の短辺ベース（横構図と同じ計算）
-        let primary_size_base = (photo_short_side as f32 * config.font.primary_size).max(10.0);
-        let secondary_size_base = (photo_short_side as f32 * config.font.secondary_size).max(8.0);
-        let max_font = buf_h as f32 * 0.4;
-        let primary_size_base = primary_size_base.min(max_font);
-        let secondary_size_base = secondary_size_base.min(max_font * 0.75);
-
-        let (primary_fitted, primary_size) = if !primary_text.is_empty() {
-            text::auto_fit_text(
-                font,
-                primary_size_base,
-                primary_text,
-                text_area_w as f32,
-                0.7,
-            )
-        } else {
-            (String::new(), primary_size_base)
-        };
-
-        let (secondary_fitted, secondary_size) = if !secondary_text.is_empty() {
-            text::auto_fit_text(
-                font,
-                secondary_size_base,
-                secondary_text,
-                text_area_w as f32,
-                0.7,
-            )
-        } else {
-            (String::new(), secondary_size_base)
-        };
-
-        // 2行まとめて縦中央
-        let total_text_h = primary_size + secondary_size + 2.0;
-        let text_block_y = (buf_h as f32 - total_text_h) / 2.0;
-
-        if !primary_fitted.is_empty() {
-            text::draw_text_on_image(
-                &mut buf,
-                font,
-                primary_size,
-                &primary_fitted,
-                text_start_x as i32,
-                text_block_y as i32,
-                primary_color,
-            );
-        }
-        if !secondary_fitted.is_empty() {
-            text::draw_text_on_image(
-                &mut buf,
-                font,
-                secondary_size,
-                &secondary_fitted,
-                text_start_x as i32,
-                (text_block_y + primary_size + 2.0) as i32,
-                secondary_color,
-            );
-        }
-
-        // レンズブランドロゴ
-        if let Some(llogo) = lens_logo {
-            let ll_h = (secondary_size * 1.2) as u32;
-            let ll_scaled: DynamicImage =
-                llogo.resize(u32::MAX, ll_h.max(1), image::imageops::FilterType::Lanczos3);
-            let ll_x = buf_end.saturating_sub(ll_scaled.width() + logo_margin);
-            let ll_y = (buf_h.saturating_sub(ll_scaled.height())) / 2;
-            image::imageops::overlay(&mut buf, &ll_scaled, ll_x as i64, ll_y as i64);
-        }
-    }
-
-    // バッファを90度時計回りに回転: (x, y) → (buf_h - 1 - y, x)
-    let rot_w = buf_h; // = area_w
-    let rot_h = buf_w; // = area_h
-    let mut rotated = RgbaImage::new(rot_w, rot_h);
-    for y in 0..buf_h {
-        for x in 0..buf_w {
-            let pixel = buf.get_pixel(x, y);
-            if pixel[3] > 0 {
-                let new_x = buf_h - 1 - y;
-                let new_y = x;
-                if new_x < rot_w && new_y < rot_h {
-                    rotated.put_pixel(new_x, new_y, *pixel);
-                }
-            }
-        }
-    }
-
-    // 回転したバッファをキャンバスのExifエリアに合成
-    for y in 0..rot_h.min(area_h) {
-        for x in 0..rot_w.min(area_w) {
-            let src = rotated.get_pixel(x, y);
-            if src[3] > 0 {
-                let cx = area_x + x;
-                let cy = area_y + y;
-                if cx < canvas.width() && cy < canvas.height() {
-                    let dst = canvas.get_pixel_mut(cx, cy);
-                    let alpha = src[3] as f32 / 255.0;
-                    for i in 0..3 {
-                        dst[i] = (src[i] as f32 * alpha + dst[i] as f32 * (1.0 - alpha)) as u8;
-                    }
-                    dst[3] = (dst[3] as f32 + alpha * (255.0 - dst[3] as f32)) as u8;
-                }
-            }
-        }
+    if let Some(ll) = lens_logo {
+        let x = buf_w.saturating_sub(ll.width() + margin);
+        let y = (buf_h.saturating_sub(ll.height())) / 2;
+        image::imageops::overlay(buf, ll, x as i64, y as i64);
     }
 }
 
@@ -696,5 +591,83 @@ mod tests {
         assert!(text.contains("35mm"));
         assert!(text.contains("f/2.8"));
         assert!(text.contains("ISO 400"));
+    }
+
+    /// 仕様: レンズブランドロゴと Exif テキストは重ならない（S4-H6）。
+    ///
+    /// 以前は `auto_fit_text` にバー幅いっぱいを渡してから、あとでロゴを
+    /// 上に重ねていたため、テキストが幅いっぱいまで広がるとロゴがテキストに被った。
+    ///
+    /// 検証方法: レンズロゴを一目で分かる単色（マゼンタ）にして描画し、
+    /// ロゴが置かれる右端の帯にテキストの画素が1つも入らないことを確認する。
+    #[cfg(feature = "bundled-font")]
+    #[test]
+    fn lens_logo_never_overlaps_the_exif_text() {
+        const MAGENTA: Rgba<u8> = Rgba([255, 0, 255, 255]);
+        // バー幅を確実に使い切る長さにする。短いと「たまたま重ならなかった」
+        // だけでテストが通ってしまい、回帰を検出できない。
+        const PRIMARY: &str = "ILCE-7M4 | FE 24-70mm F2.8 GM II | ILCE-7M4 | FE 24-70mm F2.8 GM II | ILCE-7M4 | FE 24-70mm F2.8 GM II";
+        const SECONDARY: &str = "35mm  f/2.8  1/250s  ISO 400  2026-08-05 12:34:56  @photographer  35mm  f/2.8  1/250s  ISO 400";
+        let font = text::load_font(None).unwrap();
+        let lens_logo = DynamicImage::ImageRgba8(RgbaImage::from_pixel(120, 40, MAGENTA));
+
+        let bar = ExifBar {
+            font: &font,
+            config: &ExifFrameConfig::default(),
+            // 縮小しても入りきらないほど長いテキスト（＝幅いっぱいに広がる状況）
+            primary_text: PRIMARY,
+            secondary_text: SECONDARY,
+            primary_color: Rgba([255, 255, 255, 255]),
+            secondary_color: Rgba([170, 170, 170, 255]),
+            maker_logo: None,
+            lens_logo: Some(&lens_logo),
+            photo_short_side: 1000,
+        };
+
+        let buf_w = 800;
+        let buf_h = 60;
+        let with_logo = render_exif_bar(buf_w, buf_h, &bar);
+        let without_logo = render_exif_bar(
+            buf_w,
+            buf_h,
+            &ExifBar {
+                lens_logo: None,
+                ..bar
+            },
+        );
+
+        // ロゴが占める帯を、実際に描かれたマゼンタ画素から特定する
+        let band_start = (0..buf_w)
+            .find(|&x| (0..buf_h).any(|y| with_logo.get_pixel(x, y).0[0..3] == [255, 0, 255]))
+            .expect("the lens logo must actually be drawn");
+
+        let opaque_pixels_in_band = |img: &RgbaImage| {
+            (band_start..buf_w)
+                .flat_map(|x| (0..buf_h).map(move |y| (x, y)))
+                .filter(|&(x, y)| img.get_pixel(x, y)[3] > 0)
+                .collect::<Vec<_>>()
+        };
+
+        // 前提条件: ロゴが無ければテキストはこの帯まで伸びる。
+        // ここが空だとテストが何も検出できていないことになる。
+        assert!(
+            !opaque_pixels_in_band(&without_logo).is_empty(),
+            "precondition failed: the text does not reach the logo band even without a logo, \
+             so this test cannot detect an overlap"
+        );
+
+        // 本題: ロゴがあるとき、その帯にはロゴ以外の画素があってはならない
+        for (x, y) in opaque_pixels_in_band(&with_logo) {
+            let p = with_logo.get_pixel(x, y);
+            assert_eq!(
+                p.0[0..3],
+                [255, 0, 255],
+                "text pixel {:?} at ({}, {}) intrudes into the lens logo band (x >= {})",
+                p,
+                x,
+                y,
+                band_start
+            );
+        }
     }
 }

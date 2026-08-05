@@ -32,11 +32,11 @@ cd gui-frontend && bun install && bunx svelte-check
   **`gui/` クレートに触る cargo コマンドの前に必ず `cd gui-frontend && bun run build` を通すこと。**
   CI もこの順序になっている。
 
-### 現状のベースライン（S3 完了後 / 2026-08-05）
+### 現状のベースライン（S4 完了後 / 2026-08-05）
 
 | 項目 | S2 前 | 現在 |
 |---|---|---|
-| `cargo test --workspace` | core のみ 78 passed | **90 passed**（S1 で +2、S3 で +10） |
+| `cargo test --workspace` | core のみ 78 passed | **107 passed**（S1 で +2、S3 で +10、S4 で +17） |
 | `cargo clippy --workspace --all-targets -- -D warnings` | 21 warnings（gui は未検査） | **green**（gui にも2件あり修正済み） |
 | `cargo fmt --all -- --check` | 失敗（実際は10ファイル） | **green** |
 | `bunx svelte-check` | 未導入 | **0 errors / 6 warnings**（warnings は S5-M12） |
@@ -59,7 +59,7 @@ exif-frame v2（コミット30本超、core の約半分）が**検証されな�
 | S1 | ライセンス・リポジトリ衛生 ✅ | ルート、`core/assets/` | なし |
 | S2 | CI 整備 + lint/fmt + デッドコード掃除 ✅ | `.github/`, `Makefile`, 各所 | なし（最優先で実施） |
 | S3 | core 画像処理の正しさ ✅ | `core/src/lib.rs` | S2 |
-| S4 | exif_frame レイアウト・描画の正しさ | `core/src/exif_frame/` | S2 |
+| S4 | exif_frame レイアウト・描画の正しさ ✅ | `core/src/exif_frame/` | S2 |
 | S5 | フロントエンドの正しさ・安全性 | `gui-frontend/src/` | S2 |
 | S6 | Tauri バックエンドのセキュリティ | `gui/src/`, `capabilities/` | S2 |
 | S7 | ドキュメント整合 | `README.md`, `CLAUDE.md`, `docs/` | S1〜S6 完了後 |
@@ -317,7 +317,9 @@ UI で表示していない。F8（エラーの握りつぶし）と同時に扱
 
 ## S4. exif_frame レイアウト・描画の正しさ（`core/src/exif_frame/`）
 
-- [ ] **C1 4:5 比の不変条件が破れる（最重要）** `layout.rs:225-244`
+> **実施済み（2026-08-05）**。末尾の「S4 実施メモ」も参照。
+
+- [x] **C1 4:5 比の不変条件が破れる（最重要）** `layout.rs:225-244`
 
   ```rust
   // Bottom/Top
@@ -347,7 +349,7 @@ UI で表示していない。F8（エラーの握りつぶし）と同時に扱
     `400x501`, `399x502` のような非round数値のケースを追加すること。
     これをやらないと同じバグが再発する。
 
-- [ ] **C5 `.expect()` が `Result` 返却関数の中でパニックする** `text.rs:19-28`（3箇所）, `model_map.rs:36-45`（2箇所）
+- [x] **C5 `.expect()` が `Result` 返却関数の中でパニックする** `text.rs:19-28`（3箇所）, `model_map.rs:36-45`（2箇所）
 
   `load_font` はシグネチャが既に `Result<FontArc>` なのに、バンドルフォントのロード失敗時は
   `.expect()` で即パニックする。`process_image`（`lib.rs:214-220`）が用意している
@@ -356,7 +358,7 @@ UI で表示していない。F8（エラーの握りつぶし）と同時に扱
   `OnceLock::get_or_init` はクロージャがパニックすると未初期化のまま残るため**以降ずっと失敗し続ける**。
   → `.ok_or_else(|| anyhow!(..))?` / `.context(..)?` に置き換えて `Result` として伝搬させる。
 
-- [ ] **H4 `ModelMap` を画像1枚ごとに再構築している（N+1）** `mod.rs:184-191`
+- [x] **H4 `ModelMap` を画像1枚ごとに再構築している（N+1）** `mod.rs:184-191`
 
   埋め込み JSON の `serde_json::from_slice` と、ユーザーファイルの `read_to_string` + パースを
   **画像ごとに毎回**実行。並列スレッドがそれぞれ独立に同じファイルを読み直す。
@@ -365,7 +367,7 @@ UI で表示していない。F8（エラーの握りつぶし）と同時に扱
   → `process_batch` の前で1回だけ構築し `&ModelMap` を注入する（`OnceLock` でも可）。
     エラーは S3-H2 の `warnings` に載せる。
 
-- [ ] **H5 横構図のセパレータ線が半透明にならない** `mod.rs:326-334`
+- [x] **H5 横構図のセパレータ線が半透明にならない** `mod.rs:326-334`
 
   `alpha=100`（約39%）のつもりで `put_pixel` しているが、`put_pixel` は既存ピクセルとブレンドせず
   上書きする。最終的な `to_rgb8()` はアルファを単純に破棄する（背景合成しない）ため
@@ -373,14 +375,14 @@ UI で表示していない。F8（エラーの握りつぶし）と同時に扱
   回転版（`mod.rs:551-555`）は明示的にブレンドしており正しい。
   → **同じ視覚要素が横構図と縦構図で挙動が違う**。H7 のリファクタで根本解決するのが望ましい。
 
-- [ ] **H6 レンズロゴとテキストが重なりうる** `mod.rs:338-406`, `:473-522`
+- [x] **H6 レンズロゴとテキストが重なりうる** `mod.rs:338-406`, `:473-522`
 
   `auto_fit_text` に渡す `text_area_w` が右端いっぱいで、後から重ねる `lens_logo` の分を
   差し引いていない。テキストが領域幅いっぱいにフィットするとロゴが上に被る。
   水平版・回転版の両方に同じ問題がある。
   → `lens_logo` の有無とサイズを先に見積もり、`text_area_w` から幅+マージンを引いてから `auto_fit_text`。
 
-- [ ] **H7 `draw_exif_horizontal`(125行) と `draw_exif_rotated`(150行) の重複** `mod.rs:282-407`, `:411-560`
+- [x] **H7 `draw_exif_horizontal`(125行) と `draw_exif_rotated`(150行) の重複** `mod.rs:282-407`, `:411-560`
 
   ロゴ配置・セパレータ描画・テキストフィッティング・レンズロゴ配置がほぼそのままコピーされている。
   clippy も引数11個を検出。**H5（片方だけ不透明）はこの重複が直接生んだ不整合。**
@@ -389,7 +391,7 @@ UI で表示していない。F8（エラーの握りつぶし）と同時に扱
     （回転版が既にバッファ方式なので、水平版を寄せれば実質1関数になる）。
     引数はコンテキスト構造体にまとめる。
 
-- [ ] **M4 プリセットのデフォルト値が2箇所で定義されている**
+- [x] **M4 プリセットのデフォルト値が2箇所で定義されている**
 
   `ExifFrameConfig::default()`（`mod.rs:90-100`, `DisplayItems::default` `:45-60`,
   `FontConfig::default` `:70-78`）と `core/assets/presets/default.json` が同じ内容を二重定義。
@@ -398,7 +400,7 @@ UI で表示していない。F8（エラーの握りつぶし）と同時に扱
   現状は値が一致しているが、片方だけ更新される事故を待っている構造。
   → どちらかを単一の真実にする。
 
-- [ ] **M5 `logo_match` の完全一致マッチがスケールしない** `model_map.rs:58-60`
+- [x] **M5 `logo_match` の完全一致マッチがスケールしない** `model_map.rs:58-60`
 
   `HashMap::get(make)` の完全一致で `"SONY"`/`"Sony"`/`"Sony Corporation"` を手動列挙している。
   Canon(`Canon`), Nikon(`NIKON CORPORATION`) と増やすたびに表記揺れを人力で列挙し続けることになる。
@@ -406,25 +408,25 @@ UI で表示していない。F8（エラーの握りつぶし）と同時に扱
   → trim + 大文字化の正規化キーで比較する（非破壊な改善）。
   → `lens_brand_logo` 側の `contains` は逆に緩すぎ、空パターンが全マッチする。ロード時に拒否する。
 
-- [ ] **M6 `match_type` が stringly-typed で未知の値を無警告で無視** `model_map.rs:23-28`, `:62-74`
+- [x] **M6 `match_type` が stringly-typed で未知の値を無警告で無視** `model_map.rs:23-28`, `:62-74`
   → `#[serde(rename_all = "snake_case")] enum MatchType { Contains }` にして fail-fast。
-- [ ] **M7 `ModelMapJson` に `#[serde(default)]` が無い** `model_map.rs:12-16`
+- [x] **M7 `ModelMapJson` に `#[serde(default)]` が無い** `model_map.rs:12-16`
   → ユーザーが `logo_match` のみを上書きしたい場合でも両フィールド必須になっている。
-- [ ] **M8 ロゴのファイル名をサニタイズせず `dir.join()`** `logo.rs:68-99`, `:115-150`
+- [x] **M8 ロゴのファイル名をサニタイズせず `dir.join()`** `logo.rs:68-99`, `:115-150`
   → `user_model_map` や `--preset-file` 経由で `"../../secret"` が入るとディレクトリを脱出しうる。
     `preset.rs:82-86` の `sanitize_filename` と同等の検証を入れる。
-- [ ] **M9 統合テストが「panic しないこと」しか確認していない** `exif_frame_v2_integration.rs`
+- [x] **M9 統合テストが「panic しないこと」しか確認していない** `exif_frame_v2_integration.rs`
   - `crop_mode_ignores_exif_frame_config`（`:109-127`）はテスト名に反して**「無視されたこと」を
     一切検証していない**（`is_ok()` のみ。exif フレームが誤って適用されても通る）
     → 出力アスペクト比（crop なら 0.8、quality なら元比率維持）を assert する
   - `skip_exif` パスの統合テストが無い（layout 単体テストのみ）
-- [ ] **L3** `mod.rs:525-559` の手書き90度回転は `image::imageops::rotate90` で置換可能。
-- [ ] **L4** `logo.rs:53` SVG の width/height が0だとゼロ除算で NaN/Inf。
-- [ ] **L5** `layout.rs:190-250` の最終フォールバックで Exif バーが `skip_exif` を経由せず
+- [x] **L3** `mod.rs:525-559` の手書き90度回転は `image::imageops::rotate90` で置換可能。
+- [x] **L4** `logo.rs:53` SVG の width/height が0だとゼロ除算で NaN/Inf。
+- [x] **L5** `layout.rs:190-250` の最終フォールバックで Exif バーが `skip_exif` を経由せず
       静かに切り詰められる（`:214`, `:262` の `min(rem_h)`）。C1 修正後に到達可能性を再検証。
-- [ ] **L6** 9.1MB の CJK フォントが exif-frame を使わない CLI ユーザーのバイナリにも常に乗る
+- [x] **L6** 9.1MB の CJK フォントが exif-frame を使わない CLI ユーザーのバイナリにも常に乗る
       （`text.rs:7-9` の無条件 `#[derive(Embed)]`）。Cargo feature での切り分けを検討。
-- [ ] **L7 同梱フォントの中身がファイル名と食い違っている**（S1 で発見 / 2026-08-04）
+- [x] **L7 同梱フォントの中身がファイル名と食い違っている**（S1 で発見 / 2026-08-04）
 
   `core/assets/fonts/NotoSansJP-Regular.ttf` の name テーブルは以下の通りで、
   実体は **Regular ではなく Thin ウェイト**。Exif テキストが意図より極細で描画されている。
@@ -439,6 +441,133 @@ UI で表示していない。F8（エラーの握りつぶし）と同時に扱
   → Regular ウェイトを取得して差し替える（ファイル名は据え置きでよい）。
     差し替え時は `OFL.txt` の著作権表記が新ファイルの name ID 0 と一致するか再確認すること。
     L6 の feature 切り分けと同時にやると差分が読みやすい。
+
+### S4 実施メモ（2026-08-05）
+
+**S3 と同様、指摘を個別にではなく5つの変更セットに束ねた。**
+
+1. **C1 + L5 → キャンバス拡張の丸め方を「k が整数になる辺」基準に統一**
+   - Bottom/Top は**高さを5の倍数**に切り上げて `w = h/5*4`、Right/Left は**幅を4の倍数**に
+     切り上げて `h = w/4*5`。どちらも割り切れるので 4:5 が 1px も崩れない。
+   - `if canvas_*_expanded >= new_photo_*` の分岐は**到達不能になったので削除**した。
+     拡張後のキャンバスは必ず `fit_to_4_5` の結果より大きくなる（証明はコード中のコメント）。
+     これにより L5 の「Exif バーが `skip_exif` を経由せず静かに切り詰められる」経路が消え、
+     `exif_bar_size.min(rem)` は防御的なクランプに退いた（`debug_assert!` で不変条件を明示）。
+   - 「短辺の6%・最低30px」を `layout::exif_bar_size()` として公開した。テストが
+     実装式を書き写さずに仕様値を参照できるようにするため。
+2. **新規発見: Right/Left で写真が Exif バーの下に潜り込んでいた**
+   不変条件テストが C1 とは別に検出した。`photo_x` をキャンバス全体で中央寄せしていたため、
+   余白がバー幅ちょうどのとき（例 `400x501`）写真がバー領域に 15px 食い込み、
+   Exif テキストが写真の上に重なっていた。Bottom/Top と同じく
+   **バーを除いた領域で中央寄せ**に修正。
+3. **C5 + M5 + M6 + M7 + M8 + H4 → `ModelMap` の全面的な作り直しと `ExifAssets` の新設**
+   - `load_bundled()` は `Result` を返す。`text.rs` の `load_font` も
+     `OnceLock::get_or_init` の中で `.expect()` していたのをやめた
+     （panic すると `process_image` の pad フォールバックを飛び越え、
+     rayon 上ではバッチ全体を巻き込み、さらに OnceLock が未初期化のまま残る）。
+     `get()` → 失敗しうるパース → `get_or_init` の順にすることで、
+     競合時に同じフォントを2度パースするだけで済み毒されない。
+   - **`ExifAssets`（`dirs` + `model_map` + `warnings`）を新設**し、
+     `render_exif_frame` / `process_image` / `process_batch` の引数を
+     `AssetDirs` から `ExifAssets` に差し替えた。構築は CLI/GUI が**バッチ前に1回だけ**行う。
+     カスタム model_map の読み込み・パース失敗は握りつぶさず `warnings` に載る
+     （横断的設計決定 1。core は `eprintln!` しない）。
+   - メーカー判定は trim + 大文字化の正規化キー。完全一致で外したら**先頭トークン**でも引く
+     ので `"Sony Corporation"` / `"NIKON CORPORATION"` を列挙しなくてよい。
+     `model_map.json` の 6 エントリは 2 エントリに減った。
+   - `match_type` は `enum MatchType { Contains }`（未知の値は serde がエラーにする）。
+     空パターンの `contains`（全レンズにマッチする）はロード時に拒否。
+   - `validate_asset_filename` を新設し、`model_map` のロード時と
+     `resolve_logo_file` / `resolve_and_load_logo` の両方で検証する
+     （`pub` API なので JSON 側の検証だけに依存させない）。
+4. **H5 + H6 + H7 + L3 → Exifバーを「1つの透明バッファに1回だけ描く」形へ統一**
+   - `draw_exif_horizontal`(125行) と `draw_exif_rotated`(150行) を
+     `render_exif_bar` + `draw_exif_area` に置換（引数は `ExifBar` 構造体にまとめ、
+     `#[allow(clippy::too_many_arguments)]` と `TODO(S4-H4)` を除去）。
+   - 合成は水平・回転とも `imageops::overlay`（アルファ合成）を通る。
+     **H5（水平版だけセパレータが不透明）は「重複の解消」そのもので消えた**ので、
+     H5 単独の回帰テストは書いていない。片方だけ壊す余地がもう無い。
+   - 回転は手書きループをやめて `imageops::rotate90`（L3）。
+   - H6 はレンズロゴを**テキストのフィッティング前に**確定させ、その幅+マージンを
+     テキスト領域から差し引く形に変更した。
+5. **L6 + L7 → 同梱フォント**
+   - `NotoSansJP-Regular.ttf`（9.1MB）の中身は **Thin ウェイト**だった。
+     noto-cjk の `Sans2.004` リリースから `NotoSansJP-Regular.otf`（4.3MB, Regular）に差し替え、
+     `OFL.txt` の著作権表記も新ファイルの name ID 0 に合わせた。
+     ファイルサイズは 9.1MB → 4.3MB に減る。README の同梱アセット表も更新。
+   - `bundled-font` feature（default on）で埋め込み自体を切れるようにした（L6）。
+     off でも `font_path` を明示すれば Exif フレームは動く。
+     `cargo check -p picture-tool-core --no-default-features` が通ることを確認済み。
+6. **M4 → デフォルト値の単一の真実は `ExifFrameConfig::default()`**
+   - `core/assets/presets/default.json` を**削除**し、`load_bundled_presets()` は
+     `vec![ExifFrameConfig::default()]` を返すだけにした。`rust-embed` の
+     `PresetAssets` ごと不要になり、「JSON パース失敗で default プリセットが消える」
+     という失敗モードも同時に無くなった。CLI の
+     「プリセットが見つからなければ Rust の Default」というフォールバックとも定義上一致する。
+   - → **S7 への申し送り**: `--preset-file` 用のサンプル JSON がリポジトリから
+     無くなったので、README に例を載せること。
+
+**テスト 90 → 107**（`test-integrity` skill 適用、Rigor: **Full**）:
+- `layout::tests::layout_invariants_hold_for_non_round_sizes` — **これが本命**。
+  4の倍数にも5の倍数にも揃っていない15サイズ × 5 placement について
+  「厳密な4:5」「写真がキャンバスに収まる」「Exifバーが仕様どおりの太さ」
+  「バーが写真に重ならない」を検査する。**2 の不具合はこのテストが見つけた。**
+- `layout::tests::fallback_canvas_expansion_keeps_exact_4_5` — 計画書が挙げた `400x501` を単独で残置。
+- `layout::tests::exif_bar_is_six_percent_of_short_side_with_30px_floor` — 比率と下限を固定値で。
+- `exif_frame_v2_integration` の比率検証を `(ratio-0.8).abs() < 0.02` から
+  `w*5 == h*4` の**厳密比較**に変更し、非round数値の網羅ケースを追加（M9）。
+- `crop_mode_ignores_exif_frame_config` は出力を実際に開いて `640x800` を assert
+  （旧テストは `is_ok()` だけで、Exif フレームが誤適用されても通っていた）。
+  `quality_mode_ignores_exif_frame_config` は 4:5 でない `1200x800` を入力にして
+  「寸法が変わらない」ことを assert する（旧テストの `800x1000` では
+  「何もしない」と「4:5に変換した」を出力から区別できなかった）。
+- `unloadable_font_falls_back_to_pad_with_a_warning` — C5 の本丸。フォントが読めなくても
+  panic せず pad にフォールバックし、warnings に載ることを end-to-end で確認。
+- `tiny_image_skips_exif_but_still_becomes_4_5` — skip_exif は「Exif を描かない」であって
+  「4:5 変換を放棄する」ではない（統合テストが無かった経路）。
+- `exif_frame::tests::lens_logo_never_overlaps_the_exif_text`（H6）— マゼンタ単色のロゴを描き、
+  ロゴが占める帯にテキスト画素が1つも入らないことを検査。
+  **「ロゴ無しなら帯までテキストが届く」という前提条件も同時に assert する**
+  （テキストが短くて偶然重ならなかっただけ、という無力なテストになるのを防ぐため。
+  実際、最初に書いた版はこの前提を満たしておらず回帰を検出できなかった）。
+- `model_map` は表記揺れの許容・別メーカーの誤認防止・未知 match_type の拒否・
+  空パターンの拒否・ディレクトリ脱出の拒否をそれぞれ独立に検査。
+- `logo::tests::logo_names_cannot_escape_the_asset_directory` / `zero_sized_svg_is_rejected`。
+- `text::tests::bundled_font_is_the_regular_weight_not_a_thin_one` — name テーブルを
+  自前で読んで PostScript 名が `NotoSansJP-Regular` であることを確認する。
+  ファイル名ではなく**フォント自身の申告**を見るのがポイント（L7 が数か月見過ごされた原因）。
+
+**ミューテーションテストで実効性を実測した**（Phase C）:
+- C1 のモジュラスを元の左右逆転に戻す → `layout_invariants_...` と
+  `fallback_canvas_expansion_keeps_exact_4_5` の**2件が FAILED**（`405x506` を報告）。
+- H6 のレンズロゴ幅の差し引きを外す → `lens_logo_never_overlaps_the_exif_text` が FAILED
+  （`(736, 16)` のテキスト画素を検出）。
+- 2 の写真中央寄せは、修正前の状態で不変条件テストが実際に落ちることを確認済み
+  （overlap を報告して発見された）。
+- L7 は差し替え前のファイルの PostScript 名が `NotoSansJP-Thin` であることを確認済み
+  （＝新テストは旧ファイルで必ず落ちる）。
+
+**検証**: `make check` green（`cargo fmt --all -- --check` / `cargo clippy --workspace
+--all-targets -- -D warnings` / `cargo test --workspace` **107 passed** /
+`bunx svelte-check` 0 errors / 6 warnings = S5-M12 のまま）。
+`cargo check -p picture-tool-core --no-default-features` も green。
+
+**実機確認**: CLI で 4枚（`400x501` / `1200x800` / `1000x1000` / `150x100`）を
+`-m pad -e` で処理し、出力が全て厳密な 4:5 であることを確認した
+（`400x501` → **404x505**。修正前は `405x506` で 4:5 ではなかった）。
+Bottom と Right の描画結果を PNG に出して目視でも比較し、
+セパレータの半透明・ロゴ位置・2段テキストが**両者で同一**になったことを確認済み。
+
+**S7 への申し送り（新規発見）**: レンズブランドロゴが実質見えない。
+`gmaster.png` は 2880x1748 だが、描画高さが `secondary_size * 1.2`（72px バーで約21px）
+なので細線が潰れて数ピクセルの点になる。S4 の範囲は「テキストと重ならないこと」なので
+サイズ規則は**変更していない**が、DOC-2 が挙げている
+「レンズブランドロゴはレンズ型番の直前にインライン」という spec との乖離を
+解消する際に、サイズも併せて設計し直すこと。
+
+**S5 への申し送り**: `ExifAssets::warnings`（カスタム model_map の不備）は現在
+GUI では `eprintln!` するだけで UI に出ていない。`ProcessResult.warnings` /
+`size_limit_exceeded`（S3 から持ち越し）と併せて F8 で扱うこと。
 
 ---
 
@@ -625,20 +754,30 @@ UI で表示していない。F8（エラーの握りつぶし）と同時に扱
    **→ S3 で実装済み（2026-08-05）**。`warnings: Vec<String>` と `size_limit_exceeded: bool` が
    `ProcessResult` にある。以降のセッションで新たな警告を出す必要が生じたら、`eprintln!` を
    足さずここに push すること。GUI の**表示 UI は S5 に持ち越し**（型は配線済み）。
-2. **default の単一の真実** — `ExifFrameConfig::default()` と `presets/default.json` のどちらを
-   正とするか S4-M4 で決め、以後は片方から導出する。
-3. **バンドルアセットの失敗方針** — logo/preset/model_map は graceful（空 or None）、
-   font/model_map は `.expect()` と方針が割れている。**全て `Result` 伝搬に統一**する（S4-C5）。
-4. **メーカー判定** — 完全一致の手動列挙をやめ、trim + 大文字化の正規化キーに寄せる（S4-M5）。
+2. **default の単一の真実** — **`ExifFrameConfig::default()` を正とする**（S4-M4 で決定 / 2026-08-05）。
+   `core/assets/presets/default.json` は削除し、`load_bundled_presets()` は
+   `vec![ExifFrameConfig::default()]` を返す。以後、デフォルト値は Rust 側だけを直すこと。
+3. **バンドルアセットの失敗方針** — **全て `Result` 伝搬に統一した**（S4-C5 / 2026-08-05）。
+   `ModelMap::load_bundled` と `text::load_font` から `.expect()` を全廃。
+   `OnceLock` のキャッシュは `get()` → 失敗しうる構築 → `get_or_init()` の順で行い、
+   `get_or_init` のクロージャ内で panic して未初期化のまま毒されることが無いようにする。
+4. **メーカー判定** — **trim + 大文字化の正規化キーに変更済み**（S4-M5 / 2026-08-05）。
+   完全一致で外れたら先頭トークンでも引くので、`"Sony Corporation"` のような
+   社名接尾辞を `model_map.json` に列挙しなくてよい。ロゴ参照名は
+   `model_map::validate_asset_filename` で単純ファイル名に限定する（S4-M8）。
 5. **テストは仕様から書く** — C1 が検出されなかったのは「実装が通る数値」でテストを書いたため。
    4:5 は `assert_eq!(w*5, h*4)` の厳密比較、crop の無視は出力比率で検証する。
    テストに触る前に `test-integrity` スキルを起動する（CLAUDE.md 規約）。
+   **→ S4 で適用済み。加えて教訓が1つ増えた**（2026-08-05）: 「重ならないこと」のような
+   否定形をテストするときは、**前提条件（重なりうる状況を作れているか）も同時に assert する**。
+   S4-H6 の最初の版はテキストが短すぎて検査対象領域に届かず、バグを入れ直しても
+   green のままだった。ミューテーションテストを回さなければ気づけなかった。
 
 ---
 
 ## 3. 完了条件
 
-- [ ] `cargo test --workspace` が green（新規テスト含む）
+- [ ] `cargo test --workspace` が green（新規テスト含む）  ※ S4 時点 107 passed
 - [ ] `cargo clippy --workspace --all-targets -- -D warnings` が green
 - [ ] `cargo fmt --all -- --check` が green
 - [ ] `bunx svelte-check` が green

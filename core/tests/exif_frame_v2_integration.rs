@@ -1,4 +1,9 @@
 //! Exifフレーム v2 統合テスト
+//!
+//! 仕様の出所:
+//! - CLAUDE.md「4:5アスペクト比への変換」「元の画像ファイルは上書きしない」
+//! - docs/superpowers/specs/2026-03-29-exif-frame-v2-design.md
+//! - 全体レビュー修正計画 S4（4:5 は厳密比較、crop/quality の無視は出力比率で検証）
 use picture_tool_core::exif_frame::*;
 use picture_tool_core::*;
 use std::path::PathBuf;
@@ -22,12 +27,14 @@ fn default_exif() -> ExifInfo {
     }
 }
 
-fn default_asset_dirs() -> AssetDirs {
-    AssetDirs {
+/// ユーザー設定ディレクトリに依存しない（＝実行環境で結果が変わらない）アセット
+fn default_assets() -> ExifAssets {
+    ExifAssets::load(AssetDirs {
         user_logos_dir: None,
         user_fonts_dir: None,
         user_model_map: None,
-    }
+    })
+    .expect("bundled exif assets must load")
 }
 
 /// 一時ディレクトリにテスト用JPEGファイルを書き出して PathBuf を返す
@@ -38,83 +45,184 @@ fn write_test_jpeg(dir: &TempDir, width: u32, height: u32, name: &str) -> PathBu
     path
 }
 
-// ---- Test 1: 横構図 (1200x800) → 4:5 ----
+/// 出力 4:5 は「おおむね 0.8」ではなく整数比の厳密条件。
+/// 許容誤差つきの比較では 1px のずれを原理的に検出できない（S4-C1）。
+fn assert_exactly_4_5(img: &image::DynamicImage, ctx: &str) {
+    assert_eq!(
+        img.width() * 5,
+        img.height() * 4,
+        "expected an exact 4:5 canvas, got {}x{} ({})",
+        img.width(),
+        img.height(),
+        ctx
+    );
+}
+
+// ---- Test 1: 横構図 → 4:5 ----
 
 #[test]
 fn pad_exif_landscape_produces_4_5() {
-    let img = create_test_image(1200, 800);
-    let exif = default_exif();
-    let config = ExifFrameConfig::default();
-    let bg = BackgroundColor::Black;
-    let dirs = default_asset_dirs();
-    let result = render_exif_frame(&img, &exif, &config, &bg, &dirs).unwrap();
-    let ratio = result.width() as f32 / result.height() as f32;
-    assert!(
-        (ratio - 0.8).abs() < 0.02,
-        "Expected 4:5 (0.8), got {:.3}",
-        ratio
-    );
+    let result = render_exif_frame(
+        &create_test_image(1200, 800),
+        &default_exif(),
+        &ExifFrameConfig::default(),
+        &BackgroundColor::Black,
+        &default_assets(),
+    )
+    .unwrap();
+    assert_exactly_4_5(&result, "landscape 1200x800");
 }
 
-// ---- Test 2: 縦構図 (800x1200) → 4:5 ----
+// ---- Test 2: 縦構図 → 4:5 ----
 
 #[test]
 fn pad_exif_portrait_produces_4_5() {
-    let img = create_test_image(800, 1200);
-    let exif = default_exif();
-    let config = ExifFrameConfig::default();
-    let bg = BackgroundColor::White;
-    let dirs = default_asset_dirs();
-    let result = render_exif_frame(&img, &exif, &config, &bg, &dirs).unwrap();
-    let ratio = result.width() as f32 / result.height() as f32;
-    assert!(
-        (ratio - 0.8).abs() < 0.02,
-        "Expected 4:5 (0.8), got {:.3}",
-        ratio
-    );
+    let result = render_exif_frame(
+        &create_test_image(800, 1200),
+        &default_exif(),
+        &ExifFrameConfig::default(),
+        &BackgroundColor::White,
+        &default_assets(),
+    )
+    .unwrap();
+    assert_exactly_4_5(&result, "portrait 800x1200");
 }
 
-// ---- Test 3: 既に4:5 (800x1000) → 正常に処理できる ----
+// ---- Test 3: 既に4:5 → 正常に処理できる ----
 
 #[test]
 fn pad_exif_already_4_5_still_works() {
-    let img = create_test_image(800, 1000);
-    let exif = default_exif();
-    let config = ExifFrameConfig::default();
-    let bg = BackgroundColor::Black;
-    let dirs = default_asset_dirs();
-    let result = render_exif_frame(&img, &exif, &config, &bg, &dirs).unwrap();
-    let ratio = result.width() as f32 / result.height() as f32;
-    assert!(
-        (ratio - 0.8).abs() < 0.02,
-        "Expected 4:5 (0.8), got {:.3}",
-        ratio
-    );
+    let result = render_exif_frame(
+        &create_test_image(800, 1000),
+        &default_exif(),
+        &ExifFrameConfig::default(),
+        &BackgroundColor::Black,
+        &default_assets(),
+    )
+    .unwrap();
+    assert_exactly_4_5(&result, "already 4:5 800x1000");
+}
+
+/// 4の倍数・5の倍数に揃っていない実写サイズでも 4:5 が崩れないこと。
+/// 従来のテストが 20 の倍数しか使っていなかったために C1 が素通りした。
+#[test]
+fn pad_exif_produces_exact_4_5_for_non_round_sizes() {
+    let assets = default_assets();
+    // 高解像度の網羅は layout 側のユニットテストが担う（あちらは計算だけなので一瞬）。
+    // ここは「レイアウト結果どおりにキャンバスが作られるか」の確認なので、
+    // Lanczos3 リサイズが現実的な時間で終わるサイズに絞る。
+    for (w, h) in [(400, 501), (399, 502), (401, 499), (1001, 1000), (207, 203)] {
+        for position in [
+            ExifPosition::Auto,
+            ExifPosition::Bottom,
+            ExifPosition::Top,
+            ExifPosition::Right,
+            ExifPosition::Left,
+        ] {
+            let config = ExifFrameConfig {
+                position,
+                ..Default::default()
+            };
+            let result = render_exif_frame(
+                &create_test_image(w, h),
+                &default_exif(),
+                &config,
+                &BackgroundColor::Black,
+                &assets,
+            )
+            .unwrap();
+            assert_exactly_4_5(&result, &format!("{}x{} position={:?}", w, h, position));
+        }
+    }
 }
 
 // ---- Test 4: EXIF情報なし → クラッシュしない ----
 
 #[test]
 fn pad_exif_no_exif_data_doesnt_crash() {
-    let img = create_test_image(1200, 800);
-    let exif = ExifInfo::default(); // 全フィールドNone
-    let config = ExifFrameConfig::default();
-    let bg = BackgroundColor::Black;
-    let dirs = default_asset_dirs();
-    let result = render_exif_frame(&img, &exif, &config, &bg, &dirs);
+    let result = render_exif_frame(
+        &create_test_image(1200, 800),
+        &ExifInfo::default(), // 全フィールドNone
+        &ExifFrameConfig::default(),
+        &BackgroundColor::Black,
+        &default_assets(),
+    );
     assert!(
         result.is_ok(),
         "render_exif_frame should not crash with empty ExifInfo"
     );
 }
 
+/// 短辺が閾値未満の画像は Exif フレームを諦めるが、
+/// **4:5 への変換は放棄しない**（skip_exif は「Exif を描かない」であって
+/// 「何もしない」ではない）。
+#[test]
+fn tiny_image_skips_exif_but_still_becomes_4_5() {
+    let result = render_exif_frame(
+        &create_test_image(150, 100),
+        &default_exif(),
+        &ExifFrameConfig::default(),
+        &BackgroundColor::Black,
+        &default_assets(),
+    )
+    .unwrap();
+    assert_exactly_4_5(&result, "tiny 150x100 (skip_exif path)");
+    assert!(
+        result.width() >= 150 && result.height() >= 100,
+        "the photo must still fit inside the canvas, got {}x{}",
+        result.width(),
+        result.height()
+    );
+}
+
+/// 仕様: フォントが読めなければ Exif フレームを諦めて pad にフォールバックし、
+/// その事実を warnings で呼び出し元に伝える。panic してはならない（S4-C5）。
+#[test]
+fn unloadable_font_falls_back_to_pad_with_a_warning() {
+    let tmp = TempDir::new().unwrap();
+    let input = write_test_jpeg(&tmp, 1200, 800, "input_badfont.jpg");
+
+    let config = ProcessingConfig {
+        mode: ConversionMode::Pad,
+        bg_color: BackgroundColor::Black,
+        quality: 85,
+        max_size_mb: 8,
+        delete_originals: false,
+    };
+    let ef_config = ExifFrameConfig {
+        font: FontConfig {
+            font_path: Some("/nonexistent/definitely-not-a-font.ttf".to_string()),
+            ..Default::default()
+        },
+        ..Default::default()
+    };
+
+    let result = process_image(
+        &input,
+        tmp.path(),
+        &config,
+        Some(&ef_config),
+        Some(&default_assets()),
+    )
+    .expect("a broken font must not fail the whole conversion");
+
+    assert!(
+        result.warnings.iter().any(|w| w.contains("Exif frame")),
+        "the fallback must be reported to the caller, got {:?}",
+        result.warnings
+    );
+    let out = image::open(&result.output_path).unwrap();
+    assert_exactly_4_5(&out, "pad fallback output");
+}
+
 // ---- Test 5: Cropモードは exif_frame 設定を無視する ----
 
+/// 「無視する」を出力で検証する。`is_ok()` だけだと Exif フレームが
+/// 誤って適用されてもテストは通ってしまう。
 #[test]
 fn crop_mode_ignores_exif_frame_config() {
     let tmp = TempDir::new().unwrap();
     let input = write_test_jpeg(&tmp, 1200, 800, "input_crop.jpg");
-    let out_dir = tmp.path().to_path_buf();
 
     let config = ProcessingConfig {
         mode: ConversionMode::Crop,
@@ -123,15 +231,22 @@ fn crop_mode_ignores_exif_frame_config() {
         max_size_mb: 8,
         delete_originals: false,
     };
-    let ef_config = ExifFrameConfig::default();
-    let dirs = default_asset_dirs();
 
-    let result = process_image(&input, &out_dir, &config, Some(&ef_config), Some(&dirs));
-    assert!(
-        result.is_ok(),
-        "Crop mode with exif config should succeed: {:?}",
-        result.err()
-    );
+    let result = process_image(
+        &input,
+        tmp.path(),
+        &config,
+        Some(&ExifFrameConfig::default()),
+        Some(&default_assets()),
+    )
+    .expect("crop mode with exif config should succeed");
+
+    // crop は元画像から 4:5 を切り出す。パディングもExifバーも足さないので
+    // 高さは変わらず、幅だけが 4:5 になるまで削られる。
+    let out = image::open(&result.output_path).unwrap();
+    assert_exactly_4_5(&out, "crop mode output");
+    assert_eq!(out.height(), 800, "crop must not add or remove height");
+    assert_eq!(out.width(), 640, "1200x800 cropped to 4:5 is 640x800");
 }
 
 // ---- Test 6: Qualityモードは exif_frame 設定を無視する ----
@@ -139,8 +254,9 @@ fn crop_mode_ignores_exif_frame_config() {
 #[test]
 fn quality_mode_ignores_exif_frame_config() {
     let tmp = TempDir::new().unwrap();
-    let input = write_test_jpeg(&tmp, 800, 1000, "input_quality.jpg");
-    let out_dir = tmp.path().to_path_buf();
+    // 4:5 でないサイズを使う。800x1000 だと「何もしない」と
+    // 「4:5に変換した」を出力から区別できない。
+    let input = write_test_jpeg(&tmp, 1200, 800, "input_quality.jpg");
 
     let config = ProcessingConfig {
         mode: ConversionMode::Quality,
@@ -149,13 +265,20 @@ fn quality_mode_ignores_exif_frame_config() {
         max_size_mb: 8,
         delete_originals: false,
     };
-    let ef_config = ExifFrameConfig::default();
-    let dirs = default_asset_dirs();
 
-    let result = process_image(&input, &out_dir, &config, Some(&ef_config), Some(&dirs));
-    assert!(
-        result.is_ok(),
-        "Quality mode with exif config should succeed: {:?}",
-        result.err()
+    let result = process_image(
+        &input,
+        tmp.path(),
+        &config,
+        Some(&ExifFrameConfig::default()),
+        Some(&default_assets()),
+    )
+    .expect("quality mode with exif config should succeed");
+
+    let out = image::open(&result.output_path).unwrap();
+    assert_eq!(
+        (out.width(), out.height()),
+        (1200, 800),
+        "quality mode must preserve the original dimensions"
     );
 }
