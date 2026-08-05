@@ -32,11 +32,11 @@ cd gui-frontend && bun install && bunx svelte-check
   **`gui/` クレートに触る cargo コマンドの前に必ず `cd gui-frontend && bun run build` を通すこと。**
   CI もこの順序になっている。
 
-### 現状のベースライン（S2 完了後 / 2026-08-04）
+### 現状のベースライン（S3 完了後 / 2026-08-05）
 
-| 項目 | S2 前 | S2 後 |
+| 項目 | S2 前 | 現在 |
 |---|---|---|
-| `cargo test --workspace` | core のみ 78 passed | **78 passed（gui 含めコンパイル）** |
+| `cargo test --workspace` | core のみ 78 passed | **90 passed**（S1 で +2、S3 で +10） |
 | `cargo clippy --workspace --all-targets -- -D warnings` | 21 warnings（gui は未検査） | **green**（gui にも2件あり修正済み） |
 | `cargo fmt --all -- --check` | 失敗（実際は10ファイル） | **green** |
 | `bunx svelte-check` | 未導入 | **0 errors / 6 warnings**（warnings は S5-M12） |
@@ -56,9 +56,9 @@ exif-frame v2（コミット30本超、core の約半分）が**検証されな�
 
 | # | セッション | 主な対象 | 依存 |
 |---|---|---|---|
-| S1 | ライセンス・リポジトリ衛生 | ルート、`core/assets/` | なし |
-| S2 | CI 整備 + lint/fmt + デッドコード掃除 | `.github/`, `Makefile`, 各所 | なし（最優先で実施） |
-| S3 | core 画像処理の正しさ | `core/src/lib.rs` | S2 |
+| S1 | ライセンス・リポジトリ衛生 ✅ | ルート、`core/assets/` | なし |
+| S2 | CI 整備 + lint/fmt + デッドコード掃除 ✅ | `.github/`, `Makefile`, 各所 | なし（最優先で実施） |
+| S3 | core 画像処理の正しさ ✅ | `core/src/lib.rs` | S2 |
 | S4 | exif_frame レイアウト・描画の正しさ | `core/src/exif_frame/` | S2 |
 | S5 | フロントエンドの正しさ・安全性 | `gui-frontend/src/` | S2 |
 | S6 | Tauri バックエンドのセキュリティ | `gui/src/`, `capabilities/` | S2 |
@@ -176,7 +176,9 @@ exif-frame v2（コミット30本超、core の約半分）が**検証されな�
 
 ## S3. core 画像処理の正しさ（`core/src/lib.rs`）
 
-- [ ] **C2 並列バッチ処理で出力ファイルが衝突・破損する** `lib.rs:409-426`, `:441`
+> **実施済み（2026-08-05）**。末尾の「S3 実施メモ」も参照。
+
+- [x] **C2 並列バッチ処理で出力ファイルが衝突・破損する** `lib.rs:409-426`, `:441`
 
   ```rust
   while output_path.exists() { ... }                       // ロックなしの TOCTOU
@@ -196,7 +198,7 @@ exif-frame v2（コミット30本超、core の約半分）が**検証されな�
   するだけでこの経路を通らない。別ディレクトリ同名ファイルを `process_batch` で並列処理する
   テストを追加すること。
 
-- [ ] **C3 EXIF Orientation が全パイプラインで未対応** `lib.rs:58-68`, `read_exif_info`, エンコード各所
+- [x] **C3 EXIF Orientation が全パイプラインで未対応** `lib.rs:58-68`, `read_exif_info`, エンコード各所
 
   `grep -i orientation` が core/cli/gui/frontend で **0ヒット**（確認済み）。
   `image::open()` は Orientation を自動適用せず、出力は生ピクセルからの再エンコードで
@@ -209,7 +211,7 @@ exif-frame v2（コミット30本超、core の約半分）が**検証されな�
   `image::open()` 直後に回転・反転を適用してから crop/pad/exif_frame パイプラインへ渡す。
   exif_frame 固有ではなく **core 全体の設計欠落**なので、`process_image` の入口で一度だけ適用する。
 
-- [ ] **H1 サイズ制限を満たせなくても呼び出し元に伝わらない** `lib.rs:428-462`
+- [x] **H1 サイズ制限を満たせなくても呼び出し元に伝わらない** `lib.rs:428-462`
 
   `quality <= MIN_QUALITY(60)` に達した時点で、サイズ超過でも無条件に成功を返す。
   `ProcessResult`（`lib.rs:50-56`）には `final_quality` しかなく「制限を満たせなかった」を
@@ -217,7 +219,7 @@ exif-frame v2（コミット30本超、core の約半分）が**検証されな�
   → `ProcessResult` に `size_limit_exceeded: bool`（または超過バイト数）を追加し、CLI/GUI で警告。
   → H2 の `warnings` と同時に設計すること。
 
-- [ ] **H2 core が `eprintln!` している（設計方針違反）** `lib.rs:217`, `:236-242`
+- [x] **H2 core が `eprintln!` している（設計方針違反）** `lib.rs:217`, `:236-242`
 
   core はライブラリで、GUI には stderr が届かない。
   「Exif フレーム描画に失敗して pad にフォールバックした」「元ファイルの削除に失敗した」という
@@ -226,34 +228,90 @@ exif-frame v2（コミット30本超、core の約半分）が**検証されな�
   → `ProcessResult` に `warnings: Vec<String>` を追加し、CLI は stderr、GUI は Tauri イベントで表示。
   → H1 と同じ変更セットで実施する。
 
-- [ ] **H3 `follow_links(false)` が効いていない** `lib.rs:181-196`
+- [x] **H3 `follow_links(false)` が効いていない** `lib.rs:181-196`
 
   `WalkDir::follow_links(false)` を指定しているのに `path.is_file()`（`fs::metadata` ベースで
   リンクを常に解決する）で判定しているため、リンク先ファイルが設定と無関係にヒットする。
   → `entry.file_type().is_file()` を使う（`follow_links` 設定に従う）。
 
-- [ ] **M1 品質探索が毎回ディスクへ書き込み・削除している** `lib.rs:428-462`
+- [x] **M1 品質探索が毎回ディスクへ書き込み・削除している** `lib.rs:428-462`
 
   1段階下げるたびに `File::create` → `encode` → `metadata` → `remove_file`。
   初期90・下限60・step5 なら最大7回のディスクI/O。
   → `Vec<u8>` にエンコードして `len()` で判定し、確定した1回分だけ書き出す。
     一時ファイルのリネーム往復が不要になり **C2 の衝突リスクも同時に軽減**される。
 
-- [ ] **M2 `collect_image_files` の `Result` が事実上常に `Ok`** `lib.rs:181-196`
+- [x] **M2 `collect_image_files` の `Result` が事実上常に `Ok`** `lib.rs:181-196`
 
   `.filter_map(|e| e.ok())` で権限エラー等を全て捨てており `Err` を返す経路が存在しない。
   シグネチャが誤解を招き、「一部フォルダがスキップされて件数が減っている」ことに気づけない。
   → 戻り値を `Vec<PathBuf>` に簡素化するか、遭遇したエラーを併せて返す。
 
-- [ ] **M3 `read_exif_info` が EXIF エラーを一律 default に丸めている** `lib.rs:86-89`
+- [x] **M3 `read_exif_info` が EXIF エラーを一律 default に丸めている** `lib.rs:86-89`
 
   「EXIF が存在しない」（正常）と「ファイル破損 / I/O エラー」（異常）が区別できない。
   → H2 の `warnings` 経路に載せる。
 
-- [ ] **L1** `generate_output_path` の `to_string_lossy()`（`lib.rs:410-413`）は非UTF-8ファイル名を
+- [x] **L1** `generate_output_path` の `to_string_lossy()`（`lib.rs:410-413`）は非UTF-8ファイル名を
       `U+FFFD` に丸め、異なる元ファイルが同一 stem になりうる（C2 の衝突を助長）。
-- [ ] **L2** `ProgressCallback`（`lib.rs:70-71`）に「rayon の複数ワーカースレッドから同時に呼ばれ、
+- [x] **L2** `ProgressCallback`（`lib.rs:70-71`）に「rayon の複数ワーカースレッドから同時に呼ばれ、
       順序は保証されない」旨のドキュメントを追記。
+
+### S3 実施メモ（2026-08-05）
+
+**個別の対処ではなく3つの変更セットに束ねた。** 指摘同士が同じコードを共有しており、
+別々に直すと互いを打ち消すため。
+
+1. **C2 + M1 + L1 → 一時ファイル方式そのものを廃止**
+   - `generate_output_path` + `save_with_size_limit` を `write_new_output_file` +
+     `encode_within_size_limit` に置換。
+   - パスの予約は `OpenOptions::create_new(true)`。「不在の確認」と「作成」が OS 側で不可分に
+     行われるため、`exists()` の TOCTOU が原理的に消える。衝突時は `AlreadyExists` で連番へ進む。
+   - 品質探索は `Vec<u8>` 上で行い、確定した1回だけ書き出す。最大7往復のディスクI/Oと
+     `*.tmp.jpg` の衝突源が同時に消えた。
+   - stem は `OsString` のまま組み立てる（`to_string_lossy` の U+FFFD 丸めを回避）。
+2. **C3 → `apply_orientation` / `open_image_oriented` / `oriented_dimensions` を core に新設**
+   - `image` 0.24 に自動適用は無いため自前実装（0.25 の `Orientation` と同じ 1-8 の対応表）。
+   - **画像を開く入口を全て `open_image_oriented` に揃えた**: `process_image`、
+     `generate_thumbnail_base64`、`generate_full_image_base64`、GUI の
+     `render_exif_frame_preview`。揃えないとプレビューと出力で `auto_placement` が
+     別の辺を選ぶ。GUI の `list_images` も `oriented_dimensions` で表示縦横を合わせた。
+   - `process_image` は EXIF を先頭で1回だけ読み、Orientation 適用と Exif フレーム描画で共有する。
+3. **H1 + H2 + M3 → `ProcessResult` に `size_limit_exceeded` と `warnings: Vec<String>` を追加**
+   - core の `eprintln!` を全廃（横断的設計決定 1 のとおり）。CLI は stderr に出し、
+     制限超過の件数を末尾に集計表示。GUI は `ProcessResult` 経由でフロントに届く
+     （`types.ts` の型も更新済み。Svelte の表示 UI は **S5 に持ち越し**）。
+   - `collect_image_files` は `CollectedImages { files, skipped }` を返す形に変更（M2）。
+     常に `Ok` を返す欺瞞的な `Result` を廃し、走査失敗を呼び出し元が観測できるようにした。
+     呼び出し元は CLI のみ（GUI は独自の `list_images` を使う）。
+
+**テスト 80 → 90**（`test-integrity` skill 適用、Rigor: **Full** — 画像データの整合性に直結するため）:
+- `process_batch_gives_each_input_a_distinct_output` — 計画が必須と定めたテスト。
+  20個のサブディレクトリの同名 `photo.jpg` を並列処理し、出力パスが全て相異なることと、
+  幅を1枚ずつ変えることで**内容が別画像に上書きされていない**ことまで検証する。
+- `orientation_6_is_uprighted_before_conversion` / `read_exif_info_extracts_orientation` /
+  `image_without_orientation_tag_is_unchanged` / `oriented_dimensions_swaps_only_for_rotated_orientations`
+  — kamadak-exif は読み取り専用なので、SOI 直後に APP1 を差し込む
+  `create_test_image_with_orientation` ヘルパーを自作した（Orientation タグ1件の最小 TIFF）。
+- `size_limit_exceeded_is_reported_when_unreachable` / `..._is_false_when_limit_is_met` /
+  `size_limit_failure_is_accompanied_by_a_warning` — 決定的な線形合同法で
+  ほぼ圧縮できない画像を生成し、制限未達を再現する。
+- `collect_image_files_does_not_follow_symlinks`（unix限定）/
+  `collect_image_files_reports_unreadable_paths_as_skipped`
+
+**ミューテーションテストで実効性を実測した**（Phase C）。修正を元のバグに戻すと
+対応テストが実際に落ちることを4件すべてで確認:
+`create_new`→`create` で並列テストが FAILED、Orientation=6 の回転を外すと向きテストが FAILED、
+`entry.file_type()`→`path.is_file()` でリンクテストが FAILED、
+`within_limit: false`→`true` でサイズ制限テスト2件が FAILED。
+
+**検証**: `cargo fmt --all -- --check` green / `cargo clippy --workspace --all-targets -- -D warnings`
+green / `cargo test --workspace` **90 passed** / `bunx svelte-check` 0 errors / 6 warnings（S5-M12 のまま）。
+CLI 実機でも別ディレクトリ同名2枚が `photo_processed.jpg` と `photo_processed_1.jpg` に
+分かれることを確認済み。
+
+**S5 への申し送り**: `ProcessResult.warnings` と `size_limit_exceeded` はフロントに届いているが
+UI で表示していない。F8（エラーの握りつぶし）と同時に扱うこと。
 
 ---
 
@@ -563,7 +621,10 @@ exif-frame v2（コミット30本超、core の約半分）が**検証されな�
 修正時に判断がブレやすい点をここに集約する。決めたらこのセクションを更新すること。
 
 1. **警告の伝達経路** — core は `eprintln!` しない。`ProcessResult.warnings: Vec<String>` に集約し、
-   CLI は stderr、GUI は Tauri イベントで表示する。S3-H1/H2/M3、S4-H4 が全てこれに依存する。
+   CLI は stderr、GUI は `ProcessResult` 経由でフロントに渡す。S3-H1/H2/M3、S4-H4 が全てこれに依存する。
+   **→ S3 で実装済み（2026-08-05）**。`warnings: Vec<String>` と `size_limit_exceeded: bool` が
+   `ProcessResult` にある。以降のセッションで新たな警告を出す必要が生じたら、`eprintln!` を
+   足さずここに push すること。GUI の**表示 UI は S5 に持ち越し**（型は配線済み）。
 2. **default の単一の真実** — `ExifFrameConfig::default()` と `presets/default.json` のどちらを
    正とするか S4-M4 で決め、以後は片方から導出する。
 3. **バンドルアセットの失敗方針** — logo/preset/model_map は graceful（空 or None）、

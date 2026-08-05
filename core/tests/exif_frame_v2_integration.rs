@@ -18,6 +18,7 @@ fn default_exif() -> ExifInfo {
         shutter_speed: Some("1/250s".to_string()),
         iso: Some(400),
         date_taken: None,
+        orientation: None,
     }
 }
 

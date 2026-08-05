@@ -157,7 +157,11 @@ fn main() -> Result<()> {
     println!("Processing images in: {}", args.input.display());
     println!("Output folder: {}", args.output.display());
 
-    let image_files = core::collect_image_files(&args.input)?;
+    let collected = core::collect_image_files(&args.input);
+    for skipped in &collected.skipped {
+        eprintln!("Warning: skipped while scanning: {}", skipped);
+    }
+    let image_files = collected.files;
     let total_count = image_files.len();
 
     if total_count == 0 {
@@ -170,6 +174,7 @@ fn main() -> Result<()> {
     let start = Instant::now();
     let success_count = AtomicUsize::new(0);
     let failed_count = AtomicUsize::new(0);
+    let warned_count = AtomicUsize::new(0);
 
     let on_progress = |_current: usize, _total: usize| -> bool {
         true // CLI版はキャンセルなし
@@ -204,6 +209,13 @@ fn main() -> Result<()> {
                     r.final_size_mb,
                     quality_info
                 );
+                // core は自ら出力しないので、警告の提示は呼び出し元の責務。
+                for warning in &r.warnings {
+                    eprintln!("  Warning: {}", warning);
+                }
+                if r.size_limit_exceeded {
+                    warned_count.fetch_add(1, Ordering::SeqCst);
+                }
             }
             Err(e) => {
                 failed_count.fetch_add(1, Ordering::SeqCst);
@@ -223,6 +235,13 @@ fn main() -> Result<()> {
     let failed = failed_count.load(Ordering::SeqCst);
 
     println!("\nCompleted: {} successful, {} failed", success, failed);
+    let over_limit = warned_count.load(Ordering::SeqCst);
+    if over_limit > 0 {
+        eprintln!(
+            "Warning: {} file(s) exceed the {} MB limit even at minimum quality",
+            over_limit, args.max_size
+        );
+    }
     println!("Total time: {:.1}s", duration.as_secs_f64());
 
     Ok(())

@@ -99,8 +99,14 @@ pub async fn list_images(path: String) -> Result<Vec<ImageEntry>, String> {
                 .to_string();
             let path_str = file_path.to_string_lossy().to_string();
 
-            let (width, height): (u32, u32) =
-                image::image_dimensions(&file_path).unwrap_or_default();
+            // 生ピクセルの縦横は Orientation 5-8 で入れ替わるため、表示値も揃える。
+            let orientation = core::read_exif_info(&file_path)
+                .ok()
+                .and_then(|info| info.orientation);
+            let (width, height) = core::oriented_dimensions(
+                image::image_dimensions(&file_path).unwrap_or_default(),
+                orientation,
+            );
 
             let size_bytes = fs::metadata(&file_path).map(|m| m.len()).unwrap_or(0);
 
@@ -283,7 +289,9 @@ pub async fn render_exif_frame_preview(
 ) -> Result<String, String> {
     tokio::task::spawn_blocking(move || {
         let path = std::path::Path::new(&path);
-        let img = image::open(path).map_err(|e| e.to_string())?;
+        // EXIF Orientation を適用してから縮小する。生の image::open だと縦横が
+        // 実際の処理結果と食い違い、auto_placement が別の辺を選んでしまう。
+        let img = core::open_image_oriented(path).map_err(|e| e.to_string())?;
 
         // 低解像度にリサイズ（プレビュー用）
         let max_dim = 400u32;

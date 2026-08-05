@@ -27,6 +27,10 @@ export interface ProcessResult {
   output_path: string;
   final_size_mb: number;
   final_quality: number | null;
+  /** 品質を下限まで下げても max_size_mb を満たせなかった */
+  size_limit_exceeded: boolean;
+  /** 処理は成功したが利用者に伝えるべき事象（core は stderr へ出力しない） */
+  warnings: string[];
 }
 
 export interface ProgressPayload {
@@ -44,6 +48,8 @@ export interface ExifInfo {
   shutter_speed: string | null;
   iso: number | null;
   date_taken: string | null;
+  /** EXIF Orientation (1-8)。null はタグ無し */
+  orientation: number | null;
 }
 
 // Exif Frame types
