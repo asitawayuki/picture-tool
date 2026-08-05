@@ -11,7 +11,6 @@ export interface ImageEntry {
   width: number;
   height: number;
   size_bytes: number;
-  thumbnail_base64: string | null;
 }
 
 export interface ProcessingConfig {

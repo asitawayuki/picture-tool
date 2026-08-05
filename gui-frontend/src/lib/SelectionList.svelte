@@ -3,19 +3,26 @@
 
   interface Props {
     selectedImages: ImageEntry[];
-    thumbnailCache: Map<string, string>;
+    thumbnailFor: (path: string, maxDimension: number) => string | undefined;
     onRemove: (image: ImageEntry) => void;
     onRequestThumbnail: (path: string, maxDimension: number) => void;
     onPreview: (image: ImageEntry) => void;
   }
 
-  let { selectedImages, thumbnailCache, onRemove, onRequestThumbnail, onPreview }: Props = $props();
+  let { selectedImages, thumbnailFor, onRemove, onRequestThumbnail, onPreview }: Props = $props();
+
+  const THUMB_SIZE = 200;
+
+  // キャッシュを読むと「サムネイル1枚届くたびに選択済み全件を走査」になるため、
+  // 依頼済みかどうかはこのコンポーネント側の非リアクティブな Set で覚える。
+  // 重複要求は onRequestThumbnail 側でも弾かれる。
+  const requestedPaths = new Set<string>();
 
   $effect(() => {
     for (const img of selectedImages) {
-      if (!thumbnailCache.has(img.path)) {
-        onRequestThumbnail(img.path, 200);
-      }
+      if (requestedPaths.has(img.path)) continue;
+      requestedPaths.add(img.path);
+      onRequestThumbnail(img.path, THUMB_SIZE);
     }
   });
 </script>
@@ -24,22 +31,27 @@
   <div class="header">選択済み ({selectedImages.length})</div>
   <div class="list">
     {#each selectedImages as image (image.path)}
-      <div class="item" role="button" tabindex="0" ondblclick={() => onPreview(image)} onkeydown={(e) => { if (e.key === 'Enter') onPreview(image); }}>
-        <div class="thumb">
-          {#if thumbnailCache.has(image.path)}
-            <img
-              src="data:image/jpeg;base64,{thumbnailCache.get(image.path)}"
-              alt={image.name}
-            />
-          {:else}
-            <div class="thumb-placeholder">📷</div>
-          {/if}
-        </div>
-        <div class="info">
-          <div class="name">{image.name}</div>
-          <div class="meta">{image.width}×{image.height}</div>
-        </div>
-        <button class="remove" onclick={() => onRemove(image)}>×</button>
+      {@const thumb = thumbnailFor(image.path, THUMB_SIZE)}
+      <div class="item">
+        <button
+          class="open"
+          aria-label="{image.name} をプレビュー"
+          ondblclick={() => onPreview(image)}
+          onkeydown={(e) => { if (e.key === "Enter") onPreview(image); }}
+        >
+          <span class="thumb">
+            {#if thumb}
+              <img src="data:image/jpeg;base64,{thumb}" alt="" />
+            {:else}
+              <span class="thumb-placeholder" aria-hidden="true">📷</span>
+            {/if}
+          </span>
+          <span class="info">
+            <span class="name">{image.name}</span>
+            <span class="meta">{image.width}×{image.height}</span>
+          </span>
+        </button>
+        <button class="remove" aria-label="{image.name} を選択から外す" onclick={() => onRemove(image)}>×</button>
       </div>
     {/each}
   </div>
@@ -73,13 +85,29 @@
   .item {
     display: flex;
     align-items: center;
-    gap: 8px;
+    gap: 4px;
     padding: 6px;
     background: var(--accent-bg);
     border-radius: var(--radius);
   }
 
+  .open {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex: 1;
+    min-width: 0;
+    background: none;
+    border: none;
+    padding: 0;
+    color: inherit;
+    font: inherit;
+    text-align: left;
+    cursor: pointer;
+  }
+
   .thumb {
+    display: block;
     width: 40px;
     height: 50px;
     flex-shrink: 0;
@@ -104,11 +132,13 @@
   }
 
   .info {
+    display: block;
     flex: 1;
     min-width: 0;
   }
 
   .name {
+    display: block;
     font-size: 12px;
     overflow: hidden;
     text-overflow: ellipsis;
@@ -116,14 +146,16 @@
   }
 
   .meta {
-    font-size: 10px;
-    color: var(--text-muted);
+    display: block;
+    font-size: 11px;
+    color: var(--text-secondary);
   }
 
   .remove {
+    flex-shrink: 0;
     background: none;
     border: none;
-    color: var(--text-muted);
+    color: var(--text-secondary);
     font-size: 16px;
     cursor: pointer;
     padding: 4px;

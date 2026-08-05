@@ -5,7 +5,6 @@
     config: ProcessingConfig;
     outputFolder: string;
     canProcess: boolean;
-    currentFolder: string;
     onPickOutputFolder: () => void;
     onProcess: () => void;
     exifFrameEnabled: boolean;
@@ -20,7 +19,6 @@
     config = $bindable(),
     outputFolder,
     canProcess,
-    currentFolder,
     onPickOutputFolder,
     onProcess,
     exifFrameEnabled,
@@ -65,16 +63,26 @@
     </label>
 
     <div class="field">
-      <span class="label">出力先</span>
-      <button class="folder-btn" onclick={onPickOutputFolder}>
+      <span class="label" id="output-folder-label">出力先</span>
+      <button
+        class="folder-btn"
+        aria-labelledby="output-folder-label"
+        title={outputFolder || undefined}
+        onclick={onPickOutputFolder}
+      >
         {outputFolder || "フォルダーを選択..."}
       </button>
     </div>
 
-    <label class="checkbox">
-      <input type="checkbox" bind:checked={config.delete_originals} />
-      <span>元ファイルを削除</span>
-    </label>
+    <div class="field">
+      <label class="checkbox">
+        <input type="checkbox" bind:checked={config.delete_originals} />
+        <span>元ファイルを削除</span>
+      </label>
+      {#if config.delete_originals}
+        <p class="danger-hint">変換実行時に確認します。削除したファイルは元に戻せません。</p>
+      {/if}
+    </div>
 
     {#if config.mode === "pad"}
       <div class="exif-frame-section">
@@ -90,17 +98,23 @@
         {#if exifFrameEnabled}
           <div class="exif-frame-controls">
             <select
+              aria-label="Exifフレームのプリセット"
               value={selectedPresetName}
               onchange={(e) => onPresetChange((e.target as HTMLSelectElement).value)}
             >
-              {#each presets as preset}
+              {#each presets as preset (preset.name)}
                 <option value={preset.name}>{preset.name}</option>
               {/each}
               {#if presets.length === 0}
                 <option value="default">default</option>
               {/if}
             </select>
-            <button class="gear-btn" onclick={onOpenExifSettings} title="Exifフレーム設定">⚙</button>
+            <button
+              class="gear-btn"
+              onclick={onOpenExifSettings}
+              aria-label="Exifフレーム設定を開く"
+              title="Exifフレーム設定"
+            >⚙</button>
           </div>
         {/if}
       </div>
@@ -233,6 +247,13 @@
     font-size: 12px;
     color: var(--text-secondary);
     cursor: pointer;
+  }
+
+  .danger-hint {
+    margin: 4px 0 0;
+    font-size: 11px;
+    line-height: 1.5;
+    color: var(--danger);
   }
 
   .action {

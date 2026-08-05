@@ -1,5 +1,7 @@
 <script lang="ts">
   import { getFullImage, getExifInfo } from "./api";
+  import { focusTrap } from "./focusTrap";
+  import { toast, describeError } from "./toasts.svelte";
   import type { ImageEntry, ExifInfo } from "./types";
 
   interface Props {
@@ -41,9 +43,16 @@
     return { x, y, w, h };
   });
 
+  // 矢印キーの高速ナビで、古い画像／EXIF の応答が新しい表示を上書きしないよう
+  // リクエストごとにトークンを振り、最新のものだけを state に反映する。
+  let loadToken = 0;
+  let imageErrorReported = false;
+
   $effect(() => {
-    loadFullImage(image.path);
-    loadExifInfo(image.path);
+    const path = image.path;
+    const token = ++loadToken;
+    loadFullImage(path, token);
+    loadExifInfo(path, token);
   });
 
   $effect(() => {
@@ -51,26 +60,35 @@
     resetZoom();
   });
 
-  async function loadFullImage(path: string) {
+  async function loadFullImage(path: string, token: number) {
     loading = true;
     fullImageData = null;
     try {
       const maxW = Math.min(window.innerWidth - 80, 2560);
       const maxH = Math.min(window.innerHeight - 120, 1600);
-      fullImageData = await getFullImage(path, maxW, maxH);
+      const data = await getFullImage(path, maxW, maxH);
+      if (token !== loadToken) return;
+      fullImageData = data;
     } catch (e) {
-      console.error("Failed to load full image:", e);
+      if (token !== loadToken) return;
+      // 連続ナビで壊れた画像が並ぶとトーストで埋まるため最初の1件だけ通知する
+      if (!imageErrorReported) {
+        imageErrorReported = true;
+        toast.error(`画像を表示できません: ${describeError(e)}`);
+      }
     } finally {
-      loading = false;
+      if (token === loadToken) loading = false;
     }
   }
 
-  async function loadExifInfo(path: string) {
+  async function loadExifInfo(path: string, token: number) {
     exifInfo = null;
     try {
-      exifInfo = await getExifInfo(path);
-    } catch (e) {
-      console.error("Failed to load EXIF info:", e);
+      const info = await getExifInfo(path);
+      if (token !== loadToken) return;
+      exifInfo = info;
+    } catch {
+      // EXIF は無くても表示は成立するので通知しない
     }
   }
 
@@ -118,19 +136,19 @@
         }
         break;
       case " ":
+        // ボタンにフォーカスがある時はボタン既定の動作に任せる（二重トグル防止）
+        if ((e.target as HTMLElement | null)?.tagName === "BUTTON") return;
         e.preventDefault();
         onToggleSelect(image);
         break;
     }
   }
 
-  function handleOverlayClick(e: MouseEvent) {
-    if ((e.target as HTMLElement).classList.contains("preview-overlay")) {
-      if (zoomed) {
-        resetZoom();
-      } else {
-        onClose();
-      }
+  function handleBackdropClick() {
+    if (zoomed) {
+      resetZoom();
+    } else {
+      onClose();
     }
   }
 
@@ -210,8 +228,14 @@
   role="dialog"
   aria-modal="true"
   aria-label="画像プレビュー"
-  onclick={handleOverlayClick}
+  tabindex="-1"
+  use:focusTrap
 >
+  <!-- 余白クリックで閉じるための背景。ダイアログ本体にクリックハンドラーを
+       付けるとキーボード操作を持たない対話要素になるため分離する。
+       キーボードからは Escape で閉じられる。 -->
+  <div class="backdrop" role="presentation" onclick={handleBackdropClick}></div>
+
   <button
     class="select-btn"
     class:selected={isSelected}
@@ -248,31 +272,34 @@
     {#if loading}
       <div class="loading">読み込み中...</div>
     {:else if fullImageData}
+      <!-- ズーム操作はポインタ専用の補助機能。画像そのものに手を付けず、
+           前面の操作面でマウスイベントを受ける（キーボードからは Escape で解除、
+           矢印キーで前後移動できる）。 -->
       {#if zoomed}
-        <!-- ズーム時: クリックでリセット -->
-        <img
-          bind:this={imageElement}
-          src="data:image/jpeg;base64,{fullImageData}"
-          alt={image.name}
-          class="preview-image zoomed"
-          style="transform-origin: 0 0; transform: {zoomTransform};"
-          onclick={handleZoomedClick}
-        />
+        <div class="zoom-surface" role="presentation" onclick={handleZoomedClick}>
+          <img
+            bind:this={imageElement}
+            src="data:image/jpeg;base64,{fullImageData}"
+            alt={image.name}
+            class="preview-image zoomed"
+            style="transform-origin: 0 0; transform: {zoomTransform};"
+          />
+        </div>
       {:else}
-        <!-- 通常時: ドラッグで範囲選択 -->
-        <img
-          bind:this={imageElement}
-          src="data:image/jpeg;base64,{fullImageData}"
-          alt={image.name}
-          class="preview-image"
-          onmousedown={handleImageMouseDown}
-        />
-        {#if selectionRect}
-          <div
-            class="selection-rect"
-            style="left: {selectionRect.x}px; top: {selectionRect.y}px; width: {selectionRect.w}px; height: {selectionRect.h}px;"
-          ></div>
-        {/if}
+        <div class="zoom-surface" role="presentation" onmousedown={handleImageMouseDown}>
+          <img
+            bind:this={imageElement}
+            src="data:image/jpeg;base64,{fullImageData}"
+            alt={image.name}
+            class="preview-image"
+          />
+          {#if selectionRect}
+            <div
+              class="selection-rect"
+              style="left: {selectionRect.x}px; top: {selectionRect.y}px; width: {selectionRect.w}px; height: {selectionRect.h}px;"
+            ></div>
+          {/if}
+        </div>
       {/if}
     {/if}
   </div>
@@ -295,6 +322,12 @@
     display: flex;
     align-items: center;
     justify-content: center;
+  }
+
+  .backdrop {
+    position: absolute;
+    inset: 0;
+    z-index: 0;
   }
 
   .select-btn {
@@ -371,6 +404,7 @@
 
   .image-container {
     position: relative;
+    z-index: 1;
     max-width: calc(100vw - 120px);
     max-height: calc(100vh - 100px);
     display: flex;
@@ -380,6 +414,14 @@
 
   .image-container.zoomed {
     overflow: hidden;
+  }
+
+  /* 画像の描画ボックスにぴったり重なるよう縮小し、選択矩形の基準にもする */
+  .zoom-surface {
+    position: relative;
+    display: flex;
+    max-width: 100%;
+    max-height: calc(100vh - 100px);
   }
 
   .preview-image {
