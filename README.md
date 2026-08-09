@@ -6,6 +6,7 @@ Instagram投稿用の画像一括変換ツール。写真を4:5アスペクト�
 
 - **4:5アスペクト比変換** — クロップ / パディング / サイズのみの3モード
 - **ファイルサイズ制限** — 品質を自動調整して指定サイズ以下に圧縮
+- **Exifフレーム** — 余白にカメラ・レンズ・撮影パラメータとメーカーロゴを描画（**padモード限定**）
 - **並列処理** — rayonによる高速バッチ処理
 - **GUIアプリ** — フォルダー参照 → 写真選択 → プレビュー → 変換の一連のフロー
 - **元ファイル削除オプション** — 変換完了後に元ファイルを自動削除可能
@@ -45,6 +46,15 @@ cargo run -p picture-tool -- -i ./photos -o ./output --delete-originals
 
 # 品質とサイズ上限を指定
 cargo run -p picture-tool -- -i ./photos -o ./output -q 95 --max-size 10
+
+# Exifフレームを付ける（pad モード限定。他モードでは警告を出して無視される）
+cargo run -p picture-tool -- -i ./photos -o ./output -m pad -e
+
+# プリセットを指定して Exifフレーム（`~/.config/picture-tool/presets/` に保存した名前）
+cargo run -p picture-tool -- -i ./photos -o ./output -m pad -e -p 散歩用
+
+# 表示項目や配置を細かく指定する（後述）
+cargo run -p picture-tool -- -i ./photos -o ./output -m pad -e --preset-file ./my-frame.json
 ```
 
 ### GUI
@@ -68,8 +78,25 @@ make dev
 | `--mode` | `-m` | `crop` | `crop`, `pad`, `quality` |
 | `--bg-color` | `-b` | `white` | `white`, `black` |
 | `--quality` | `-q` | `90` | 初期JPEG品質 (1-100) |
-| `--max-size` | | `8` | 最大ファイルサイズ (MB) |
+| `--max-size` | | `8` | 最大ファイルサイズ (MB, 1-1024) |
 | `--delete-originals` | | `false` | 変換後に元ファイルを削除 |
+| `--exif-frame` | `-e` | `false` | Exifフレームを付加（`--mode pad` 限定） |
+| `--preset` | `-p` | `default` | 使用するプリセット名 |
+| `--preset-file` | | | プリセットJSONを直接指定（`--preset` より優先） |
+| `--custom-text` | | | プリセットのカスタムテキストを上書き |
+
+### Exifフレーム
+
+写真の余白（pad モードで付く帯）に、カメラ・レンズ・撮影パラメータとメーカーロゴを描画します。
+
+- **`--mode pad` でのみ有効**。crop / quality と組み合わせた場合は警告を出して無視します
+  （余白が無い＝描画する場所が無いため）
+- 帯の位置は写真の向きから自動で決まります（横構図→下、縦構図→右。縦の場合は帯ごと90度回転）
+- 表示は2段: 1段目がメーカーロゴ・カメラ型番・レンズ型番、2段目が焦点距離 / F値 / SS / ISO
+- **CLI から項目や位置を個別に指定するオプションはありません。** 細かく制御したい場合は
+  プリセットJSONを書いて `--preset-file` で渡すか、GUI の Exifフレーム設定で作ったプリセットを
+  `--preset` で名前指定してください。プリセットは
+  `~/.config/picture-tool/presets/{名前}.json`（OS 別の場所は後述）に保存されます
 
 ## 開発コマンド
 
@@ -77,9 +104,9 @@ make dev
 make build          # CLI + GUI ビルド
 make build-cli      # CLIのみ
 make build-gui      # GUIのみ（フロントエンド含む）
-make test           # テスト実行（23件）
+make test           # 全テスト実行
 make dev            # GUI開発サーバー
-make release        # リリースビルド
+make release        # リリースビルド + Tauri のバンドル/インストーラ生成
 make clean          # クリーンアップ
 ```
 
@@ -158,6 +185,12 @@ picture-tool-rust/
 | macOS | `~/Library/Application Support/picture-tool/assets/logos/` |
 | Windows | `%APPDATA%\picture-tool\assets\logos\` |
 
+同じ階層の `assets/fonts/` に置いた `.ttf` / `.otf` は、Exifフレームのフォントとして
+選べるようになります（GUI のフォント選択、またはプリセットJSONの `font.font_path`）。
+**GUI が読み込むのはこのディレクトリ配下のフォントだけです。** 任意のパスを指定しても
+拒否されます（webview から任意ファイルを読ませないため）。プリセットは1つ上の
+`presets/` に保存されます。
+
 ファイル名は `{名前}.svg` / `{名前}.png`、暗い背景用のバリアントは
 `{名前}_light.svg` / `{名前}_light.png`（SVG 優先）。
 どのメーカー名（Exif の Make タグ）でどのファイルを使うかは、
@@ -174,5 +207,3 @@ JSON で上書きできます。`logo_match` と `lens_brand_match` は**両方�
   ]
 }
 ```
-
-claude --resume fd016f21-d8a8-41b5-abe9-f9e42f0aa240

@@ -886,11 +886,11 @@ Tauri 無しでは到達できない経路は `vite dev` + Playwright で実機�
 > S1 で README 末尾に「ライセンス」節（同梱アセット表 / 商標免責 / ユーザーロゴ配置手順）を
 > 追加済み。DOC-1 で exif-frame の記述を足すときに消さないこと。
 
-- [ ] **DOC-1 exif-frame 機能が README.md / CLAUDE.md に一切存在しない**（`grep -i exif` で0件）
+- [x] **DOC-1 exif-frame 機能が README.md / CLAUDE.md に一切存在しない**（`grep -i exif` で0件）
   - 未記載の CLI オプション: `--exif-frame`/`-e`, `--preset`/`-p`, `--preset-file`, `--custom-text`
   - **「Pad モード限定」という v2 の最重要制約**がどこにも書かれていない
   - 「細かい制御は `--preset-file` で」という導線も未記載（CLI から位置・項目を個別指定できない）
-- [ ] **DOC-2 v2 spec を実装に追従させる**（`docs/superpowers/specs/2026-03-29-exif-frame-v2-design.md`）
+- [x] **DOC-2 v2 spec を実装に追従させる**（`docs/superpowers/specs/2026-03-29-exif-frame-v2-design.md`）
   | spec | 実装 |
   |---|---|
   | 縦構図は「1行凝縮・90度回転」(`:70-89`) | 横構図と同じ2段構成（コミット `5273d30` で**設計判断が逆転**、spec 未更新） |
@@ -900,14 +900,46 @@ Tauri 無しでは到達できない経路は `vite dev` + Playwright で実機�
   | GUI にフォント選択を残す(`:247`) | UI 無し（DEAD-4） |
   | 背景はカスタム RGB にも対応(`:68`) | `BackgroundColor` は White/Black の2値 enum。輝度計算(`mod.rs:194-196`)は汎用 RGB 対応済みなのに入力側が塞がっている |
   特に「1行凝縮→2段」は設計判断の逆転なので、**理由付きで** spec に反映する。
-- [ ] **DOC-3** `README.md:80` 「テスト実行（23件）」→ 実際78件。数値の埋め込み自体をやめる。
-- [ ] **DOC-4** `CLAUDE.md:73` の主要関数リストが古い。`read_exif_info`, `generate_full_image_base64`,
+- [x] **DOC-3** `README.md:80` 「テスト実行（23件）」→ 実際78件。数値の埋め込み自体をやめる。
+- [x] **DOC-4** `CLAUDE.md:73` の主要関数リストが古い。`read_exif_info`, `generate_full_image_base64`,
       `is_supported_image`, `exif_frame::render_exif_frame` が欠落。
       `process_image`/`process_batch` の引数も増えている。
-- [ ] **DOC-5** `docs/` に索引が無い（specs 5本 / plans 6本がフラット）。
+- [x] **DOC-5** `docs/` に索引が無い（specs 5本 / plans 6本がフラット）。
       v1 spec（`2026-03-25-exif-frame-design.md`）の冒頭に **Superseded by v2** を明記。
-- [ ] **DOC-6** `.claude/agents/`, `.claude/skills/` をコミットしている意図を CLAUDE.md に記載
+- [x] **DOC-6** `.claude/agents/`, `.claude/skills/` をコミットしている意図を CLAUDE.md に記載
       （チーム共有なら妥当だが、現状は意図不明）。
+
+### S7 実施メモ（2026-08-09）
+
+**新規ファイル**
+
+| ファイル | 目的 |
+|---|---|
+| `docs/README.md` | ドキュメント索引。現行仕様 / 過去の仕様 / 読む順番を明示（DOC-5） |
+
+**判断のメモ**
+
+- **DOC-2 は「spec を実装に合わせて書き換える」ではなく「逆転した判断を理由付きで残す」形にした。**
+  結論だけ書き換えると、次に同じ設計を検討したときに同じ議論をやり直すことになる。
+  当初案の図と、なぜそれを捨てたか（計算が構図ごとに二重化する / テキスト中に画像を挟むと
+  切り詰め・回転と絡んで破綻する）を並べて残している。
+- **DOC-2 の「GUI にフォント選択を残す → UI 無し（DEAD-4）」は既に解消していた。**
+  `ExifFrameSettings.svelte` にフォント選択が実装済みで、spec と実装は一致している。
+  チェックリストの記述の方が古かった。
+- **オーバーフロー時の項目省略は「未実装」と明記して残した。** 切り詰めで実用上は足りており、
+  省略順を設定に出す価値が薄いと判断。spec から消すと「検討した上で見送った」情報まで消える。
+- **DOC-3 は件数を書き直すのではなく、数値の埋め込み自体をやめた**（書いた瞬間に古くなるため）。
+- **README 末尾に紛れ込んでいた `claude --resume ...` の1行を削除した。**
+- **S6 の申し送りも取り込んだ**: CLAUDE.md に「Tauri コマンドが唯一の信頼境界」「新しい
+  コマンドは必ず `security.rs` を通す」「webview にプラグイン権限を与えない」を明記。
+  ユーザーデータの置き場所（logos / fonts / presets / model_map_custom / favorites.json）も表にした。
+  `make release` が `tauri build` を呼ぶようになった点は README のコマンド説明に反映。
+- **DOC-6 は利用者に意図を確認した上で記載**（チームと将来の自分で共有するため意図的にコミット）。
+
+**残っている乖離**（記録のみ、対応せず）
+
+- 背景色のカスタム RGB: 描画側（輝度計算）は任意 RGB に対応済みだが、入力の
+  `BackgroundColor` は White/Black の2値 enum のまま。spec にその旨を注記した。
 
 ---
 
