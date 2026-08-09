@@ -976,11 +976,11 @@ Tauri 無しでは到達できない経路は `vite dev` + Playwright で実機�
 
 ## 3. 完了条件
 
-- [ ] `cargo test --workspace` が green（新規テスト含む）  ※ S4 時点 107 passed
-- [ ] `cargo clippy --workspace --all-targets -- -D warnings` が green
-- [ ] `cargo fmt --all -- --check` が green
-- [ ] `bunx svelte-check` が green
+- [x] `cargo test --workspace` が green（新規テスト含む）  ※ S4 時点 107 → **S7 完了時点 138 passed**
+- [x] `cargo clippy --workspace --all-targets -- -D warnings` が green
+- [x] `cargo fmt --all -- --check` が green
+- [x] `bunx svelte-check` が green（0 errors / 0 warnings）
 - [x] CI で上記すべてが自動実行され、**gui クレートが Linux でビルドされている**
       （run 30910677408 / `80c9e1e` で success 確認済み）
-- [ ] README / CLAUDE.md / v2 spec が実装と一致
+- [x] README / CLAUDE.md / v2 spec が実装と一致（S7 / 2026-08-09。乖離は spec に注記として残した）
 - [x] `LICENSE` と `OFL.txt` が存在し、商標素材の扱いが決定済み（S1 / バンドル維持 + 免責）
