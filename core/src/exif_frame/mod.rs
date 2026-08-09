@@ -94,27 +94,38 @@ impl Default for ExifFrameConfig {
     }
 }
 
+/// ユーザー設定ディレクトリ（`<OS の config dir>/picture-tool`）
+///
+/// **設定ディレクトリのパスを組み立てる唯一の場所。** 以前は CLI・GUI・core が
+/// それぞれ `"picture-tool/presets"` のような文字列を直書きしており、
+/// 片方だけ変えると設定が読めなくなる構造だった（S6-M17）。
+///
+/// 外向きの入口は `AssetDirs::default()` の方。こちらを公開すると
+/// 「自分でサブディレクトリを組み立てる」経路が復活するので crate 内に閉じる。
+pub(crate) fn user_config_dir() -> Option<PathBuf> {
+    dirs::config_dir().map(|d| d.join("picture-tool"))
+}
+
 /// アセットディレクトリの検索パス
 #[derive(Debug, Clone)]
 pub struct AssetDirs {
     pub user_logos_dir: Option<PathBuf>,
     pub user_fonts_dir: Option<PathBuf>,
     pub user_model_map: Option<PathBuf>,
+    /// ユーザープリセットの保存先。`preset::list_all_presets` 等に渡す。
+    pub user_presets_dir: Option<PathBuf>,
 }
 
 impl Default for AssetDirs {
     fn default() -> Self {
-        let config_dir = dirs_config_dir();
+        let config_dir = user_config_dir();
         Self {
             user_logos_dir: config_dir.as_ref().map(|d| d.join("assets/logos")),
             user_fonts_dir: config_dir.as_ref().map(|d| d.join("assets/fonts")),
             user_model_map: config_dir.as_ref().map(|d| d.join("model_map_custom.json")),
+            user_presets_dir: config_dir.as_ref().map(|d| d.join("presets")),
         }
     }
-}
-
-fn dirs_config_dir() -> Option<PathBuf> {
-    dirs::config_dir().map(|d| d.join("picture-tool"))
 }
 
 /// Exifフレーム描画に必要なアセット一式。

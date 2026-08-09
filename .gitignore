@@ -17,3 +17,6 @@ gui/gen/
 # OS / エディタ
 .DS_Store
 *.swp
+
+# Playwright MCP の一時出力
+.playwright-mcp/

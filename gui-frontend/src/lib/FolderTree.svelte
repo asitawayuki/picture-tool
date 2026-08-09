@@ -1,7 +1,6 @@
 <script lang="ts">
   import { onMount } from "svelte";
-  import { listDirectory, listDrives } from "./api";
-  import { load } from "@tauri-apps/plugin-store";
+  import { listDirectory, listDrives, loadFavorites, saveFavorites } from "./api";
   import { toast, describeError } from "./toasts.svelte";
   import type { FileEntry } from "./types";
 
@@ -30,27 +29,16 @@
 
   let favoriteNodes = $state<TreeNode[]>([]);
 
-  let store: Awaited<ReturnType<typeof load>> | null = null;
-
   function buildFavoriteNodes(paths: string[]): TreeNode[] {
     return paths.map((path) =>
       makeNode({ name: getFolderName(path), path, is_dir: true, is_image: false })
     );
   }
 
-  async function initStore() {
-    store = await load("favorites.json", { defaults: {}, autoSave: false });
-    const saved = await store.get<string[]>("favorites");
-    if (saved) {
-      favorites = saved;
-      favoriteNodes = buildFavoriteNodes(saved);
-    }
-  }
-
-  async function saveFavorites() {
-    if (!store) return;
-    await store.set("favorites", favorites);
-    await store.save();
+  async function initFavorites() {
+    const saved = await loadFavorites();
+    favorites = saved;
+    favoriteNodes = buildFavoriteNodes(saved);
   }
 
   async function toggleFavorite(path: string) {
@@ -59,7 +47,7 @@
     favorites = wasFavorite ? favorites.filter((f) => f !== path) : [...favorites, path];
     favoriteNodes = buildFavoriteNodes(favorites);
     try {
-      await saveFavorites();
+      await saveFavorites(favorites);
     } catch (e) {
       // 保存できなかったら画面上の状態も戻す（次回起動で消える方が分かりにくい）
       favorites = previous;
@@ -127,7 +115,7 @@
 
   onMount(() => {
     loadRoots();
-    initStore().catch((e) => {
+    initFavorites().catch((e) => {
       toast.error(`お気に入りの読み込みに失敗しました: ${describeError(e)}`);
     });
   });

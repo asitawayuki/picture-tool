@@ -33,6 +33,7 @@ fn default_assets() -> ExifAssets {
         user_logos_dir: None,
         user_fonts_dir: None,
         user_model_map: None,
+        user_presets_dir: None,
     })
     .expect("bundled exif assets must load")
 }
@@ -281,4 +282,87 @@ fn quality_mode_ignores_exif_frame_config() {
         (1200, 800),
         "quality mode must preserve the original dimensions"
     );
+}
+
+// =========================================================
+// プレビュー生成（S6-M16 で GUI から core に移した経路）
+// =========================================================
+
+/// data URI の prefix を持たない生の base64 を JPEG としてデコードする
+fn decode_preview(base64_jpeg: &str) -> image::DynamicImage {
+    use base64::Engine as _;
+    let bytes = base64::engine::general_purpose::STANDARD
+        .decode(base64_jpeg)
+        .expect("preview must be valid base64");
+    image::load_from_memory(&bytes).expect("preview must be a decodable JPEG")
+}
+
+#[test]
+fn exif_frame_preview_is_exactly_4_5() {
+    // プレビューは「出力がどう見えるか」を示すものなので、出力と同じく
+    // 厳密な 4:5 でなければならない（S4-C1 と同じ不変条件）。
+    // 4 の倍数にも 5 の倍数にも揃っていないサイズを使う。
+    let tmp = TempDir::new().unwrap();
+    let input = write_test_jpeg(&tmp, 400, 501, "photo.jpg");
+
+    let base64 = generate_exif_frame_preview_base64(
+        &input,
+        &ExifFrameConfig::default(),
+        &BackgroundColor::White,
+        &default_assets(),
+        400,
+    )
+    .expect("preview generation must succeed");
+
+    let preview = decode_preview(&base64);
+    let (w, h) = (preview.width(), preview.height());
+    assert_eq!(
+        w * 5,
+        h * 4,
+        "preview must be exactly 4:5 but was {}x{}",
+        w,
+        h
+    );
+}
+
+#[test]
+fn exif_frame_preview_fits_within_the_requested_size() {
+    // プレビューは実寸ではなく指定した上限に収まる縮小版であること。
+    // （縮小を飛ばすと巨大な base64 が webview に流れる）
+    let tmp = TempDir::new().unwrap();
+    let input = write_test_jpeg(&tmp, 2000, 2500, "big.jpg");
+
+    let base64 = generate_exif_frame_preview_base64(
+        &input,
+        &ExifFrameConfig::default(),
+        &BackgroundColor::White,
+        &default_assets(),
+        400,
+    )
+    .expect("preview generation must succeed");
+
+    let preview = decode_preview(&base64);
+    // Exif バーのぶんだけ元画像より大きくなるが、桁が変わるほどではない
+    assert!(
+        preview.width() <= 600 && preview.height() <= 700,
+        "preview was not downscaled: {}x{}",
+        preview.width(),
+        preview.height()
+    );
+}
+
+#[test]
+fn exif_frame_preview_rejects_an_unreadable_file() {
+    let tmp = TempDir::new().unwrap();
+    let path = tmp.path().join("broken.jpg");
+    std::fs::write(&path, b"not a JPEG").unwrap();
+
+    assert!(generate_exif_frame_preview_base64(
+        &path,
+        &ExifFrameConfig::default(),
+        &BackgroundColor::White,
+        &default_assets(),
+        400,
+    )
+    .is_err());
 }

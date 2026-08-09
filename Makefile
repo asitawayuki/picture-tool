@@ -50,10 +50,12 @@ check: lint test typecheck
 install:
 	cd gui-frontend && bun install
 
-# リリースビルド（フロントエンド埋め込み済みバイナリ）
+# リリースビルド（CLI バイナリ + GUI のバンドル/インストーラ）
+# GUI は `tauri build` を通す。cargo build だけだとバンドルが作られず、
+# 「release」という名前と実態が食い違っていた（S6-L16）。
 release: build-frontend
 	cargo build --release -p picture-tool
-	cargo build --release -p picture-tool-gui --features tauri/custom-protocol
+	cd gui && $(TAURI) build
 
 # クリーンアップ
 clean:

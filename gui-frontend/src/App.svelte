@@ -1,7 +1,6 @@
 <script lang="ts">
   import { onMount } from "svelte";
   import { listen } from "@tauri-apps/api/event";
-  import { open } from "@tauri-apps/plugin-dialog";
   import { SvelteMap } from "svelte/reactivity";
   import type { UnlistenFn } from "@tauri-apps/api/event";
   import FolderTree from "./lib/FolderTree.svelte";
@@ -15,8 +14,8 @@
   import ResultDialog from "./lib/ResultDialog.svelte";
   import Toast from "./lib/Toast.svelte";
   import { toast, describeError } from "./lib/toasts.svelte";
-  import { listImages, processImages, cancelProcessing, getThumbnail, listPresets, savePreset, deletePreset } from "./lib/api";
-  import type { ImageEntry, ProcessingConfig, ProcessResult, ProgressPayload, ExifFrameConfig } from "./lib/types";
+  import { listImages, processImages, cancelProcessing, getThumbnail, listPresets, savePreset, deletePreset, pickOutputFolder } from "./lib/api";
+  import type { ImageEntry, ProcessingConfig, ProcessBatchResponse, ProgressPayload, ExifFrameConfig } from "./lib/types";
 
   // --- 状態 ---
   let images = $state<ImageEntry[]>([]);
@@ -200,13 +199,11 @@
 
   async function handlePickOutputFolder() {
     try {
-      const selected = await open({
-        directory: true,
-        multiple: false,
-        defaultPath: currentFolder || undefined,
-      });
+      // ダイアログは Rust 側が開く。ここで選ばれたフォルダーだけが
+      // バックエンドの書き込み許可対象になる（S6-H8）。
+      const selected = await pickOutputFolder(currentFolder || undefined);
       if (selected) {
-        outputFolder = selected as string;
+        outputFolder = selected;
       }
     } catch (e) {
       toast.error(`出力先の選択に失敗しました: ${describeError(e)}`);
@@ -215,7 +212,7 @@
 
   // --- 変換実行 ---
   let showDeleteConfirm = $state(false);
-  let batchResults = $state<ProcessResult[] | null>(null);
+  let batchResponse = $state<ProcessBatchResponse | null>(null);
   let batchRequested = $state<ImageEntry[]>([]);
   let batchCancelled = $state(false);
   let cancelRequested = false;
@@ -242,9 +239,9 @@
     try {
       const files = requested.map((img) => img.path);
       const efConfig = config.mode === "pad" && exifFrameEnabled ? activeExifFrameConfig : null;
-      const results = await processImages(files, outputFolder, config, efConfig);
+      const response = await processImages(files, outputFolder, config, efConfig);
       batchRequested = requested;
-      batchResults = results;
+      batchResponse = response;
       batchCancelled = cancelRequested;
     } catch (e) {
       toast.error(`変換に失敗しました: ${describeError(e)}`);
@@ -365,12 +362,12 @@
   />
 {/if}
 
-{#if batchResults}
+{#if batchResponse}
   <ResultDialog
     requested={batchRequested}
-    results={batchResults}
+    response={batchResponse}
     cancelled={batchCancelled}
-    onClose={() => (batchResults = null)}
+    onClose={() => (batchResponse = null)}
   />
 {/if}
 

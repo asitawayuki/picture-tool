@@ -721,7 +721,7 @@ Tauri 無しでは到達できない経路は `vite dev` + Playwright で実機�
 
 ## S6. Tauri バックエンド（`gui/src/`, `gui/capabilities/`）
 
-- [ ] **H8 全コマンドがパス検証なしで任意ファイルを読み書きできる** `gui/src/commands.rs` 全体
+- [x] **H8 全コマンドがパス検証なしで任意ファイルを読み書きできる** `gui/src/commands.rs` 全体
 
   **重要な前提**: Tauri v2 の capabilities/ACL は**プラグインコマンドのみ**を対象とし、
   `invoke_handler(generate_handler![...])` で登録した**自作コマンドは ACL の対象外**。
@@ -735,41 +735,147 @@ Tauri 無しでは到達できない経路は `vite dev` + Playwright で実機�
   → `fs::canonicalize` で正規化し、ユーザーがネイティブダイアログで選択したルート配下のみ許可する。
   → CSP（`tauri.conf.json:14` `default-src 'self'`）自体は適切に絞れている。
 
-- [ ] **M13 `dialog:default` が過剰権限** `gui/capabilities/default.json:8`
+- [x] **M13 `dialog:default` が過剰権限** `gui/capabilities/default.json:8`
       `ask/confirm/message/save/open` を全許可するが、使っているのは `open()` のみ
       （`App.svelte:3`）。明示的な `dialog:allow-open` 行があるので `dialog:default` は削除できる。
-- [ ] **M14 `list_directory` は1エントリのエラーで全体が失敗** `gui/src/commands.rs:19-22`
+- [x] **M14 `list_directory` は1エントリのエラーで全体が失敗** `gui/src/commands.rs:19-22`
       `entry.file_type()?` が壊れたシンボリックリンク等で即 return。
       CLAUDE.md の「失敗はスキップして継続」方針に反する。`list_images` 側は `.flatten()` で
       握りつぶしており一貫性も無い。→ `continue` でスキップ。
-- [ ] **M15 `emit()` の戻り値握りつぶし** `gui/src/commands.rs:215`, `:254`
+- [x] **M15 `emit()` の戻り値握りつぶし** `gui/src/commands.rs:215`, `:254`
       進捗が止まった時に原因を追えない。最低限 `eprintln!` する。
-- [ ] **M16 プレビュー生成ロジックが GUI に閉じ込められている** `gui/src/commands.rs:279-320`
+- [x] **M16 プレビュー生成ロジックが GUI に閉じ込められている** `gui/src/commands.rs:279-320`
       「400px リサイズ → render → JPEG 85% → base64」を丸ごと実装しており、
       GUI が `image`/`base64` を直接依存する原因になっている。CLI に `--preview` 相当が作れない。
       → core に `render_exif_frame_preview_base64` を置く。
-- [ ] **M17 設定ディレクトリのパス計算が4箇所に散在**
+- [x] **M17 設定ディレクトリのパス計算が4箇所に散在**
       `exif_frame/mod.rs:121-123`, `cli/src/main.rs:119-120`,
       `gui/src/commands.rs:324`, `:330-332`, `:338-340`（同じ文字列を直書き）。
       → core の `AssetDirs` に `user_presets_dir` を追加して一元化。
-- [ ] **M18 `process_images` が約85行** `gui/src/commands.rs:174-258` → 分割。
-- [ ] **M19 `[workspace.dependencies]` 未使用**。`anyhow`, `serde_json`, `dirs` が
+- [x] **M18 `process_images` が約85行** `gui/src/commands.rs:174-258` → 分割。
+- [x] **M19 `[workspace.dependencies]` 未使用**。`anyhow`, `serde_json`, `dirs` が
       cli/core/gui にそれぞれ個別記述。→ ワークスペースに集約し `.workspace = true`。
-- [ ] **CLI-1 バッチ処理中に進捗が一切表示されない** `cli/src/main.rs:174-176`
+- [x] **CLI-1 バッチ処理中に進捗が一切表示されない** `cli/src/main.rs:174-176`
       `on_progress` が `true` を返すだけ。大量処理時にフリーズして見える。
       → `eprint!("\r{}/{}", current, total)` 等を出す。
-- [ ] **CLI-2 clap レベルのバリデーション不足** `cli/src/main.rs:29-30`, `:33-34`
+- [x] **CLI-2 clap レベルのバリデーション不足** `cli/src/main.rs:29-30`, `:33-34`
       `quality`/`max_size` を `value_parser!(u8).range(1..=100)` で弾くとエラーが分かりやすい。
-- [ ] **CLI-3 `ConversionMode` の enum が cli に複製されている** `cli/src/main.rs:61-66`, `:74-82`
+- [x] **CLI-3 `ConversionMode` の enum が cli に複製されている** `cli/src/main.rs:61-66`, `:74-82`
       core の enum を変更しても**コンパイルエラーにならず片方だけ増える**。
       → core の enum に optional feature で `clap::ValueEnum` を derive するか、
         最低限「core を変えたら cli も」のコメントを残す。
-- [ ] **L12** `cli/src/main.rs:199`, `:202`, `:214` の `file_name().unwrap()`。
-- [ ] **L13** `cli/src/main.rs:171-172` の `AtomicUsize` は単一スレッドで不要。
-- [ ] **L14** `cli/src/main.rs:97`, `:106` で `ConversionMode::from(args.mode)` を二重に呼んでいる
+- [x] **L12** `cli/src/main.rs:199`, `:202`, `:214` の `file_name().unwrap()`。
+- [x] **L13** `cli/src/main.rs:171-172` の `AtomicUsize` は単一スレッドで不要。
+- [x] **L14** `cli/src/main.rs:97`, `:106` で `ConversionMode::from(args.mode)` を二重に呼んでいる
       （fmt 崩れの一因）。`config.mode` を使う。
-- [ ] **L15** `[profile.release]` 未設定（`lto`, `codegen-units`, `strip`）。
-- [ ] **L16** `make release` は `tauri build` を呼ばずバンドル/インストーラを作らない。名前と実態が乖離。
+- [x] **L15** `[profile.release]` 未設定（`lto`, `codegen-units`, `strip`）。
+- [x] **L16** `make release` は `tauri build` を呼ばずバンドル/インストーラを作らない。名前と実態が乖離。
+
+### S6 実施メモ（2026-08-08〜09）
+
+**新規ファイル**
+
+| ファイル | 目的 |
+|---|---|
+| `gui/src/security.rs` | webview から渡された値（パス・フォント・プリセット名）の検証。境界の理由と脅威モデルをモジュール doc に記述 |
+
+**境界の設計（H8）**
+
+Tauri v2 の ACL は自作コマンドに適用されないため、コマンド自身が唯一の境界。
+本アプリはツリーで FS 全体を閲覧する設計なので「1ルートに閉じる」ことはできず、操作種別で分けた。
+
+| 操作 | 境界 |
+|---|---|
+| ディレクトリ一覧 | 実在するディレクトリであること |
+| 画像の読み出し | 実体パスが対応画像の拡張子を持つこと |
+| フォントの読み出し | 実体がユーザーフォントディレクトリ配下の ttf/otf であること |
+| 書き込み | ネイティブダイアログで許可したルート配下 |
+| 元ファイルの削除 | 実行ごとに OS ネイティブの確認ダイアログで承認されること |
+
+判定はすべて `canonicalize` 済みの**実体**に対して行う。許可を与えられるのは Rust 側で
+ダイアログを開く `pick_output_folder` だけで、webview から自分に許可を出す経路は無い。
+
+**判断のメモ**
+
+- **`dialog` に続いて `store` プラグインの権限も webview から落とした。** レビューで
+  「`security.rs` の境界が store 経由で丸ごと迂回できる」と指摘され、実際に確認した:
+  store プラグインの `load(path)` はパスを `AppData` 基準で解決するだけで `..` も絶対パスも
+  正規化しない（`tauri/src/path/mod.rs` の `_up_` 変換は `BaseDirectory::Resource` 限定）。
+  つまり `store:allow-load` があれば `load("../../../.ssh/x.json")` で任意 JSON を読み書きできた。
+  用途はお気に入りの文字列配列だけなので、保存先を Rust に固定した `load_favorites` /
+  `save_favorites` コマンドに置き換え、capabilities は `core:default` のみにした。
+  → **教訓**: 自作コマンドを固めても、webview に与えたプラグイン権限が同じ強さの穴を開ける。
+    境界を評価するときは capabilities も同じ面に並べて見ること。
+- **元ファイル削除は「許可ルート配下」に縛らなかった。** 入力はツリーから自由に選ぶ設計なので、
+  縛ると通常利用（入力 `~/photos` / 出力 `~/out`）で削除が一切できなくなる。代わりに
+  webview が偽装できない OS のダイアログを毎回挟み、**枚数だけでなく削除先フォルダー一覧**を
+  提示する（枚数だけでは、乗っ取られた webview がライブラリ全体を混ぜても気づけない）。
+- **`ExifFrameConfig` も webview 由来のデータとして扱う。** `font.font_path` は無検証で
+  `fs::read` に届いており、`/dev/zero` でメモリを枯渇させたり、エラー文面の差分で任意パスの
+  存在を列挙できた。`readable_font` で「ユーザーフォントディレクトリ配下の ttf/otf」に限定。
+  `save_preset` も同じ検証を通す（汚染されたプリセットは CLI からも読まれ、webview の
+  生存期間を越えて残るため）。
+- **プリセット名の検証を GUI 境界にも置いた。** core の `sanitize_filename` だけでも現状
+  traversal は起きないが、core が許容文字を緩めた瞬間に GUI が無警告で穴を得る。
+  契約は境界に書く。
+- **キャンセルは「失敗」ではない。** `process_batch` は入力と同数の結果を返し、キャンセル後の
+  分も `Err` になる。これをそのまま `failures` に載せると全件が赤字の失敗として並ぶため、
+  `core::CANCELLED_ERROR` を公開定数にし、GUI では results にも failures にも載せない。
+  フロントが要求リストとの差分から「未処理」として表示する（S5 の `ResultDialog` の想定どおり）。
+- **入力の検証失敗でバッチ全体を落とさない。** 選択後に1枚消えていただけで全滅していた。
+  `failures` に理由付きで載せ、残りは処理する（CLAUDE.md「失敗はスキップして継続」）。
+- **M18 は `run_batch` / `progress_callback` / `confirm_delete_originals` / `validate_inputs` /
+  `split_results` への分割まで。** `process_images` 本体は検証→確認→実行→整形の流れだけになった。
+
+**受け入れた残リスク**（対応しないと決めたもの）
+
+- **TOCTOU**: 検証と I/O の間にリンクを差し替えられる攻撃は防げない。ローカル権限を持つ
+  攻撃者の話であり、本設計の脅威モデル（乗っ取られた webview）の外。
+- **`pick_output_folder` の初期表示位置を webview が指定できる**: 許可されるのはダイアログの
+  戻り値だけなので任意許可にはならないが、`/` を初期表示にして反射的な「開く」を誘える。
+  ダイアログの表示内容自体は OS のもので偽装できないため許容した。
+- **画像判定は実体パスの拡張子**（マジックナンバーではない）: `.jpg` という名前の非画像は
+  下流のデコードで失敗する。`security.rs` の表現を実装に合わせて直した。
+
+**外部レビューの指摘と対応**（rust-reviewer / security-reviewer）
+
+| 指摘 | 重大度 | 対応 |
+|---|---|---|
+| store プラグイン権限で境界を迂回できる | Critical | 修正（権限削除 + Rust 側コマンド化） |
+| `delete_originals` の対象が無制限 | High | 確認ダイアログに削除先フォルダー一覧を追加 |
+| `font_path` が無検証で `fs::read` に到達 | High | `security::readable_font` を追加 |
+| `..` を未作成成分の後ろに隠す経路がテストされていない | Medium | テスト追加（防御機構が実際に発火する形で） |
+| 兄弟ディレクトリ（`photos-evil`）の誤許可テストが無い | Medium | テスト追加 |
+| プリセット名の検証が core の実装詳細に暗黙依存 | Medium | `security::preset_name` を追加 |
+| 入力1件の検証失敗でバッチ全滅 | Low | 修正 |
+| サムネイルキャッシュキーがクランプ前の値 | Low | 修正（`core::THUMBNAIL_MAX_DIMENSION`） |
+| `user_config_dir` が不要に公開されている | Low | `pub(crate)` へ |
+| CLI 進捗表示の `let _ = write!` | Low | 意図的（壊れたパイプで処理を止めない）。対応せず |
+| サムネイルキャッシュの `Arc<str>` 化 | Low | 現状ボトルネックではない。対応せず |
+
+**検証**（2026-08-09）
+
+| コマンド | 結果 |
+|---|---|
+| `cargo test --workspace` | **138 passed**（S6 前 107 / レビュー前 123） |
+| `cargo clippy --workspace --all-targets -- -D warnings` | green |
+| `cargo fmt --all -- --check` | green |
+| `bunx svelte-check` | 0 errors / 0 warnings |
+| `bun run build` | 成功 |
+
+Tauri 無しでは到達できない経路は `vite dev` + Playwright で実機確認した。
+起動時の4つの失敗（進捗購読 / ドライブ一覧 / プリセット / **お気に入り**）がすべて
+トーストとして表示されることを確認。お気に入りは store プラグイン経由から `invoke` 経由に
+変わったが、失敗時の見え方は変わっていない。
+
+**S7 への申し送り**
+
+- CLAUDE.md の「GUI 3カラムレイアウト」以外にバックエンドの記述が無い。**Tauri コマンドが
+  唯一の信頼境界であること**と `gui/src/security.rs` の存在は、実装者が次に触るときに
+  知っている必要がある（知らずに新しいコマンドを足すと境界が破れる）。
+- `make release` が `tauri build` を呼ぶようになった（L16）。README のビルド手順に反映すること。
+- CLI に `--exif-frame` 系のオプション表が無い件（DOC-1）は S6 でも解消していない。
+- お気に入りの保存先が `favorites.json`（AppData 配下）である点はどこにも書かれていない。
 
 ---
 

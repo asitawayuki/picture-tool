@@ -14,7 +14,13 @@ use walkdir::WalkDir;
 
 // --- 型定義 ---
 
+/// 変換モード
+///
+/// `clap` feature を有効にすると `ValueEnum` が derive され、CLI が
+/// この enum を直接引数型に使える。以前は cli 側に同じ enum が複製されており、
+/// core にモードを増やしてもコンパイルエラーにならなかった（S6-CLI-3）。
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq)]
+#[cfg_attr(feature = "clap", derive(clap::ValueEnum))]
 #[serde(rename_all = "lowercase")]
 pub enum ConversionMode {
     Crop,
@@ -22,7 +28,9 @@ pub enum ConversionMode {
     Quality,
 }
 
+/// パディング時の背景色
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq)]
+#[cfg_attr(feature = "clap", derive(clap::ValueEnum))]
 #[serde(rename_all = "lowercase")]
 pub enum BackgroundColor {
     White,
@@ -368,6 +376,13 @@ pub fn process_image(
 }
 
 /// バッチ処理（並列）
+/// キャンセル要求のため着手されなかった、を表すエラーメッセージ
+///
+/// `process_batch` は入力と同数・同順の結果を返すので、キャンセル後の分も
+/// `Err` として並ぶ。呼び出し側が「変換に失敗した」と「そもそも着手していない」を
+/// 区別できるよう、文言を定数として公開する（GUI はこれを未処理として扱う）。
+pub const CANCELLED_ERROR: &str = "Processing cancelled";
+
 pub fn process_batch(
     files: &[PathBuf],
     output_folder: &Path,
@@ -384,7 +399,7 @@ pub fn process_batch(
         .par_iter()
         .map(|path| {
             if cancelled.load(Ordering::Relaxed) {
-                return Err(anyhow::anyhow!("Processing cancelled"));
+                return Err(anyhow::anyhow!(CANCELLED_ERROR));
             }
 
             let result = process_image(path, output_folder, config, exif_frame_config, assets);
@@ -401,10 +416,16 @@ pub fn process_batch(
         .collect()
 }
 
+/// サムネイルの一辺の上限。これを超える要求は丸められる。
+///
+/// 呼び出し側がサムネイルをキャッシュする場合、キーには丸めた後の値を使うこと。
+/// 生の要求値をキーにすると、同一内容のエントリを要求値の数だけ作れてしまう。
+pub const THUMBNAIL_MAX_DIMENSION: u32 = 1024;
+
 /// サムネイルをbase64エンコードされたJPEG文字列として生成
 pub fn generate_thumbnail_base64(path: &Path, max_dimension: u32) -> Result<String> {
     use base64::Engine as _;
-    let max_dimension = max_dimension.min(1024);
+    let max_dimension = max_dimension.min(THUMBNAIL_MAX_DIMENSION);
 
     // 出力と同じく Orientation を適用する。適用しないとサムネイルと変換結果の向きがずれる。
     let img = open_image_oriented(path)
@@ -414,6 +435,48 @@ pub fn generate_thumbnail_base64(path: &Path, max_dimension: u32) -> Result<Stri
     let jpeg_bytes = encode_jpeg_rgb(&thumbnail.to_rgb8(), 75)?;
 
     Ok(base64::engine::general_purpose::STANDARD.encode(&jpeg_bytes))
+}
+
+/// Exifフレームのプレビューをbase64エンコードされたJPEG文字列として生成
+///
+/// GUI 専用ではなく core に置く。以前は「縮小 → 描画 → JPEG → base64」の一連が
+/// Tauri コマンドの中だけに書かれており、CLI からプレビューを作れず、
+/// GUI が `image` / `base64` に直接依存する原因にもなっていた（S6-M16）。
+pub fn generate_exif_frame_preview_base64(
+    path: &Path,
+    config: &exif_frame::ExifFrameConfig,
+    bg_color: &BackgroundColor,
+    assets: &exif_frame::ExifAssets,
+    max_dimension: u32,
+) -> Result<String> {
+    use base64::Engine as _;
+    let max_dimension = max_dimension.clamp(1, 1024);
+
+    // Orientation を適用してから縮小する。生の image::open だと縦横が実際の
+    // 処理結果と食い違い、auto_placement が別の辺を選んでしまう。
+    let img = open_image_oriented(path)?;
+    let thumbnail = img.resize(
+        max_dimension,
+        max_dimension,
+        image::imageops::FilterType::Triangle,
+    );
+
+    let exif = read_exif_info(path).unwrap_or_default();
+    let framed = exif_frame::render_exif_frame(&thumbnail, &exif, config, bg_color, assets)?;
+    let jpeg_bytes = encode_jpeg_rgb(&framed.to_rgb8(), 85)?;
+
+    Ok(base64::engine::general_purpose::STANDARD.encode(&jpeg_bytes))
+}
+
+/// 画像ファイルの表示上の (幅, 高さ) を返す（デコードせずヘッダのみ読む）
+///
+/// EXIF Orientation 5-8 では生ピクセルの縦横が入れ替わるため、
+/// 一覧表示の値も `open_image_oriented` 後の見え方に揃える。
+pub fn image_dimensions_oriented(path: &Path) -> Result<(u32, u32)> {
+    let raw = image::image_dimensions(path)
+        .with_context(|| format!("Failed to read image dimensions: {}", path.display()))?;
+    let orientation = read_exif_info(path).ok().and_then(|info| info.orientation);
+    Ok(oriented_dimensions(raw, orientation))
 }
 
 /// フル解像度画像をbase64エンコードされたJPEG文字列として生成（プレビュー用）
@@ -616,6 +679,7 @@ mod tests {
     use image::{ImageBuffer, Rgb};
     use std::fs;
     use std::sync::atomic::AtomicUsize;
+    use tempfile::TempDir;
 
     fn test_config() -> ProcessingConfig {
         ProcessingConfig {
@@ -1436,6 +1500,31 @@ mod tests {
             );
         }
         assert_eq!(oriented_dimensions((400, 800), None), (400, 800));
+    }
+
+    #[test]
+    fn image_dimensions_oriented_reports_the_upright_size_of_a_file() {
+        // 一覧表示の縦横は「利用者が見る向き」と一致していなければならない。
+        // ファイル経由で EXIF を読むところまで含めて確認する。
+        let dir = TempDir::new().unwrap();
+
+        let upright = dir.path().join("upright.jpg");
+        create_test_image(&upright, 400, 800);
+        // 前提: Orientation タグが無ければ生ピクセルの縦横がそのまま出る
+        assert_eq!(image_dimensions_oriented(&upright).unwrap(), (400, 800));
+
+        let rotated = dir.path().join("rotated.jpg");
+        create_test_image_with_orientation(&rotated, 400, 800, 6);
+        assert_eq!(image_dimensions_oriented(&rotated).unwrap(), (800, 400));
+    }
+
+    #[test]
+    fn image_dimensions_oriented_reports_an_error_for_a_non_image() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("not_an_image.jpg");
+        fs::write(&path, b"this is not a JPEG").unwrap();
+
+        assert!(image_dimensions_oriented(&path).is_err());
     }
 
     // =========================================================

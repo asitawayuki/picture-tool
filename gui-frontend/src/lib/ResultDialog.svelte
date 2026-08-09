@@ -1,39 +1,51 @@
 <script lang="ts">
   import { focusTrap } from "./focusTrap";
-  import type { ImageEntry, ProcessResult } from "./types";
+  import type { ImageEntry, ProcessBatchResponse } from "./types";
 
   interface Props {
-    /** 変換を依頼した画像（失敗分は results に現れないため差分で求める） */
+    /** 変換を依頼した画像。キャンセル分は results にも failures にも現れない */
     requested: ImageEntry[];
-    results: ProcessResult[];
+    response: ProcessBatchResponse;
     /** 利用者がキャンセルした場合、未処理分は「失敗」ではないので区別する */
     cancelled: boolean;
     onClose: () => void;
   }
 
-  let { requested, results, cancelled, onClose }: Props = $props();
+  let { requested, response, cancelled, onClose }: Props = $props();
 
   function baseName(path: string): string {
     const parts = path.replace(/[/\\]+$/, "").split(/[/\\]/);
     return parts[parts.length - 1] || path;
   }
 
-  let succeededPaths = $derived(new Set(results.map((r) => r.input_path)));
-  let failed = $derived(requested.filter((img) => !succeededPaths.has(img.path)));
+  let results = $derived(response.results);
+
+  /**
+   * 失敗はバックエンドが理由付きで返す。
+   * 依頼したのに成功にも失敗にも現れないものはキャンセルによる未処理。
+   */
+  let failed = $derived(
+    response.failures.map((f) => ({ name: baseName(f.input_path), path: f.input_path, error: f.error }))
+  );
+  let accountedPaths = $derived(
+    new Set([...results.map((r) => r.input_path), ...response.failures.map((f) => f.input_path)])
+  );
+  let unprocessed = $derived(requested.filter((img) => !accountedPaths.has(img.path)));
 
   /** 品質を下限まで下げても最大サイズを満たせなかったもの */
   let oversized = $derived(results.filter((r) => r.size_limit_exceeded));
 
   /** core が ProcessResult.warnings に積んだ事象（これまで GUI で捨てられていた） */
-  let warnings = $derived(
-    results.flatMap((r) =>
+  let warnings = $derived([
+    ...response.warnings.map((message) => ({ file: "", message })),
+    ...results.flatMap((r) =>
       r.warnings.map((message) => ({ file: baseName(r.input_path), message }))
-    )
+    ),
+  ]);
+
+  let hasIssues = $derived(
+    failed.length > 0 || unprocessed.length > 0 || oversized.length > 0 || warnings.length > 0
   );
-
-  let hasIssues = $derived(failed.length > 0 || oversized.length > 0 || warnings.length > 0);
-
-  let failedLabel = $derived(cancelled ? "未処理" : "失敗");
 
   function handleKeydown(e: KeyboardEvent) {
     if (e.key === "Escape") {
@@ -65,9 +77,15 @@
         <span class="key">成功</span>
       </div>
       <div class="stat">
-        <span class="value" class:danger={!cancelled && failed.length > 0}>{failed.length}</span>
-        <span class="key">{failedLabel}</span>
+        <span class="value" class:danger={failed.length > 0}>{failed.length}</span>
+        <span class="key">失敗</span>
       </div>
+      {#if unprocessed.length > 0}
+        <div class="stat">
+          <span class="value">{unprocessed.length}</span>
+          <span class="key">{cancelled ? "未処理" : "不明"}</span>
+        </div>
+      {/if}
       <div class="stat">
         <span class="value">{requested.length}</span>
         <span class="key">対象</span>
@@ -81,11 +99,22 @@
 
       {#if failed.length > 0}
         <section>
-          <h3 class:danger={!cancelled} class:warning={cancelled}>
-            {cancelled ? "キャンセルにより未処理" : "変換できなかったファイル"} ({failed.length})
+          <h3 class="danger">変換できなかったファイル ({failed.length})</h3>
+          <ul>
+            {#each failed as f (f.path)}
+              <li>{f.name} — {f.error}</li>
+            {/each}
+          </ul>
+        </section>
+      {/if}
+
+      {#if unprocessed.length > 0}
+        <section>
+          <h3 class="warning">
+            {cancelled ? "キャンセルにより未処理" : "結果が返らなかったファイル"} ({unprocessed.length})
           </h3>
           <ul>
-            {#each failed as img (img.path)}
+            {#each unprocessed as img (img.path)}
               <li>{img.name}</li>
             {/each}
           </ul>
@@ -109,7 +138,7 @@
           <h3 class="warning">警告 ({warnings.length})</h3>
           <ul>
             {#each warnings as w, i (i)}
-              <li>{w.file} — {w.message}</li>
+              <li>{w.file ? `${w.file} — ${w.message}` : w.message}</li>
             {/each}
           </ul>
         </section>

@@ -1,25 +1,30 @@
+use crate::security;
 use crate::state::ProcessingState;
 use crate::types::*;
 use picture_tool_core as core;
-use picture_tool_core::exif_frame::{self, ExifFrameConfig, FontInfo};
+use picture_tool_core::exif_frame::{self, AssetDirs, ExifFrameConfig, FontInfo};
 use std::fs;
-use std::path::{Path, PathBuf};
-use std::sync::atomic::Ordering;
+use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
-use tauri::Emitter;
+use tauri::{Emitter, Manager};
+use tauri_plugin_dialog::{DialogExt, MessageDialogButtons, MessageDialogKind};
+use tauri_plugin_store::StoreExt;
 
+/// 各コマンドはこの関数を通したパスだけを触る。理由は `security` モジュール参照。
 #[tauri::command]
 pub fn list_directory(path: String) -> Result<Vec<FileEntry>, String> {
-    let dir = Path::new(&path);
-    if !dir.is_dir() {
-        return Err(format!("Not a directory: {}", path));
-    }
+    let dir = security::existing_dir(&path)?;
 
     let mut entries = Vec::new();
-    let read_dir = fs::read_dir(dir).map_err(|e| e.to_string())?;
+    let read_dir = fs::read_dir(&dir).map_err(|e| e.to_string())?;
 
     for entry in read_dir.flatten() {
-        let file_type = entry.file_type().map_err(|e| e.to_string())?;
+        // 壊れたシンボリックリンク等で1エントリが読めなくても一覧全体を失敗させない。
+        // 「失敗はスキップして継続」という CLAUDE.md の方針に揃える（S6-M14）。
+        let Ok(file_type) = entry.file_type() else {
+            continue;
+        };
         let name = entry.file_name().to_string_lossy().to_string();
         let entry_path = entry.path();
         let path_str = entry_path.to_string_lossy().to_string();
@@ -60,7 +65,7 @@ pub fn list_drives() -> Result<Vec<String>, String> {
         let mut drives = Vec::new();
         for letter in b'A'..=b'Z' {
             let drive = format!("{}:\\", letter as char);
-            if Path::new(&drive).exists() {
+            if std::path::Path::new(&drive).exists() {
                 drives.push(drive);
             }
         }
@@ -75,14 +80,11 @@ pub fn list_drives() -> Result<Vec<String>, String> {
 
 #[tauri::command]
 pub async fn list_images(path: String) -> Result<Vec<ImageEntry>, String> {
-    let dir_path = path.clone();
-    if !Path::new(&dir_path).is_dir() {
-        return Err(format!("Not a directory: {}", path));
-    }
+    let dir = security::existing_dir(&path)?;
 
     tokio::task::spawn_blocking(move || {
         // 直下の画像のみ取得（再帰しない）
-        let read_dir = fs::read_dir(&dir_path).map_err(|e| e.to_string())?;
+        let read_dir = fs::read_dir(&dir).map_err(|e| e.to_string())?;
 
         let direct_files: Vec<PathBuf> = read_dir
             .flatten()
@@ -100,14 +102,7 @@ pub async fn list_images(path: String) -> Result<Vec<ImageEntry>, String> {
             let path_str = file_path.to_string_lossy().to_string();
 
             // 生ピクセルの縦横は Orientation 5-8 で入れ替わるため、表示値も揃える。
-            let orientation = core::read_exif_info(&file_path)
-                .ok()
-                .and_then(|info| info.orientation);
-            let (width, height) = core::oriented_dimensions(
-                image::image_dimensions(&file_path).unwrap_or_default(),
-                orientation,
-            );
-
+            let (width, height) = core::image_dimensions_oriented(&file_path).unwrap_or_default();
             let size_bytes = fs::metadata(&file_path).map(|m| m.len()).unwrap_or(0);
 
             entries.push(ImageEntry {
@@ -116,7 +111,6 @@ pub async fn list_images(path: String) -> Result<Vec<ImageEntry>, String> {
                 width,
                 height,
                 size_bytes,
-                thumbnail_base64: None, // 遅延読み込み
             });
         }
 
@@ -134,7 +128,12 @@ pub async fn get_thumbnail(
     path: String,
     max_dimension: u32,
 ) -> Result<String, String> {
-    let cache_key = format!("{}:{}", path, max_dimension);
+    let file = security::readable_image(&path)?;
+    // キャッシュキーは実体のパスと、core が実際に使う丸めた後のサイズ。
+    // 生の要求値をキーにすると、上限超えの値を変えるだけで同一内容の
+    // エントリを LRU の上限まで作れてしまう。
+    let max_dimension = max_dimension.min(core::THUMBNAIL_MAX_DIMENSION);
+    let cache_key = format!("{}:{}", file.display(), max_dimension);
 
     {
         let mut cache = state
@@ -147,7 +146,7 @@ pub async fn get_thumbnail(
     }
 
     let result = tokio::task::spawn_blocking(move || {
-        core::generate_thumbnail_base64(Path::new(&path), max_dimension).map_err(|e| e.to_string())
+        core::generate_thumbnail_base64(&file, max_dimension).map_err(|e| e.to_string())
     })
     .await
     .map_err(|e| e.to_string())??;
@@ -169,12 +168,48 @@ pub async fn get_full_image(
     max_width: u32,
     max_height: u32,
 ) -> Result<String, String> {
+    let file = security::readable_image(&path)?;
     tokio::task::spawn_blocking(move || {
-        core::generate_full_image_base64(Path::new(&path), max_width, max_height)
-            .map_err(|e| e.to_string())
+        core::generate_full_image_base64(&file, max_width, max_height).map_err(|e| e.to_string())
     })
     .await
     .map_err(|e| e.to_string())?
+}
+
+/// 出力先フォルダーをネイティブダイアログで選ばせ、書き込み許可を与える
+///
+/// **ダイアログを Rust 側で開くことが本質。** フロントエンドの
+/// `@tauri-apps/plugin-dialog` を使うと、選択結果を webview 経由で受け取ることになり、
+/// 乗っ取られた webview が「ユーザーが `/` を選んだ」と自称できてしまう。
+/// ここで許可されるのはダイアログが返したパスそのものだけ（S6-H8）。
+#[tauri::command]
+pub async fn pick_output_folder(
+    app_handle: tauri::AppHandle,
+    state: tauri::State<'_, ProcessingState>,
+    default_path: Option<String>,
+) -> Result<Option<String>, String> {
+    let mut builder = app_handle
+        .dialog()
+        .file()
+        .set_title("出力先フォルダーを選択");
+
+    // 既定位置はあくまで初期表示。ここが許可されるわけではない。
+    if let Some(ref raw) = default_path {
+        if let Ok(dir) = security::existing_dir(raw) {
+            builder = builder.set_directory(dir);
+        }
+    }
+
+    let Some(picked) = builder.blocking_pick_folder() else {
+        return Ok(None); // ユーザーがキャンセルした
+    };
+
+    let picked = picked.into_path().map_err(|e| e.to_string())?;
+    let resolved = fs::canonicalize(&picked)
+        .map_err(|e| format!("Cannot access {}: {}", picked.display(), e))?;
+
+    state.writable_roots.grant(resolved.clone());
+    Ok(Some(resolved.to_string_lossy().to_string()))
 }
 
 #[tauri::command]
@@ -184,98 +219,307 @@ pub async fn process_images(
     files: Vec<String>,
     output_folder: String,
     config: core::ProcessingConfig,
-    exif_frame_config: Option<core::exif_frame::ExifFrameConfig>,
-) -> Result<Vec<core::ProcessResult>, String> {
+    exif_frame_config: Option<ExifFrameConfig>,
+) -> Result<ProcessBatchResponse, String> {
     core::validate_config(&config).map_err(|e| e.to_string())?;
 
-    // 出力フォルダーを作成
-    let output = output_folder.clone();
-    let output_path = Path::new(&output);
-    if !output_path.exists() {
-        fs::create_dir_all(output_path).map_err(|e| e.to_string())?;
+    // 出力は利用者が明示的に許可したルート配下のみ。
+    let output = security::writable_dir(&state.writable_roots, &output_folder)?;
+
+    // 入力は画像ファイルのみ。選択後に1枚消えていた程度で全件を落とさず、
+    // 落ちた分は理由付きで failures に載せる（CLAUDE.md「失敗はスキップして継続」）。
+    let (requested, inputs, mut failures) = validate_inputs(&files);
+
+    let mut exif_frame_config = exif_frame_config;
+    if let Some(ref mut ef) = exif_frame_config {
+        resolve_font_path(ef)?;
     }
 
-    // キャンセルフラグをリセット
+    let mut config = config;
+    let mut warnings = Vec::new();
+
+    // 不可逆な一括削除は、webview が偽装できない OS のダイアログで確認する。
+    // フロントエンドの確認ダイアログは webview 内にあるため、乗っ取られた
+    // 状態では素通りしてしまう（S6-H8）。
+    if config.delete_originals
+        && !inputs.is_empty()
+        && !confirm_delete_originals(&app_handle, &inputs)
+    {
+        config.delete_originals = false;
+        warnings.push("元ファイルの削除はキャンセルされました。変換のみ実行しました。".to_string());
+    }
+
+    if !output.exists() {
+        fs::create_dir_all(&output).map_err(|e| e.to_string())?;
+    }
+
     state.cancel_flag.store(false, Ordering::Relaxed);
 
-    let file_paths: Vec<PathBuf> = files.iter().map(PathBuf::from).collect();
     let cancel_flag = Arc::clone(&state.cancel_flag);
-    let files_clone = files.clone();
-    let app_handle_clone = app_handle.clone();
+    let batch = run_batch(
+        app_handle,
+        cancel_flag,
+        inputs,
+        output,
+        config,
+        exif_frame_config,
+    )
+    .await?;
 
-    // process_batchはrayonで並列処理するためブロッキング。
-    // Tauriのasync runtimeをブロックしないようspawn_blockingでオフロード。
-    let results = tokio::task::spawn_blocking(move || {
-        let on_progress: core::ProgressCallback = Box::new(move |current, total| -> bool {
-            let file_name = files_clone
-                .get(current.saturating_sub(1))
-                .cloned()
-                .unwrap_or_default();
+    warnings.extend(batch.warnings);
 
-            let file_name_short = Path::new(&file_name)
-                .file_name()
-                .unwrap_or_default()
-                .to_string_lossy()
-                .to_string();
+    let (results, batch_failures) = split_results(&requested, batch.results);
+    failures.extend(batch_failures);
 
-            let _ = app_handle_clone.emit(
-                "processing-progress",
-                ProgressPayload {
-                    current,
-                    total,
-                    file_name: file_name_short,
-                },
-            );
+    Ok(ProcessBatchResponse {
+        results,
+        failures,
+        warnings,
+    })
+}
 
-            !cancel_flag.load(Ordering::Relaxed)
-        });
+/// webview が渡したパスを検証し、通ったものと落ちたものに分ける
+///
+/// 戻り値の1つ目は検証を通ったパスの**要求時の表記**で、`inputs` と同じ並び。
+/// 結果の対応づけに使う。
+fn validate_inputs(files: &[String]) -> (Vec<String>, Vec<PathBuf>, Vec<ProcessFailure>) {
+    let mut requested = Vec::new();
+    let mut inputs = Vec::new();
+    let mut failures = Vec::new();
 
-        let output_path = PathBuf::from(&output);
+    for raw in files {
+        match security::readable_image(raw) {
+            Ok(path) => {
+                requested.push(raw.clone());
+                inputs.push(path);
+            }
+            Err(error) => failures.push(ProcessFailure {
+                input_path: raw.clone(),
+                error,
+            }),
+        }
+    }
+
+    (requested, inputs, failures)
+}
+
+/// バッチ結果を成功と失敗に振り分ける
+///
+/// 結果はフロントが渡してきたパス表記で返す。core が返す `input_path` は
+/// canonicalize 済みの実体パスなので、シンボリックリンク経由の画像だと
+/// 要求時の文字列と一致せず、UI 側で「どのファイルの結果か」を辿れなくなる。
+fn split_results(
+    requested: &[String],
+    results: Vec<anyhow::Result<core::ProcessResult>>,
+) -> (Vec<core::ProcessResult>, Vec<ProcessFailure>) {
+    let mut succeeded = Vec::new();
+    let mut failures = Vec::new();
+
+    for (raw, result) in requested.iter().zip(results) {
+        match result {
+            Ok(mut r) => {
+                r.input_path.clone_from(raw);
+                succeeded.push(r);
+            }
+            // キャンセルで着手すらしなかった分は「失敗」ではない。どちらにも
+            // 載せないことで、フロントが要求リストとの差分から「未処理」として
+            // 表示する（`ResultDialog`）。
+            Err(e) if format!("{:#}", e) == core::CANCELLED_ERROR => {}
+            Err(e) => failures.push(ProcessFailure {
+                input_path: raw.clone(),
+                error: format!("{:#}", e),
+            }),
+        }
+    }
+
+    (succeeded, failures)
+}
+
+/// webview が指定したフォントを検証し、実体のパスへ置き換える
+///
+/// `ExifFrameConfig` は webview が丸ごと組み立てる構造体なので、`font_path` は
+/// 画像パスと同じく境界を通す必要がある（S6-H8）。
+fn resolve_font_path(config: &mut ExifFrameConfig) -> Result<(), String> {
+    if let Some(ref raw) = config.font.font_path {
+        let font = security::readable_font(raw)?;
+        config.font.font_path = Some(font.to_string_lossy().into_owned());
+    }
+    Ok(())
+}
+
+struct BatchOutcome {
+    results: Vec<anyhow::Result<core::ProcessResult>>,
+    warnings: Vec<String>,
+}
+
+/// rayon の並列処理を tokio のワーカーから追い出して実行する
+async fn run_batch(
+    app_handle: tauri::AppHandle,
+    cancel_flag: Arc<AtomicBool>,
+    inputs: Vec<PathBuf>,
+    output: PathBuf,
+    config: core::ProcessingConfig,
+    exif_frame_config: Option<ExifFrameConfig>,
+) -> Result<BatchOutcome, String> {
+    // process_batch は rayon で並列処理するためブロッキング。
+    // Tauri の async runtime をブロックしないよう spawn_blocking でオフロードする。
+    tokio::task::spawn_blocking(move || {
+        let names: Vec<String> = inputs
+            .iter()
+            .map(|p| p.file_name().unwrap_or_default().to_string_lossy().into())
+            .collect();
+        let on_progress = progress_callback(app_handle, cancel_flag, names);
+
         // Exif アセットはバッチ全体で1回だけ構築する（画像ごとに model_map を
         // 読み直さないため）。Exif フレームを使わない場合は構築自体を行わない。
         let assets = match exif_frame_config.as_ref() {
-            Some(_) => Some(core::exif_frame::ExifAssets::load(
-                core::exif_frame::AssetDirs::default(),
-            )?),
+            Some(_) => Some(
+                exif_frame::ExifAssets::load(AssetDirs::default())
+                    .map_err(|e| format!("{:#}", e))?,
+            ),
             None => None,
         };
-        if let Some(ref a) = assets {
-            // core は eprintln! しない方針なので、提示は呼び出し元の責務。
-            // TODO(S5-F8): ProcessResult.warnings と併せて UI に出す。
-            for warning in &a.warnings {
-                eprintln!("Warning: {}", warning);
-            }
-        }
-        Ok::<_, anyhow::Error>(core::process_batch(
-            &file_paths,
-            &output_path,
+        // core は eprintln! しない方針なので、提示は呼び出し元の責務。
+        // 戻り値に載せてフロントの ResultDialog に出す（S5-F8 / S6-M15）。
+        let warnings = assets
+            .as_ref()
+            .map(|a| a.warnings.clone())
+            .unwrap_or_default();
+
+        let results = core::process_batch(
+            &inputs,
+            &output,
             &config,
             exif_frame_config.as_ref(),
             assets.as_ref(),
             Some(on_progress),
-        ))
+        );
+
+        Ok(BatchOutcome { results, warnings })
     })
     .await
     .map_err(|e| e.to_string())?
-    .map_err(|e| format!("{:#}", e))?;
+}
 
-    let mut successes = Vec::new();
-    let mut error_count = 0u32;
-    for result in results {
-        match result {
-            Ok(r) => successes.push(r),
-            Err(e) => {
-                error_count += 1;
-                eprintln!("Processing error: {}", e);
+/// 進捗をフロントへ流し、キャンセル要求を返すコールバック
+fn progress_callback(
+    app_handle: tauri::AppHandle,
+    cancel_flag: Arc<AtomicBool>,
+    file_names: Vec<String>,
+) -> core::ProgressCallback {
+    // emit が失敗すると進捗が止まったように見える。原因を追えるよう記録するが、
+    // 1件ごとに出すと壊れた状態でログが埋まるため最初の1回だけにする（S6-M15）。
+    let emit_failure_logged = AtomicBool::new(false);
+
+    Box::new(move |current, total| -> bool {
+        let file_name = file_names
+            .get(current.saturating_sub(1))
+            .cloned()
+            .unwrap_or_default();
+
+        if let Err(e) = app_handle.emit(
+            "processing-progress",
+            ProgressPayload {
+                current,
+                total,
+                file_name,
+            },
+        ) {
+            if !emit_failure_logged.swap(true, Ordering::Relaxed) {
+                eprintln!("Failed to emit processing-progress: {}", e);
             }
         }
+
+        !cancel_flag.load(Ordering::Relaxed)
+    })
+}
+
+/// 元ファイル削除の最終確認（OS ネイティブ）
+///
+/// **枚数だけでなく場所を出す。** 削除対象は入力そのものであり、入力はツリーから
+/// 自由に選ぶ設計上「許可ルート配下」には縛れない。乗っ取られた webview が
+/// ライブラリ全体を `files` に詰めても、枚数だけの文面では利用者が自分の操作との
+/// 差異を検知できない。フォルダー一覧があれば「見覚えのない場所」で気づける（S6-H8）。
+fn confirm_delete_originals(app_handle: &tauri::AppHandle, inputs: &[PathBuf]) -> bool {
+    const SHOWN_DIRS: usize = 3;
+
+    let mut dirs: Vec<String> = inputs
+        .iter()
+        .filter_map(|p| p.parent())
+        .map(|d| d.display().to_string())
+        .collect();
+    dirs.sort();
+    dirs.dedup();
+
+    let mut locations: String = dirs
+        .iter()
+        .take(SHOWN_DIRS)
+        .map(|d| format!("\n・{}", d))
+        .collect();
+    if dirs.len() > SHOWN_DIRS {
+        locations.push_str(&format!("\n・他 {} フォルダー", dirs.len() - SHOWN_DIRS));
     }
 
-    if error_count > 0 {
-        let _ = app_handle.emit("processing-error", format!("{} files failed", error_count));
+    let mut builder = app_handle
+        .dialog()
+        .message(format!(
+            "変換に成功した {} 枚の元ファイルを削除します。\nゴミ箱には入らず、元に戻せません。\n\n削除する場所:{}",
+            inputs.len(),
+            locations
+        ))
+        .title("元ファイルを削除しますか？")
+        .kind(MessageDialogKind::Warning)
+        .buttons(MessageDialogButtons::OkCancelCustom(
+            "削除する".to_string(),
+            "削除しない".to_string(),
+        ));
+
+    if let Some(window) = app_handle.get_webview_window("main") {
+        builder = builder.parent(&window);
     }
 
-    Ok(successes)
+    builder.blocking_show()
+}
+
+/// お気に入りフォルダーの保存先
+///
+/// **ファイル名は Rust 側に固定する。** store プラグインの JS API は webview から
+/// パスを受け取り、それを AppData 配下として解決するが `..` も絶対パスも
+/// 正規化しない。つまり `store:allow-load` 等を webview に与えると、
+/// `load("../../../.ssh/config.json")` の形で `security` モジュールの境界を
+/// まるごと迂回して任意の JSON を読み書きできる。capabilities から store の
+/// 権限を落とし、代わりに用途を固定したこの2コマンドだけを開ける（S6-H8）。
+const FAVORITES_STORE: &str = "favorites.json";
+const FAVORITES_KEY: &str = "favorites";
+
+#[tauri::command]
+pub fn load_favorites(app_handle: tauri::AppHandle) -> Result<Vec<String>, String> {
+    let store = app_handle
+        .store(FAVORITES_STORE)
+        .map_err(|e| e.to_string())?;
+
+    // 読み出しでは実在確認をしない。外付けドライブが外れている間だけ
+    // お気に入りが消える、という挙動になるのを避けるため。
+    // 不正な値が入り込む経路は save 側で塞いである。
+    match store.get(FAVORITES_KEY) {
+        Some(value) => serde_json::from_value(value).map_err(|e| e.to_string()),
+        None => Ok(Vec::new()),
+    }
+}
+
+#[tauri::command]
+pub fn save_favorites(app_handle: tauri::AppHandle, favorites: Vec<String>) -> Result<(), String> {
+    // 保存するのは実在するディレクトリの実体パスだけ。
+    let validated: Vec<String> = favorites
+        .iter()
+        .map(|raw| security::existing_dir(raw).map(|d| d.to_string_lossy().into_owned()))
+        .collect::<Result<_, _>>()?;
+
+    let store = app_handle
+        .store(FAVORITES_STORE)
+        .map_err(|e| e.to_string())?;
+    store.set(FAVORITES_KEY, serde_json::json!(validated));
+    store.save().map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -286,54 +530,38 @@ pub fn cancel_processing(state: tauri::State<'_, ProcessingState>) -> Result<(),
 
 #[tauri::command]
 pub async fn get_exif_info(path: String) -> Result<core::ExifInfo, String> {
-    tokio::task::spawn_blocking(move || {
-        core::read_exif_info(Path::new(&path)).map_err(|e| e.to_string())
-    })
-    .await
-    .map_err(|e| e.to_string())?
+    let file = security::readable_image(&path)?;
+    tokio::task::spawn_blocking(move || core::read_exif_info(&file).map_err(|e| e.to_string()))
+        .await
+        .map_err(|e| e.to_string())?
 }
 
-// 注: pick_folderはTauriコマンドとしては実装しない。
-// フロントエンドから@tauri-apps/plugin-dialogのopen()を直接呼び出す。
-
+/// プレビュー用の低解像度 Exif フレームを生成する
+///
+/// 縮小・描画・エンコードは core が持つ（S6-M16）。ここは境界の検証と、
+/// webview がそのまま `<img src>` に使える data URI への変換だけを行う。
 #[tauri::command]
 pub async fn render_exif_frame_preview(
     path: String,
     config: ExifFrameConfig,
     bg_color: core::BackgroundColor,
-) -> Result<String, String> {
+) -> Result<PreviewImage, String> {
+    let file = security::readable_image(&path)?;
+    let mut config = config;
+    resolve_font_path(&mut config)?;
+
     tokio::task::spawn_blocking(move || {
-        let path = std::path::Path::new(&path);
-        // EXIF Orientation を適用してから縮小する。生の image::open だと縦横が
-        // 実際の処理結果と食い違い、auto_placement が別の辺を選んでしまう。
-        let img = core::open_image_oriented(path).map_err(|e| e.to_string())?;
+        let assets =
+            exif_frame::ExifAssets::load(AssetDirs::default()).map_err(|e| format!("{:#}", e))?;
 
-        // 低解像度にリサイズ（プレビュー用）
-        let max_dim = 400u32;
-        let thumbnail = img.resize(max_dim, max_dim, image::imageops::FilterType::Triangle);
+        let base64 =
+            core::generate_exif_frame_preview_base64(&file, &config, &bg_color, &assets, 400)
+                .map_err(|e| format!("{:#}", e))?;
 
-        let exif_info = core::read_exif_info(path).unwrap_or_default();
-        let assets = exif_frame::ExifAssets::load(exif_frame::AssetDirs::default())
-            .map_err(|e| e.to_string())?;
-        for warning in &assets.warnings {
-            eprintln!("Warning: {}", warning);
-        }
-
-        let result =
-            exif_frame::render_exif_frame(&thumbnail, &exif_info, &config, &bg_color, &assets)
-                .map_err(|e| e.to_string())?;
-
-        // base64エンコード
-        let mut buf = Vec::new();
-        let mut cursor = std::io::Cursor::new(&mut buf);
-        let mut encoder = image::codecs::jpeg::JpegEncoder::new_with_quality(&mut cursor, 85);
-        encoder.encode_image(&result).map_err(|e| e.to_string())?;
-
-        use base64::Engine;
-        Ok(format!(
-            "data:image/jpeg;base64,{}",
-            base64::engine::general_purpose::STANDARD.encode(&buf)
-        ))
+        Ok(PreviewImage {
+            data_url: format!("data:image/jpeg;base64,{}", base64),
+            warnings: assets.warnings,
+        })
     })
     .await
     .map_err(|e| e.to_string())?
@@ -341,24 +569,37 @@ pub async fn render_exif_frame_preview(
 
 #[tauri::command]
 pub async fn list_presets() -> Result<Vec<ExifFrameConfig>, String> {
-    let presets_dir = dirs::config_dir().map(|d| d.join("picture-tool/presets"));
-    Ok(exif_frame::preset::list_all_presets(presets_dir.as_deref()))
+    let dirs = AssetDirs::default();
+    Ok(exif_frame::preset::list_all_presets(
+        dirs.user_presets_dir.as_deref(),
+    ))
 }
 
+/// プリセットを保存する
+///
+/// 名前もフォントも webview 由来なので、保存前に境界を通す。検証せずに書くと
+/// 不正な `font_path` が設定ファイルに焼き付き、CLI が同じプリセットを読むため
+/// webview の生存期間を越えて残る。
 #[tauri::command]
 pub async fn save_preset(config: ExifFrameConfig) -> Result<(), String> {
-    let presets_dir = dirs::config_dir()
-        .ok_or("config dir not found".to_string())?
-        .join("picture-tool/presets");
-    exif_frame::preset::save_preset(&presets_dir, &config).map_err(|e| e.to_string())
+    let dir = user_presets_dir()?;
+    let mut config = config;
+    security::preset_name(&config.name)?;
+    resolve_font_path(&mut config)?;
+    exif_frame::preset::save_preset(&dir, &config).map_err(|e| e.to_string())
 }
 
 #[tauri::command]
 pub async fn delete_preset(name: String) -> Result<(), String> {
-    let presets_dir = dirs::config_dir()
-        .ok_or("config dir not found".to_string())?
-        .join("picture-tool/presets");
-    exif_frame::preset::delete_preset(&presets_dir, &name).map_err(|e| e.to_string())
+    let dir = user_presets_dir()?;
+    let name = security::preset_name(&name)?;
+    exif_frame::preset::delete_preset(&dir, &name).map_err(|e| e.to_string())
+}
+
+fn user_presets_dir() -> Result<PathBuf, String> {
+    AssetDirs::default()
+        .user_presets_dir
+        .ok_or_else(|| "config dir not found".to_string())
 }
 
 #[tauri::command]
@@ -368,22 +609,130 @@ pub async fn list_available_fonts() -> Result<Vec<FontInfo>, String> {
         path: None,
         is_bundled: true,
     }];
-    if let Some(user_dir) = dirs::config_dir().map(|d| d.join("picture-tool/assets/fonts")) {
-        if user_dir.exists() {
-            for entry in std::fs::read_dir(&user_dir).into_iter().flatten().flatten() {
-                let path = entry.path();
-                if path.extension().is_some_and(|e| e == "ttf" || e == "otf") {
-                    fonts.push(FontInfo {
-                        display_name: format!(
-                            "User: {}",
-                            path.file_stem().unwrap_or_default().to_string_lossy()
-                        ),
-                        path: Some(path.to_string_lossy().to_string()),
-                        is_bundled: false,
-                    });
-                }
+
+    if let Some(user_dir) = AssetDirs::default().user_fonts_dir {
+        for entry in fs::read_dir(&user_dir).into_iter().flatten().flatten() {
+            let path = entry.path();
+            if path.extension().is_some_and(|e| e == "ttf" || e == "otf") {
+                fonts.push(FontInfo {
+                    display_name: format!(
+                        "User: {}",
+                        path.file_stem().unwrap_or_default().to_string_lossy()
+                    ),
+                    path: Some(path.to_string_lossy().to_string()),
+                    is_bundled: false,
+                });
             }
         }
     }
+
     Ok(fonts)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fs;
+    use std::path::Path;
+    use tempfile::TempDir;
+
+    fn as_str(path: &Path) -> String {
+        path.to_string_lossy().into_owned()
+    }
+
+    fn write_real_jpeg(path: &Path) {
+        let img = image::RgbImage::from_pixel(4, 4, image::Rgb([120, 120, 120]));
+        image::DynamicImage::ImageRgb8(img).save(path).unwrap();
+    }
+
+    fn succeeded(input_path: &str) -> core::ProcessResult {
+        core::ProcessResult {
+            input_path: input_path.to_string(),
+            output_path: "/out/photo.jpg".to_string(),
+            final_size_mb: 1.0,
+            final_quality: Some(90),
+            size_limit_exceeded: false,
+            warnings: Vec::new(),
+        }
+    }
+
+    // --- 入力の仕分け: 通らなかった1件でバッチ全体を落とさない ---
+
+    #[test]
+    fn validate_inputs_processes_the_valid_images_and_reports_the_rest() {
+        let dir = TempDir::new().unwrap();
+        let photo = dir.path().join("photo.jpg");
+        write_real_jpeg(&photo);
+        let secret = dir.path().join("id_rsa");
+        fs::write(&secret, b"-----BEGIN OPENSSH PRIVATE KEY-----").unwrap();
+        let missing = dir.path().join("gone.jpg");
+
+        let files = vec![as_str(&secret), as_str(&photo), as_str(&missing)];
+        let (requested, inputs, failures) = validate_inputs(&files);
+
+        // 通ったものだけが処理対象になり、実体のパスで渡る
+        assert_eq!(inputs, vec![fs::canonicalize(&photo).unwrap()]);
+        // 対応づけ用に、要求時の表記が同じ並びで返る
+        assert_eq!(requested, vec![as_str(&photo)]);
+        // 落ちた分は「無かったこと」にせず理由付きで返す
+        assert_eq!(failures.len(), 2);
+        assert_eq!(failures[0].input_path, as_str(&secret));
+        assert!(!failures[0].error.is_empty());
+        assert_eq!(failures[1].input_path, as_str(&missing));
+    }
+
+    #[test]
+    fn validate_inputs_handles_an_empty_selection() {
+        let (requested, inputs, failures) = validate_inputs(&[]);
+        assert!(requested.is_empty());
+        assert!(inputs.is_empty());
+        assert!(failures.is_empty());
+    }
+
+    // --- 結果の仕分け: 成功 / 失敗 / 未処理 ---
+
+    #[test]
+    fn split_results_reports_success_under_the_path_the_caller_asked_for() {
+        // core は canonicalize 済みの実体パスを返すが、UI が対応づけられるのは
+        // 自分が渡した表記だけ（シンボリックリンク経由だと両者は一致しない）
+        let requested = vec!["/photos/link.jpg".to_string()];
+        let results = vec![Ok(succeeded("/elsewhere/real.jpg"))];
+
+        let (succeeded_results, failures) = split_results(&requested, results);
+
+        assert_eq!(succeeded_results.len(), 1);
+        assert_eq!(succeeded_results[0].input_path, "/photos/link.jpg");
+        assert!(failures.is_empty());
+    }
+
+    #[test]
+    fn split_results_reports_failures_with_their_reason() {
+        let requested = vec!["/photos/broken.jpg".to_string()];
+        let results = vec![Err(anyhow::anyhow!("Failed to open image"))];
+
+        let (succeeded_results, failures) = split_results(&requested, results);
+
+        assert!(succeeded_results.is_empty());
+        assert_eq!(failures.len(), 1);
+        assert_eq!(failures[0].input_path, "/photos/broken.jpg");
+        assert!(failures[0].error.contains("Failed to open image"));
+    }
+
+    #[test]
+    fn split_results_does_not_count_cancelled_files_as_failures() {
+        let requested = vec!["/photos/a.jpg".to_string(), "/photos/b.jpg".to_string()];
+        let results = vec![
+            Ok(succeeded("/photos/a.jpg")),
+            Err(anyhow::anyhow!(core::CANCELLED_ERROR)),
+        ];
+
+        let (succeeded_results, failures) = split_results(&requested, results);
+
+        // 前提: キャンセル分も結果として並んでいる（そもそも来ていない訳ではない）
+        assert_eq!(requested.len(), 2);
+        assert_eq!(succeeded_results.len(), 1);
+        // 着手していないものは「失敗」ではない。要求リストとの差分で
+        // 「未処理」として表示させるため、どちらにも載せない。
+        assert!(failures.is_empty());
+    }
 }

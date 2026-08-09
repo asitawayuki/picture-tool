@@ -87,6 +87,8 @@
 
   // Live preview with debounce
   let debounceTimer: ReturnType<typeof setTimeout>;
+  // プレビューは設定を触るたびに再生成されるため、同じ警告を毎回出さないよう記録する
+  const reportedWarnings = new Set<string>();
   $effect(() => {
     // 依存は $effect の同期フェーズで読む必要がある。
     // 非同期コールバック内でしか参照しないと依存として追跡されない。
@@ -99,7 +101,15 @@
     debounceTimer = setTimeout(async () => {
       previewLoading = true;
       try {
-        previewSrc = await renderExifFramePreview(path, snapshot, bg);
+        const preview = await renderExifFramePreview(path, snapshot, bg);
+        previewSrc = preview.data_url;
+        // カスタム model_map の不備など。以前はバックエンドで eprintln! するだけで
+        // GUI からは見えなかった（S6-M15）。
+        for (const warning of preview.warnings) {
+          if (reportedWarnings.has(warning)) continue;
+          reportedWarnings.add(warning);
+          toast.error(warning);
+        }
       } catch (e) {
         toast.error(`プレビューの生成に失敗しました: ${describeError(e)}`);
       } finally {

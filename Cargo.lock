@@ -2775,7 +2775,6 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "clap",
- "dirs 5.0.1",
  "picture-tool-core",
  "serde_json",
 ]
@@ -2787,6 +2786,7 @@ dependencies = [
  "ab_glyph",
  "anyhow",
  "base64 0.22.1",
+ "clap",
  "dirs 5.0.1",
  "image",
  "kamadak-exif",
@@ -2805,8 +2805,6 @@ name = "picture-tool-gui"
 version = "0.1.0"
 dependencies = [
  "anyhow",
- "base64 0.22.1",
- "dirs 5.0.1",
  "image",
  "lru",
  "picture-tool-core",
@@ -2816,6 +2814,7 @@ dependencies = [
  "tauri-build",
  "tauri-plugin-dialog",
  "tauri-plugin-store",
+ "tempfile",
  "tokio",
 ]
 

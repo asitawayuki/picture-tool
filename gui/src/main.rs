@@ -1,4 +1,5 @@
 mod commands;
+mod security;
 mod state;
 mod types;
 
@@ -15,8 +16,11 @@ fn main() {
             commands::list_images,
             commands::get_thumbnail,
             commands::get_full_image,
+            commands::pick_output_folder,
             commands::process_images,
             commands::cancel_processing,
+            commands::load_favorites,
+            commands::save_favorites,
             commands::get_exif_info,
             commands::render_exif_frame_preview,
             commands::list_presets,

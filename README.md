@@ -174,3 +174,5 @@ JSON で上書きできます。`logo_match` と `lens_brand_match` は**両方�
   ]
 }
 ```
+
+claude --resume fd016f21-d8a8-41b5-abe9-f9e42f0aa240

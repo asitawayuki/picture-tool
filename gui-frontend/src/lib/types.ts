@@ -32,6 +32,26 @@ export interface ProcessResult {
   warnings: string[];
 }
 
+/** 変換できなかったファイルと理由 */
+export interface ProcessFailure {
+  input_path: string;
+  error: string;
+}
+
+export interface ProcessBatchResponse {
+  results: ProcessResult[];
+  failures: ProcessFailure[];
+  /** バッチ全体に関わる警告（アセット読み込みの不備、削除のキャンセルなど） */
+  warnings: string[];
+}
+
+/** Exif フレームのプレビュー */
+export interface PreviewImage {
+  /** <img src> にそのまま渡せる data URI */
+  data_url: string;
+  warnings: string[];
+}
+
 export interface ProgressPayload {
   current: number;
   total: number;
