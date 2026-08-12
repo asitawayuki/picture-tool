@@ -10,6 +10,7 @@
 
 | ドキュメント | 内容 |
 |---|---|
+| [specs/2026-08-12-output-width-limit-design.md](superpowers/specs/2026-08-12-output-width-limit-design.md) | **出力幅の上限指定**（`--max-width`）。pad/crop の 4:5 キャンバスを指定 px 以下に縮小 |
 | [specs/2026-03-29-exif-frame-v2-design.md](superpowers/specs/2026-03-29-exif-frame-v2-design.md) | **Exifフレーム v2**（現行）。padモード限定・2段表示・ロゴ配置 |
 | [specs/2026-03-23-gui-improvements-v2-design.md](superpowers/specs/2026-03-23-gui-improvements-v2-design.md) | GUI 改善 v2 |
 | [specs/2026-03-22-picture-tool-gui-design.md](superpowers/specs/2026-03-22-picture-tool-gui-design.md) | GUI の初期設計（3カラム構成の出典） |
