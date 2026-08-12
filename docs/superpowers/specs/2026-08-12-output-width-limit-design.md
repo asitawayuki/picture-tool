@@ -131,7 +131,8 @@ open → apply_orientation
 `w' ≥ (4k - 3)·K/k = 4K - 3K/k` となる。`k > K` より `3K/k < 3 < 4` なので
 `4K - 4 < w' ≤ 4K`、すなわち `ceil(w'/4) = K` に一意に定まる。
 縦位置（高さが `k` を決める）は `h ≥ 5k - 4` から同様に `4K/k < 4 < 5` で
-`ceil(h'/5) = K`。もう一方の辺が `k` を押し上げないことも `w ≤ 4k` から従う。
+`ceil(h'/5) = K`。もう一方の辺が `k` を押し上げないことは、縦位置なら `w ≤ 4k` から
+`w' ≤ 4K`、横位置なら `h ≤ 5k` から `h' ≤ 5K` が従うことによる。
 
 > 「元キャンバスと写真の差は最大 3px」は `k` を決める側の辺にしか言えない。
 > 縦位置の `6336×9504` はキャンバス `7604×9505` で幅の差が 1268px ある。
@@ -245,8 +246,9 @@ max_width: Option<u32>,
   切り捨てを TS 側に再実装して drift させることもない（確定サイズ表示はスナップ後の値から
   `幅 × 5/4` を出すだけになる）
 - quality モード時は**トグルを隠さず無効化し、理由を併記する**（§2 参照）
-- `gui/src/commands.rs` は**変更不要**。変換系コマンドは `core::ProcessingConfig` を
-  そのまま serde で受けており、`validate_config` も既に呼んでいる（`commands.rs:224`）
+- **変換系コマンドは変更不要**。`core::ProcessingConfig` をそのまま serde で受けており、
+  `validate_config` も既に呼んでいる（`commands.rs:224`）。
+  ただし `render_exif_frame_preview`（`commands.rs:544`）は §8 のとおり1箇所変わる
 - 新規 Tauri コマンドを追加しないため、`gui/src/security.rs` の検証対象
   （パス・フォント名・プリセット名）には触れない
 
@@ -291,7 +293,13 @@ Exif フレームのレイアウト閾値は**絶対 px** である（`layout.rs
 |---|---|---|
 | `MIN_SHORT_SIDE` | 200 | 写真の短辺がこれ未満ならフレームを描かない |
 | `EXIF_BAR_MIN_PX` | 30 | バー厚の下限 |
-| `MAX_SHRINK_RATIO` | 0.20 | これを超える写真縮小が必要ならフレームを描かない |
+| `MAX_SHRINK_RATIO` | 0.20 | これを超える写真縮小が必要ならフレームを描かない（**現状は到達不能**） |
+
+> `MAX_SHRINK_RATIO` が発火しないのは、`deficit ≤ bar` かつ縮小軸の寸法が短辺であり、
+> 短辺は `MIN_SHORT_SIDE = 200` 以上だからである。縮小率は最大でも
+> `bar / short = max(0.06, 30/200) = 0.15 < 0.20` にしかならない。
+> **したがって `skip_exif` に落ちる経路は実質 `MIN_SHORT_SIDE` の1本だけ**である。
+> この定数の整理自体は本設計のスコープ外とする。
 
 したがって前段縮小の結果は「同じ絵の縮小版」にはならない。例えば `9504×1600` の
 パノラマに `max_width=1080` を指定すると写真が `1080×182` になり、短辺 200px 未満で
@@ -319,15 +327,39 @@ CLI は stderr、GUI は `ResultDialog` に**追加実装なしで**出る。
 `max_width` 指定の有無にかかわらず `skip_exif` は警告対象にする。小さい画像で黙って
 フレームが消える既存の挙動も同時に解消される。
 
-**ただし surface するのは `process_image` 経由だけとし、
-`generate_exif_frame_preview_base64` が受け取った警告は捨てる。** プレビューは長辺
-400px 固定で描くため（§6）、パノラマなどは実出力にフレームが出る場合でも
-プレビュー側では常に `skip_exif` に落ちる。ここを流すと偽陽性の警告になる。
+### 捨てる判断は core ではなく境界で行う
 
-`render_exif_frame` は CLAUDE.md の Core API 表に載っているため、そちらの更新も必要。
-呼び出し元は production が2箇所（`process_image` と
-`generate_exif_frame_preview_base64`）、加えて
-`core/tests/exif_frame_v2_integration.rs` に6箇所ある。
+プレビューは長辺 400px 固定で描くため（§6）、パノラマなどは実出力にフレームが出る
+場合でもプレビュー側では常に `skip_exif` に落ちる。この警告を GUI に出すと偽陽性になる。
+
+**この「出さない」判断を core に置いてはいけない。** 根拠（プレビューが 400px 固定である
+こと）は GUI 固有の事情であり、境界側の知識である。core に埋めると
+「core は判断せず `warnings` に積んで呼び出し元へ渡す」（S3-H1/H2 で確立）と逆向きになり、
+しかも `generate_exif_frame_preview_base64` を core に置いた理由そのもの
+（**CLI に `--preview` 相当を作れるようにする** / S6-M16）を裏切る。将来 CLI プレビューを
+作ったときに理由の分からない握り潰しが残る。
+
+したがって:
+
+- `generate_exif_frame_preview_base64` も警告を返す（戻り値を base64 単体から
+  `{ base64, warnings }` へ変更）
+- `render_exif_frame_preview`（`commands.rs:544`）が `PreviewImage.warnings` を組み立てる
+  際に、フレーム描画由来の警告を**載せない**
+
+`PreviewImage.warnings` は既に `assets.warnings` を運んでいる既存チャネル
+（`types.ts:48-53`）なので、フロントエンド側の追加実装は不要。フレーム描画由来の警告は
+現状 `skip_exif` のものしか無いため、**文字列によるフィルタリングも要らない**
+（`assets.warnings` に連結しないだけで済む）。
+
+### 波及範囲
+
+`render_exif_frame` と `generate_exif_frame_preview_base64` はどちらも CLAUDE.md の
+Core API 表に載っているため、そちらの更新も必要。
+
+| 呼び出し元 | 箇所 |
+|---|---|
+| production | `process_image` / `generate_exif_frame_preview_base64` / `commands.rs:544` |
+| テスト | `core/tests/exif_frame_v2_integration.rs` に6箇所 |
 
 ## 9. テスト
 
@@ -344,8 +376,8 @@ CLI は stderr、GUI は `ResultDialog` に**追加実装なしで**出る。
 | 6 | quality モードでは出力寸法が変わらない |
 | 7 | Exif フレーム + `max_width` → キャンバスが厳密に目標サイズ。**前提条件として「`skip_exif` に落ちていない＝バーが実際に描かれている」も同時に assert する** |
 | 8 | `validate_config`: `Some(3)` と `Some(20001)` はエラー / `Some(4)` と `Some(20000)` は OK |
-| 9 | `9504×1600` + `max_width=1080` → フレームが消えたことが `ProcessResult.warnings` に載る |
-| 10 | `calculate_pad_exif_layout` が返すキャンバスは常に `fit_to_4_5(元写真)` 以下（全分岐 = 余白十分 / 縮小して収まる / 拡張 / `skip_exif`） |
+| 9 | `2376×400` + `max_width=1080` → 前段で写真が `1080×182` になり短辺 200 未満。フレームが消えたことが `ProcessResult.warnings` に載る |
+| 10 | `calculate_pad_exif_layout` が返すキャンバスは常に `fit_to_4_5(元写真)` 以下（全4分岐） |
 
 7 の前提条件 assert は過去に踏んだ罠への対策である。S4 で「重ならないこと」を検査する
 テストが、そもそも検査対象の状況を作れておらず、バグを入れ直しても green のままだった。
@@ -356,6 +388,34 @@ CLI は stderr、GUI は `ResultDialog` に**追加実装なしで**出る。
 10 は §4 の「pad では最終ステップが no-op」を支える不変条件そのものである。
 記録として残すだけでは将来のレイアウト変更で黙って壊れるので、テストで固定する。
 4分岐すべてを通る入力を用意し、**どの分岐に入ったかも assert する**（7 と同じ理由）。
+
+### #10 の witness と分岐の判別方法
+
+「縮小して収まった」分岐は素直に探しても見つかりにくい。バー厚は縮小前の短辺から
+一度だけ決まるのに対し、キャンバスは `k` の切り上げで決まるため、この分岐に入るには
+**縮小しない側の辺が `k` を決めている**必要がある。witness 無しで着手すると
+「到達不能」と判断してテストを落とす結果になりやすく、それは #7 の注記が戒めている
+S4 の罠の再演になる。**検証済みの入力を先に固定しておく。**
+
+| 分岐 | witness | 経過 |
+|---|---|---|
+| 余白十分 | `1200×800` | Bottom / bar 48 / canvas `1200×1500` / `pad_h = 700 ≥ 48` |
+| 縮小して収まった | `500×660` | Right / bar 30 / canvas `528×660` / `available 28 < 30` → `deficit 2` → 写真 `498×657` → `new_available 30 ≥ 30` |
+| キャンバス拡張 | `400×501` | Right / bar 30 / `available 4 < 30` → `deficit 26` → 写真 `374×468` → `new_available 2 < 30` → 拡張して `404×505` |
+| `skip_exif` | `150×100` | 短辺 100 < `MIN_SHORT_SIDE` |
+
+`PadExifLayout` には `skip_exif` 以外の分岐フラグが無く、キャンバス値は分岐をまたいで
+一致しうる（`500×660` と `400×501` はどちらも `fit_to_4_5(元写真)` を返す）。
+判別は次の2軸の組み合わせで行う。
+
+| 判定 | 条件 |
+|---|---|
+| 写真を縮小したか | `layout.photo_width < 入力幅` |
+| キャンバスを拡張したか | `(canvas_w, canvas_h) != fit_to_4_5(layout.photo_width, layout.photo_height)` |
+
+`400×501` は canvas `404×505` に対し `fit_to_4_5(374, 468) = 376×470` なので
+「縮小あり・拡張あり」、`500×660` は canvas `528×660` が
+`fit_to_4_5(498, 657) = 528×660` と一致するので「縮小あり・拡張なし」と分かる。
 
 ## 10. 完了条件
 
