@@ -20,3 +20,6 @@ gui/gen/
 
 # Playwright MCP の一時出力
 .playwright-mcp/
+
+# レビューの下書きなど一時ファイル
+docs/tmp/
