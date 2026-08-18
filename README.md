@@ -47,6 +47,9 @@ cargo run -p picture-tool -- -i ./photos -o ./output --delete-originals
 # 品質とサイズ上限を指定
 cargo run -p picture-tool -- -i ./photos -o ./output -q 95 --max-size 10
 
+# 出力の画素数を抑える（4:5 キャンバスの幅を 1080px 以下に。crop / pad のみ）
+cargo run -p picture-tool -- -i ./photos -o ./output -m pad --max-width 1080
+
 # Exifフレームを付ける（pad モード限定。他モードでは警告を出して無視される）
 cargo run -p picture-tool -- -i ./photos -o ./output -m pad -e
 
@@ -79,6 +82,7 @@ make dev
 | `--bg-color` | `-b` | `white` | `white`, `black` |
 | `--quality` | `-q` | `90` | 初期JPEG品質 (1-100) |
 | `--max-size` | | `8` | 最大ファイルサイズ (MB, 1-1024) |
+| `--max-width` | | (無制限) | 出力4:5キャンバスの幅の上限 (px, 4-20000)。`crop` / `pad` 限定 |
 | `--delete-originals` | | `false` | 変換後に元ファイルを削除 |
 | `--exif-frame` | `-e` | `false` | Exifフレームを付加（`--mode pad` 限定） |
 | `--preset` | `-p` | `default` | 使用するプリセット名 |

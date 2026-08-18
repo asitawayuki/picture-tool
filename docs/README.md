@@ -19,6 +19,7 @@
 
 | ドキュメント | 内容 |
 |---|---|
+| [plans/2026-08-12-output-width-limit.md](superpowers/plans/2026-08-12-output-width-limit.md) | **出力幅の上限指定**（`--max-width`）の実装計画と実施メモ |
 | [plans/2026-08-04-full-codebase-review-fixes.md](superpowers/plans/2026-08-04-full-codebase-review-fixes.md) | **全体レビュー修正（S1〜S7）**。セッションごとの判断・受け入れた残リスク・検証結果 |
 | [plans/2026-03-29-exif-frame-v2.md](superpowers/plans/2026-03-29-exif-frame-v2.md) | Exifフレーム v2 の実装計画 |
 | [plans/2026-03-24-full-codebase-review-fixes.md](superpowers/plans/2026-03-24-full-codebase-review-fixes.md) | 前回の全体レビュー修正 |

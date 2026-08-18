@@ -59,6 +59,7 @@ picture-tool --input ./photos --output ./out --mode crop --quality 90 --max-size
 | `--bg-color` | `-b` | `white` | パディング時の背景色: `white`, `black` |
 | `--quality` | `-q` | `90` | 初期JPEG品質 (1-100) |
 | `--max-size` | | `8` | 最大ファイルサイズ (MB, 1-1024) |
+| `--max-width` | | (無制限) | 出力4:5キャンバス幅の上限 (px, 4-20000)。**crop / pad 限定** |
 | `--delete-originals` | | `false` | 変換完了後に元ファイルを削除 |
 | `--exif-frame` | `-e` | `false` | Exifフレームを付加（**padモード限定**） |
 | `--preset` | `-p` | `default` | Exifフレームのプリセット名 |
@@ -69,6 +70,13 @@ picture-tool --input ./photos --output ./out --mode crop --quality 90 --max-size
 - **crop** - 4:5に中央クロップ
 - **pad** - 4:5にパディング（背景色指定可）
 - **quality** - アスペクト比変換なし、サイズ制限のみ適用
+
+### 出力幅の上限（`--max-width`）
+- **crop と pad 限定**。quality モードでは警告を出して無視する（4:5 に変換しないため
+  「幅」で長辺を縛れない）
+- 実効値は 4 の倍数へ**切り捨て**（1002 → 1000）。切り上げると指定値を超えてしまう
+- **上限であって目標ではない**。元がそれより小さければ拡大しない
+- 設計と算術的な導出は [`docs/superpowers/specs/2026-08-12-output-width-limit-design.md`](./docs/superpowers/specs/2026-08-12-output-width-limit-design.md)
 
 ### Exifフレーム（v2）
 - **padモード限定**。他モードでは警告を出して無視する（余白が無いため描画できない）
@@ -93,6 +101,13 @@ picture-tool --input ./photos --output ./out --mode crop --quality 90 --max-size
 `ExifAssets` は**バッチの前に1回だけ**構築して使い回す（画像ごとに作るとモデルマップを
 毎回読み直す）。core は `eprintln!` せず、利用者に伝えるべき事象は `ProcessResult.warnings`
 に積んで呼び出し元へ渡す。
+
+`render_exif_frame` は `ExifFrameOutput { image, warnings }` を、
+`generate_exif_frame_preview_base64` は `ExifFramePreview { base64, warnings }` を返す。
+どちらも `warnings` には「写真が小さすぎて Exif フレームを描けなかった」等が載る。
+**GUI のプレビューはこの warnings を利用者に出さない**（プレビューは長辺 400px 固定で、
+実出力ではフレームが出る写真でも `skip_exif` に落ちるため）。捨てる判断は core ではなく
+境界（`gui/src/commands.rs`）の責務。
 
 ## GUI
 
