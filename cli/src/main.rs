@@ -33,6 +33,10 @@ struct Args {
     #[arg(long, default_value = "8", value_parser = clap::value_parser!(u64).range(1..=1024))]
     max_size: u64,
 
+    /// 出力4:5キャンバスの幅の上限 (px)。無指定なら元の画素数を保つ
+    #[arg(long, value_parser = clap::value_parser!(u32).range(4..=20000))]
+    max_width: Option<u32>,
+
     /// 出力先フォルダー
     #[arg(short, long, default_value = "./")]
     output: PathBuf,
@@ -75,10 +79,28 @@ fn main() -> Result<()> {
         quality: args.quality,
         max_size_mb: args.max_size as usize,
         delete_originals: args.delete_originals,
-        max_width: None,
+        max_width: args.max_width,
     };
 
     core::validate_config(&config)?;
+
+    // 上限を指定したのに効いていない、を黙って通さない。core は eprintln! しないので
+    // 起動時に1回だけここで出す（画像ごとに出すと同じ文言が枚数分並ぶ / spec §3, §5）。
+    if let Some(max_width) = args.max_width {
+        if config.mode == ConversionMode::Quality {
+            eprintln!("Warning: --max-width is only supported with --mode crop or pad. Ignoring.");
+        } else {
+            // 4 の倍数へ切り捨てる。切り上げると指定値を超えてしまう。
+            let effective = max_width / 4 * 4;
+            if effective != max_width {
+                eprintln!(
+                    "Warning: --max-width {} is rounded down to {} \
+                     (the output canvas width is always a multiple of 4).",
+                    max_width, effective
+                );
+            }
+        }
+    }
 
     let exif_frame_requested = if args.exif_frame && config.mode != ConversionMode::Pad {
         eprintln!("Warning: --exif-frame is only supported with --mode pad. Ignoring.");
