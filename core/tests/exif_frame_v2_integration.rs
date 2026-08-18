@@ -189,6 +189,7 @@ fn unloadable_font_falls_back_to_pad_with_a_warning() {
         quality: 85,
         max_size_mb: 8,
         delete_originals: false,
+        max_width: None,
     };
     let ef_config = ExifFrameConfig {
         font: FontConfig {
@@ -231,6 +232,7 @@ fn crop_mode_ignores_exif_frame_config() {
         quality: 85,
         max_size_mb: 8,
         delete_originals: false,
+        max_width: None,
     };
 
     let result = process_image(
@@ -265,6 +267,7 @@ fn quality_mode_ignores_exif_frame_config() {
         quality: 90,
         max_size_mb: 8,
         delete_originals: false,
+        max_width: None,
     };
 
     let result = process_image(

@@ -53,6 +53,13 @@ pub struct ProcessingConfig {
     pub quality: u8,
     pub max_size_mb: usize,
     pub delete_originals: bool,
+    /// 出力 4:5 キャンバスの幅の上限 (px)。None なら無制限（元の画素数を保つ）。
+    /// 実効値は 4 の倍数に切り捨てられる。quality モードでは無視される。
+    ///
+    /// `#[serde(default)]` は GUI から来る JSON にこのフィールドが無くても
+    /// デシリアライズが壊れないようにするため。
+    #[serde(default)]
+    pub max_width: Option<u32>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -242,6 +249,13 @@ pub fn validate_config(config: &ProcessingConfig) -> Result<()> {
     }
     if config.max_size_mb == 0 {
         anyhow::bail!("max_size_mb must be at least 1");
+    }
+    // 上限そのものが壊れていると `k * 5` が u32 で溢れる。
+    // 20000 は 20000x25000 の RGBA キャンバス（約 2GB）というメモリ側の線。
+    if let Some(max_width) = config.max_width {
+        if !(4..=20000).contains(&max_width) {
+            anyhow::bail!("max_width must be between 4 and 20000");
+        }
     }
     Ok(())
 }
@@ -688,6 +702,7 @@ mod tests {
             quality: 90,
             max_size_mb: 8,
             delete_originals: false,
+            max_width: None,
         }
     }
 
@@ -1632,5 +1647,64 @@ mod tests {
             !collected.skipped.is_empty(),
             "走査失敗が呼び出し元へ一切伝わっていない"
         );
+    }
+
+    // =========================================================
+    // max_width: 範囲検証と serde 互換（spec §7 / §9 #8）
+    // =========================================================
+
+    /// 仕様: 上限の指定は 4..=20000 px。
+    /// 下限 4 はキャンバス幅が 4 の倍数であることの最小値、
+    /// 上限 20000 は 20000x25000 の RGBA キャンバスが約 2GB に達するという実メモリ上の線。
+    #[test]
+    fn validate_config_accepts_max_width_boundaries() {
+        let mut config = test_config();
+        config.max_width = Some(4);
+        assert!(validate_config(&config).is_ok(), "下限 4 は有効な指定");
+        config.max_width = Some(20000);
+        assert!(validate_config(&config).is_ok(), "上限 20000 は有効な指定");
+        config.max_width = None;
+        assert!(
+            validate_config(&config).is_ok(),
+            "無指定は無制限であって不正ではない"
+        );
+    }
+
+    #[test]
+    fn validate_config_rejects_max_width_outside_the_supported_range() {
+        let mut config = test_config();
+        config.max_width = Some(3);
+        assert!(validate_config(&config).is_err(), "3 は下限未満");
+        config.max_width = Some(20001);
+        assert!(validate_config(&config).is_err(), "20001 は上限超過");
+    }
+
+    /// 仕様: GUI から来る JSON に `max_width` が無くてもデシリアライズは壊れない。
+    /// 無指定は「無制限」（従来どおり原寸）を意味する（spec §3）。
+    #[test]
+    fn processing_config_defaults_max_width_to_none_when_absent() {
+        let json = r#"{
+            "mode": "pad",
+            "bg_color": "black",
+            "quality": 75,
+            "max_size_mb": 4,
+            "delete_originals": true
+        }"#;
+        let config: ProcessingConfig = serde_json::from_str(json).unwrap();
+        assert_eq!(config.max_width, None);
+    }
+
+    #[test]
+    fn processing_config_reads_max_width_from_frontend_json() {
+        let json = r#"{
+            "mode": "pad",
+            "bg_color": "white",
+            "quality": 90,
+            "max_size_mb": 8,
+            "delete_originals": false,
+            "max_width": 1080
+        }"#;
+        let config: ProcessingConfig = serde_json::from_str(json).unwrap();
+        assert_eq!(config.max_width, Some(1080));
     }
 }

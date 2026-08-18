@@ -75,6 +75,7 @@ fn main() -> Result<()> {
         quality: args.quality,
         max_size_mb: args.max_size as usize,
         delete_originals: args.delete_originals,
+        max_width: None,
     };
 
     core::validate_config(&config)?;
