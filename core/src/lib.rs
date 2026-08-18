@@ -324,6 +324,27 @@ pub fn process_image(
         .with_context(|| format!("Failed to open image: {}", input_path.display()))?;
     let img = apply_orientation(img, exif.orientation);
 
+    // 出力キャンバス幅の上限。quality モードはアスペクト比を変えないため対象外
+    // （「幅」を指定しても縦写真の長辺を縛れない / spec §2）。
+    let target = match config.mode {
+        ConversionMode::Quality => None,
+        _ => target_canvas(config.max_width),
+    };
+
+    // 前段: pad は巨大な RGBA キャンバスを確保してから文字とロゴを描くため、
+    // その前に写真を目標ボックスへ縮小してメモリを抑える。crop に入れないのは、
+    // 切り落として捨てる画素まで Lanczos3 で再サンプルすることになるため
+    // （crop → 最終縮小の順の方が安く、丸めも一度で済む / spec §4）。
+    // 縮小方向にしか働かない: ガードを満たさなければ何もしない。
+    let img = match (target, config.mode) {
+        (Some((target_w, target_h)), ConversionMode::Pad)
+            if exif_frame::layout::fit_to_4_5(img.width(), img.height()).0 > target_w =>
+        {
+            img.resize(target_w, target_h, image::imageops::FilterType::Lanczos3)
+        }
+        _ => img,
+    };
+
     let converted = match config.mode {
         ConversionMode::Crop => convert_aspect_ratio_crop(img),
         ConversionMode::Pad => {
@@ -349,6 +370,16 @@ pub fn process_image(
             }
         }
         ConversionMode::Quality => img,
+    };
+
+    // 最終: crop には前段が無いのでここがすべてを担う。pad では no-op になるが、
+    // それはレイアウト実装に依存した不変条件なので、契約としてモードを問わず適用する。
+    // 比較だけなので効いていないときの実行コストは無い（spec §4）。
+    let converted = match target {
+        Some((target_w, target_h)) if converted.width() > target_w => {
+            converted.resize_exact(target_w, target_h, image::imageops::FilterType::Lanczos3)
+        }
+        _ => converted,
     };
 
     let max_size_bytes = config.max_size_mb * 1024 * 1024;
@@ -516,6 +547,19 @@ pub fn generate_full_image_base64(path: &Path, max_width: u32, max_height: u32) 
 }
 
 // --- プライベートヘルパー ---
+
+/// 目標キャンバスサイズ。キャンバスは常に k*4 × k*5（S4 で確立した不変条件）。
+///
+/// 丸めは切り捨てのみ。切り上げて 1002 → 1004 になったら「指定値を超えない」という
+/// 機能の目的を果たさない。
+///
+/// 範囲チェックの本線は `validate_config`（4..=20000）。`.max(1)` はそれを通さずに
+/// core を直接使う利用者への安全網で、目標が 0x0 になって `resize_exact` が
+/// 壊れるのを release ビルドでも防ぐ。`debug_assert!` では release で消える。
+fn target_canvas(max_width: Option<u32>) -> Option<(u32, u32)> {
+    let k = (max_width? / 4).max(1); // 切り捨て
+    Some((k * 4, k * 5))
+}
 
 /// 4:5のアスペクト比に変換 (中央クロップ)
 fn convert_aspect_ratio_crop(img: DynamicImage) -> DynamicImage {
@@ -1754,5 +1798,99 @@ mod tests {
         }"#;
         let config: ProcessingConfig = serde_json::from_str(json).unwrap();
         assert_eq!(config.max_width, Some(1080));
+    }
+
+    // =========================================================
+    // max_width: 出力キャンバス幅の上限（spec §9 #1〜#4, #6）
+    // =========================================================
+
+    /// テスト用: max_width つきの pad / crop 設定
+    fn config_with_max_width(mode: ConversionMode, max_width: u32) -> ProcessingConfig {
+        ProcessingConfig {
+            mode,
+            max_width: Some(max_width),
+            ..test_config()
+        }
+    }
+
+    /// 指定サイズの画像を1枚処理し、出力の (幅, 高さ) を返す
+    fn process_and_measure(w: u32, h: u32, config: &ProcessingConfig) -> (u32, u32) {
+        let dir = tempfile::tempdir().unwrap();
+        let out = tempfile::tempdir().unwrap();
+        let input = dir.path().join(format!("in_{}x{}.jpg", w, h));
+        create_test_image(&input, w, h);
+        let result = process_image(&input, out.path(), config, None, None).unwrap();
+        image::open(&result.output_path).unwrap().dimensions()
+    }
+
+    /// 仕様: 目標より大きい入力に対しては、pad の出力は目標幅ちょうどに着地する（#1）。
+    /// 横位置・縦位置の両方を見る（spec §4 の導出は k を決める辺で場合分けしている）。
+    #[test]
+    fn pad_with_max_width_lands_exactly_on_the_target_canvas() {
+        let config = config_with_max_width(ConversionMode::Pad, 1080);
+        for (w, h) in [(3000, 2000), (2000, 3000)] {
+            let (out_w, out_h) = process_and_measure(w, h, &config);
+            assert_eq!(
+                (out_w, out_h),
+                (1080, 1350),
+                "{}x{} + max_width=1080 は 1080x1350 になるべき",
+                w,
+                h
+            );
+            assert_eq!(out_w * 5, out_h * 4, "canvas must be exactly 4:5");
+        }
+    }
+
+    /// 仕様: crop も同じ契約。crop には前段が無く、最終リサイズだけが上限を保証する（#2）。
+    #[test]
+    fn crop_with_max_width_lands_exactly_on_the_target_canvas() {
+        let config = config_with_max_width(ConversionMode::Crop, 1080);
+        for (w, h) in [(3000, 2000), (2000, 3000)] {
+            let (out_w, out_h) = process_and_measure(w, h, &config);
+            assert_eq!(
+                (out_w, out_h),
+                (1080, 1350),
+                "{}x{} + max_width=1080 は 1080x1350 になるべき",
+                w,
+                h
+            );
+            assert_eq!(out_w * 5, out_h * 4, "canvas must be exactly 4:5");
+        }
+    }
+
+    /// 仕様: 指定値は上限であって目標ではない。元が小さければ拡大しない（#3）。
+    /// 契約は不等式なので、ここでは等値を要求しない。
+    #[test]
+    fn max_width_never_upscales_a_smaller_image() {
+        // pad: 800x533 の 4:5 キャンバスは 800x1000 で、上限 1080 に既に収まっている
+        let (w, h) =
+            process_and_measure(800, 533, &config_with_max_width(ConversionMode::Pad, 1080));
+        assert_eq!((w, h), (800, 1000), "上限より小さい入力は引き伸ばされない");
+
+        // crop: 中央クロップの結果も元の高さを保ったまま
+        let (w, h) =
+            process_and_measure(800, 533, &config_with_max_width(ConversionMode::Crop, 1080));
+        assert_eq!((w, h), (426, 533), "crop も拡大されない");
+    }
+
+    /// 仕様: 4 の倍数でない指定は切り捨てる。切り上げると指定値を超えてしまう（#4）。
+    #[test]
+    fn max_width_is_rounded_down_to_a_multiple_of_four() {
+        let (w, h) = process_and_measure(
+            3000,
+            2000,
+            &config_with_max_width(ConversionMode::Pad, 1002),
+        );
+        assert_eq!((w, h), (1000, 1250), "1002 は 1000 に切り捨てられる");
+        assert!(w <= 1002, "実効値が指定値を超えてはならない");
+    }
+
+    /// 仕様: quality モードは 4:5 に変換しないため max_width の対象外（#6）。
+    /// 「幅」を指定しても縦写真では長辺が幅*5/4 を大きく超え、上限の意味を持たない。
+    #[test]
+    fn quality_mode_ignores_max_width() {
+        let config = config_with_max_width(ConversionMode::Quality, 1080);
+        let (w, h) = process_and_measure(1600, 900, &config);
+        assert_eq!((w, h), (1600, 900), "quality モードでは寸法が変わらない");
     }
 }
