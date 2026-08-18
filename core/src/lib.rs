@@ -356,7 +356,11 @@ pub fn process_image(
                     &config.bg_color,
                     assets,
                 ) {
-                    Ok(framed) => framed,
+                    Ok(framed) => {
+                        // core は自ら出力しない。フレームを諦めた等の事象は呼び出し元へ運ぶ。
+                        warnings.extend(framed.warnings);
+                        framed.image
+                    }
                     Err(e) => {
                         warnings.push(format!(
                             "Exif frame failed, falling back to pad only: {}",
@@ -482,6 +486,21 @@ pub fn generate_thumbnail_base64(path: &Path, max_dimension: u32) -> Result<Stri
     Ok(base64::engine::general_purpose::STANDARD.encode(&jpeg_bytes))
 }
 
+/// `generate_exif_frame_preview_base64` の結果
+#[derive(Debug)]
+pub struct ExifFramePreview {
+    /// data URI の prefix を含まない生の base64 JPEG
+    pub base64: String,
+    /// フレーム描画由来の警告。
+    ///
+    /// **GUI はこれを利用者に出さない。** プレビューは長辺 400px 固定なので、
+    /// 実出力ではフレームが出る写真でも `skip_exif` に落ちて偽陽性になる。
+    /// その判断は GUI 固有の事情なので境界（`gui/src/commands.rs`）が行う。
+    /// core 側で握り潰すと、将来 CLI プレビューを作ったときに理由の分からない
+    /// 握り潰しが残る（spec §8）。
+    pub warnings: Vec<String>,
+}
+
 /// Exifフレームのプレビューをbase64エンコードされたJPEG文字列として生成
 ///
 /// GUI 専用ではなく core に置く。以前は「縮小 → 描画 → JPEG → base64」の一連が
@@ -493,7 +512,7 @@ pub fn generate_exif_frame_preview_base64(
     bg_color: &BackgroundColor,
     assets: &exif_frame::ExifAssets,
     max_dimension: u32,
-) -> Result<String> {
+) -> Result<ExifFramePreview> {
     use base64::Engine as _;
     let max_dimension = max_dimension.clamp(1, 1024);
 
@@ -508,9 +527,12 @@ pub fn generate_exif_frame_preview_base64(
 
     let exif = read_exif_info(path).unwrap_or_default();
     let framed = exif_frame::render_exif_frame(&thumbnail, &exif, config, bg_color, assets)?;
-    let jpeg_bytes = encode_jpeg_rgb(&framed.to_rgb8(), 85)?;
+    let jpeg_bytes = encode_jpeg_rgb(&framed.image.to_rgb8(), 85)?;
 
-    Ok(base64::engine::general_purpose::STANDARD.encode(&jpeg_bytes))
+    Ok(ExifFramePreview {
+        base64: base64::engine::general_purpose::STANDARD.encode(&jpeg_bytes),
+        warnings: framed.warnings,
+    })
 }
 
 /// 画像ファイルの表示上の (幅, 高さ) を返す（デコードせずヘッダのみ読む）

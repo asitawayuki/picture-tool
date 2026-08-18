@@ -70,7 +70,8 @@ fn pad_exif_landscape_produces_4_5() {
         &BackgroundColor::Black,
         &default_assets(),
     )
-    .unwrap();
+    .unwrap()
+    .image;
     assert_exactly_4_5(&result, "landscape 1200x800");
 }
 
@@ -85,7 +86,8 @@ fn pad_exif_portrait_produces_4_5() {
         &BackgroundColor::White,
         &default_assets(),
     )
-    .unwrap();
+    .unwrap()
+    .image;
     assert_exactly_4_5(&result, "portrait 800x1200");
 }
 
@@ -100,7 +102,8 @@ fn pad_exif_already_4_5_still_works() {
         &BackgroundColor::Black,
         &default_assets(),
     )
-    .unwrap();
+    .unwrap()
+    .image;
     assert_exactly_4_5(&result, "already 4:5 800x1000");
 }
 
@@ -131,7 +134,8 @@ fn pad_exif_produces_exact_4_5_for_non_round_sizes() {
                 &BackgroundColor::Black,
                 &assets,
             )
-            .unwrap();
+            .unwrap()
+            .image;
             assert_exactly_4_5(&result, &format!("{}x{} position={:?}", w, h, position));
         }
     }
@@ -166,7 +170,8 @@ fn tiny_image_skips_exif_but_still_becomes_4_5() {
         &BackgroundColor::Black,
         &default_assets(),
     )
-    .unwrap();
+    .unwrap()
+    .image;
     assert_exactly_4_5(&result, "tiny 150x100 (skip_exif path)");
     assert!(
         result.width() >= 150 && result.height() >= 100,
@@ -315,7 +320,8 @@ fn exif_frame_preview_is_exactly_4_5() {
         &default_assets(),
         400,
     )
-    .expect("preview generation must succeed");
+    .expect("preview generation must succeed")
+    .base64;
 
     let preview = decode_preview(&base64);
     let (w, h) = (preview.width(), preview.height());
@@ -342,7 +348,8 @@ fn exif_frame_preview_fits_within_the_requested_size() {
         &default_assets(),
         400,
     )
-    .expect("preview generation must succeed");
+    .expect("preview generation must succeed")
+    .base64;
 
     let preview = decode_preview(&base64);
     // Exif バーのぶんだけ元画像より大きくなるが、桁が変わるほどではない
@@ -368,4 +375,106 @@ fn exif_frame_preview_rejects_an_unreadable_file() {
         400,
     )
     .is_err());
+}
+
+// =========================================================
+// max_width と Exif フレームの相互作用（spec §8 / §9 #7, #9）
+// =========================================================
+
+/// テスト用: pad + Exif フレーム + max_width の設定
+fn pad_exif_config(max_width: Option<u32>) -> ProcessingConfig {
+    ProcessingConfig {
+        mode: ConversionMode::Pad,
+        bg_color: BackgroundColor::Black,
+        quality: 85,
+        max_size_mb: 8,
+        delete_originals: false,
+        max_width,
+    }
+}
+
+/// 仕様: Exif フレームつきでも出力キャンバスは目標サイズちょうどに着地する（#7）。
+///
+/// **前提条件として「フレームが実際に描かれている」ことも確かめる。**
+/// skip_exif に落ちていると、この検査は「フレームを描かなかったから寸法が合った」
+/// だけで green になり、何も守らない（S4 で踏んだ罠。#9 が skip 時の警告を
+/// 固定しているので、警告が無いことがフレーム描画の witness になる）。
+#[test]
+fn exif_frame_with_max_width_lands_exactly_on_the_target_canvas() {
+    let tmp = TempDir::new().unwrap();
+    let input = write_test_jpeg(&tmp, 3000, 2000, "framed.jpg");
+
+    let result = process_image(
+        &input,
+        tmp.path(),
+        &pad_exif_config(Some(1080)),
+        Some(&ExifFrameConfig::default()),
+        Some(&default_assets()),
+    )
+    .expect("pad + exif frame + max_width must succeed");
+
+    // 前提条件: フレームが省略されていない
+    assert!(
+        !result
+            .warnings
+            .iter()
+            .any(|w| w.contains("Exif frame skipped")),
+        "前提が崩れている: フレームが描かれていないので寸法の検査に意味が無い ({:?})",
+        result.warnings
+    );
+
+    let out = image::open(&result.output_path).unwrap();
+    assert_eq!(
+        (out.width(), out.height()),
+        (1080, 1350),
+        "max_width=1080 の出力は 1080x1350"
+    );
+    assert_exactly_4_5(&out, "framed output with max_width");
+}
+
+/// 仕様: 縮小の結果フレームが描けなくなったら、そのことを呼び出し元へ伝える（#9）。
+///
+/// 2376x400 のパノラマに max_width=1080 を指定すると写真が 1080x182 になり、
+/// 短辺が MIN_SHORT_SIDE(200) を割ってフレームが消える。
+/// max_width 無しなら短辺 400 でフレームは出るので、**この引き金は本機能が
+/// 新設するもの**である。同じ入力の指定なし版を並べて、それを固定する。
+#[test]
+fn a_frame_dropped_by_the_width_limit_is_reported_in_warnings() {
+    let tmp = TempDir::new().unwrap();
+    let input = write_test_jpeg(&tmp, 2376, 400, "panorama.jpg");
+
+    let without_limit = process_image(
+        &input,
+        tmp.path(),
+        &pad_exif_config(None),
+        Some(&ExifFrameConfig::default()),
+        Some(&default_assets()),
+    )
+    .expect("pad + exif frame must succeed");
+    assert!(
+        !without_limit
+            .warnings
+            .iter()
+            .any(|w| w.contains("Exif frame skipped")),
+        "前提が崩れている: 上限なしでもフレームが出ていない ({:?})",
+        without_limit.warnings
+    );
+
+    let with_limit = process_image(
+        &input,
+        tmp.path(),
+        &pad_exif_config(Some(1080)),
+        Some(&ExifFrameConfig::default()),
+        Some(&default_assets()),
+    )
+    .expect("pad + exif frame + max_width must succeed");
+
+    assert!(
+        with_limit
+            .warnings
+            .iter()
+            .any(|w| w.contains("Exif frame skipped")),
+        "フレームが消えたことが呼び出し元に伝わっていない ({:?})",
+        with_limit.warnings
+    );
 }

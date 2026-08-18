@@ -554,12 +554,15 @@ pub async fn render_exif_frame_preview(
         let assets =
             exif_frame::ExifAssets::load(AssetDirs::default()).map_err(|e| format!("{:#}", e))?;
 
-        let base64 =
+        let preview =
             core::generate_exif_frame_preview_base64(&file, &config, &bg_color, &assets, 400)
                 .map_err(|e| format!("{:#}", e))?;
 
         Ok(PreviewImage {
-            data_url: format!("data:image/jpeg;base64,{}", base64),
+            data_url: format!("data:image/jpeg;base64,{}", preview.base64),
+            // フレーム描画由来の警告（preview.warnings）は載せない。プレビューは
+            // 長辺 400px 固定なので、実出力ではフレームが出る写真でも skip_exif に
+            // 落ち、出すと偽陽性になる。捨てる判断は境界の責務（spec §8）。
             warnings: assets.warnings,
         })
     })

@@ -185,6 +185,18 @@ pub struct FontInfo {
     pub is_bundled: bool,
 }
 
+/// `render_exif_frame` の結果。
+///
+/// core は `eprintln!` しないので、描画時に諦めた事象（バーを描けるだけの短辺が無い等）は
+/// 呼び出し元に返して伝えてもらう。`process_image` はこれを `ProcessResult.warnings` に
+/// 連結し、CLI は stderr、GUI は結果ダイアログに出す。
+#[derive(Debug)]
+pub struct ExifFrameOutput {
+    pub image: DynamicImage,
+    /// 描画は続行したが利用者に伝えるべき事象
+    pub warnings: Vec<String>,
+}
+
 /// Exifフレーム付き画像を生成
 pub fn render_exif_frame(
     image: &DynamicImage,
@@ -192,7 +204,7 @@ pub fn render_exif_frame(
     config: &ExifFrameConfig,
     bg_color: &crate::BackgroundColor,
     assets: &ExifAssets,
-) -> Result<DynamicImage> {
+) -> Result<ExifFrameOutput> {
     let photo_w = image.width();
     let photo_h = image.height();
 
@@ -209,7 +221,18 @@ pub fn render_exif_frame(
             layout.photo_x as i64,
             layout.photo_y as i64,
         );
-        return Ok(DynamicImage::ImageRgba8(canvas));
+        // フレームが消えたことは黙らない。`--max-width` の縮小でここに落ちる経路が
+        // 新設されたため、気づけないと「指定したのにフレームが無い」になる（spec §8）。
+        return Ok(ExifFrameOutput {
+            image: DynamicImage::ImageRgba8(canvas),
+            warnings: vec![format!(
+                "Exif frame skipped: the photo is {}x{} and too small to draw the bar \
+                 (short side must be at least {}px)",
+                photo_w,
+                photo_h,
+                layout::MIN_SHORT_SIDE
+            )],
+        });
     }
 
     // 3. 写真リサイズ（必要な場合）
@@ -306,7 +329,10 @@ pub fn render_exif_frame(
     };
     draw_exif_area(&mut canvas, &layout, &bar);
 
-    Ok(DynamicImage::ImageRgba8(canvas))
+    Ok(ExifFrameOutput {
+        image: DynamicImage::ImageRgba8(canvas),
+        warnings: Vec::new(),
+    })
 }
 
 /// Exifバー1本を描くのに必要な情報。

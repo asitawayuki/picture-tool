@@ -31,8 +31,9 @@ pub struct PadExifLayout {
     pub skip_exif: bool,
 }
 
-// 最短辺がこれ未満ならExifをスキップ
-const MIN_SHORT_SIDE: u32 = 200;
+/// 写真の短辺がこれ未満なら Exif フレームを描かない。
+/// 呼び出し元が「なぜ消えたか」を利用者に伝えられるよう公開している。
+pub const MIN_SHORT_SIDE: u32 = 200;
 // 写真縮小の上限（これ以上縮小が必要ならExifをスキップ）
 const MAX_SHRINK_RATIO: f64 = 0.20;
 // Exifバーの比率（短辺の6%）
