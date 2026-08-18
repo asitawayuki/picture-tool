@@ -708,4 +708,104 @@ mod tests {
             l.canvas_height
         );
     }
+
+    /// 仕様: `calculate_pad_exif_layout` が返すキャンバスは、どの分岐でも
+    /// `fit_to_4_5(入力写真)` を超えない（spec 2026-08-12 §4 / §9 #10）。
+    ///
+    /// これは `--max-width` の設計が依存している不変条件そのものである。前段縮小で
+    /// 写真を目標に合わせれば pad の最終リサイズは no-op になる、という前提が
+    /// ここで崩れると上限の保証が「最終リサイズが実際に効いた」だけになる。
+    ///
+    /// 分岐フラグが無いので、写真の縮小有無とキャンバスの拡張有無で分岐を特定する。
+    /// **どの分岐に入ったかを assert する**のは、4つのつもりが実は1つしか通っていない、
+    /// という状態で green になるのを防ぐため（S4 で踏んだ罠）。
+    #[test]
+    fn pad_exif_layout_never_exceeds_the_original_4_5_canvas() {
+        let config = crate::exif_frame::ExifFrameConfig::default();
+        let bg = BackgroundColor::Black;
+
+        // --- 分岐1: 余白が足りている（写真は原寸のまま） ---
+        // 1200x800 → Bottom / bar 48 / fit_to_4_5 = 1200x1500 / pad_h 700 >= 48
+        let l = calculate_pad_exif_layout(1200, 800, &config, &bg);
+        assert!(!l.skip_exif, "1200x800 はフレームが描かれる分岐");
+        assert_eq!(
+            (l.photo_width, l.photo_height),
+            (1200, 800),
+            "余白が足りているので写真は縮小されない"
+        );
+        assert_eq!(
+            (l.canvas_width, l.canvas_height),
+            (1200, 1500),
+            "キャンバスは fit_to_4_5(1200, 800) と一致する"
+        );
+
+        // --- 分岐2: 写真を縮小して収まった（拡張なし） ---
+        // 500x660 → Right / bar 30 / fit_to_4_5 = 528x660 / available 28 < 30
+        //   → deficit 2 → 写真 498x657 → new_available 30 >= 30
+        let l = calculate_pad_exif_layout(500, 660, &config, &bg);
+        assert!(!l.skip_exif, "500x660 はフレームが描かれる分岐");
+        assert_eq!(
+            (l.photo_width, l.photo_height),
+            (498, 657),
+            "この分岐は写真を縮小している"
+        );
+        assert_eq!(
+            (l.canvas_width, l.canvas_height),
+            fit_to_4_5(l.photo_width, l.photo_height),
+            "縮小後の写真から求めたキャンバスのまま＝拡張していない"
+        );
+        assert_eq!(
+            (l.canvas_width, l.canvas_height),
+            (528, 660),
+            "キャンバスは fit_to_4_5(500, 660) を超えない"
+        );
+
+        // --- 分岐3: 縮小しても足りずキャンバスを拡張した ---
+        // 400x501 → Right / bar 30 / available 4 < 30 → deficit 26 → 写真 374x468
+        //   → new_available 2 < 30 → 拡張して 404x505
+        let l = calculate_pad_exif_layout(400, 501, &config, &bg);
+        assert!(!l.skip_exif, "400x501 はフレームが描かれる分岐");
+        assert_eq!(
+            (l.photo_width, l.photo_height),
+            (374, 468),
+            "この分岐も写真を縮小している"
+        );
+        assert_ne!(
+            (l.canvas_width, l.canvas_height),
+            fit_to_4_5(l.photo_width, l.photo_height),
+            "縮小後の写真では足りずキャンバスを拡張した分岐であること"
+        );
+        assert_eq!(
+            (l.canvas_width, l.canvas_height),
+            (404, 505),
+            "拡張しても fit_to_4_5(400, 501) ちょうどに戻る（それを超えない）"
+        );
+
+        // --- 分岐4: skip_exif ---
+        // 150x100 → 短辺 100 < MIN_SHORT_SIDE
+        let l = calculate_pad_exif_layout(150, 100, &config, &bg);
+        assert!(l.skip_exif, "150x100 は短辺が閾値未満で skip する分岐");
+        assert_eq!(
+            (l.canvas_width, l.canvas_height),
+            (152, 190),
+            "skip でも 4:5 変換は放棄せず fit_to_4_5(150, 100) を返す"
+        );
+
+        // 4分岐すべてで「キャンバス <= fit_to_4_5(入力写真)」が成り立っている
+        // （上の固定値はいずれも fit_to_4_5(入力) と一致＝上界に等しい）。
+        for (w, h) in [(1200, 800), (500, 660), (400, 501), (150, 100)] {
+            let l = calculate_pad_exif_layout(w, h, &config, &bg);
+            let (max_w, max_h) = fit_to_4_5(w, h);
+            assert!(
+                l.canvas_width <= max_w && l.canvas_height <= max_h,
+                "canvas {}x{} exceeds fit_to_4_5({}, {}) = {}x{}",
+                l.canvas_width,
+                l.canvas_height,
+                w,
+                h,
+                max_w,
+                max_h
+            );
+        }
+    }
 }
