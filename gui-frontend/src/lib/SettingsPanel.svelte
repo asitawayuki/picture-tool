@@ -28,6 +28,48 @@
     onPresetChange,
     onOpenExifSettings,
   }: Props = $props();
+
+  const MAX_WIDTH_MIN = 4;
+  const MAX_WIDTH_MAX = 20000;
+
+  // トグルを on にしたときに入れる値。off にしても直前の値を覚えておく。
+  let lastMaxWidth = $state(1080);
+
+  // 確定サイズ表示。テンプレート内で null 絞り込みに頼らないよう $derived で持つ。
+  let maxWidthLabel = $derived(
+    config.max_width === null ? "" : `${config.max_width}×${(config.max_width * 5) / 4}`
+  );
+
+  /**
+   * 4 の倍数へ切り捨てる（Rust 側 `target_canvas` と同じ丸め方向）。
+   * 切り上げると指定値を超えてしまい、「上限」という機能の目的を果たさない。
+   */
+  function snapWidth(value: number): number {
+    const clamped = Math.min(Math.max(value, MAX_WIDTH_MIN), MAX_WIDTH_MAX);
+    return Math.floor(clamped / 4) * 4;
+  }
+
+  function toggleMaxWidth(enabled: boolean) {
+    config.max_width = enabled ? lastMaxWidth : null;
+  }
+
+  /**
+   * 入力確定時に値をスナップする。`step="4"` はスピナーと HTML バリデーションにしか
+   * 効かず、1002 を直接入力・貼り付けできてしまうため予防にならない。
+   *
+   * DOM の value も明示的に書き戻す。スナップ結果が現在の状態と同じ値のとき
+   * （例: 1000 のときに 1002 を入力）は state が変化せず再描画されないので、
+   * 表示だけ 1002 のまま残ってしまう。
+   */
+  function commitMaxWidth(input: HTMLInputElement) {
+    const raw = input.value.trim();
+    const parsed = Number(raw);
+    if (raw !== "" && Number.isFinite(parsed)) {
+      lastMaxWidth = snapWidth(parsed);
+    }
+    config.max_width = lastMaxWidth;
+    input.value = String(lastMaxWidth);
+  }
 </script>
 
 <div class="settings-panel">
@@ -61,6 +103,35 @@
       <span class="label">最大サイズ: {config.max_size_mb}MB</span>
       <input type="range" min="1" max="50" bind:value={config.max_size_mb} />
     </label>
+
+    <div class="field">
+      <label class="checkbox">
+        <input
+          type="checkbox"
+          checked={config.max_width !== null}
+          disabled={config.mode === "quality"}
+          onchange={(e) => toggleMaxWidth((e.target as HTMLInputElement).checked)}
+        />
+        <span>出力幅を制限する</span>
+      </label>
+      {#if config.mode === "quality"}
+        <p class="hint">
+          Quality モードは 4:5 に変換しないため、出力幅の上限は適用されません。
+        </p>
+      {:else if config.max_width !== null}
+        <div class="max-width-row">
+          <input
+            type="number"
+            min={MAX_WIDTH_MIN}
+            max={MAX_WIDTH_MAX}
+            aria-label="出力幅の上限 (px)"
+            value={config.max_width}
+            onchange={(e) => commitMaxWidth(e.currentTarget)}
+          />
+          <span class="derived">→ {maxWidthLabel}</span>
+        </div>
+      {/if}
+    </div>
 
     <div class="field">
       <span class="label" id="output-folder-label">出力先</span>
@@ -254,6 +325,34 @@
     font-size: 11px;
     line-height: 1.5;
     color: var(--danger);
+  }
+
+  .hint {
+    margin: 4px 0 0;
+    font-size: 11px;
+    line-height: 1.5;
+    color: var(--text-secondary);
+  }
+
+  .max-width-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+
+  .max-width-row input[type="number"] {
+    width: 90px;
+    background: var(--bg-primary);
+    border: 1px solid var(--border-color);
+    color: var(--text-primary);
+    padding: 4px 8px;
+    border-radius: var(--radius-sm);
+    font-size: 12px;
+  }
+
+  .derived {
+    font-size: 11px;
+    color: var(--text-secondary);
   }
 
   .action {

@@ -19,6 +19,8 @@ export interface ProcessingConfig {
   quality: number;
   max_size_mb: number;
   delete_originals: boolean;
+  /** 出力4:5キャンバスの幅の上限 (px)。null は無制限。常に4の倍数を送る */
+  max_width: number | null;
 }
 
 export interface ProcessResult {

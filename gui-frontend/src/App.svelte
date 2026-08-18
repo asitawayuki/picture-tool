@@ -27,6 +27,7 @@
     quality: 90,
     max_size_mb: 8,
     delete_originals: false,
+    max_width: null,
   });
   let processing = $state(false);
   let progress = $state<ProgressPayload | null>(null);
