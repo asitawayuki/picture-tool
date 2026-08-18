@@ -15,6 +15,12 @@
 | [specs/2026-03-23-gui-improvements-v2-design.md](superpowers/specs/2026-03-23-gui-improvements-v2-design.md) | GUI 改善 v2 |
 | [specs/2026-03-22-picture-tool-gui-design.md](superpowers/specs/2026-03-22-picture-tool-gui-design.md) | GUI の初期設計（3カラム構成の出典） |
 
+## 設計確定・実装前
+
+| ドキュメント | 内容 |
+|---|---|
+| [specs/2026-08-18-metadata-editing-design.md](superpowers/specs/2026-08-18-metadata-editing-design.md) | **メタデータ編集**（タイトル・コメント・レーティング）。元写真の JPEG に Windows / MWG 系の両方から読める形で書き込む。**実装は GUI デザイン刷新の後** |
+
 ## 直近の実装計画
 
 | ドキュメント | 内容 |
