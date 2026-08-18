@@ -544,24 +544,19 @@ fn convert_aspect_ratio_crop(img: DynamicImage) -> DynamicImage {
 }
 
 /// 4:5のアスペクト比に変換 (パディング)
+///
+/// キャンバスサイズは `fit_to_4_5` に一本化してある。以前はここだけ `width / 0.8` を
+/// 自前計算し、比率差 0.001 未満は素通りしていたため、「pad が作るキャンバス幅」の
+/// 答えが2つあった。`--max-width` の前段スケールはこの値に依存するので、
+/// 食い違うと上限の保証が崩れる（spec 2026-08-12 §4）。
 fn convert_aspect_ratio_pad(img: DynamicImage, bg_color: BackgroundColor) -> DynamicImage {
     let (width, height) = img.dimensions();
-    let target_ratio = 4.0 / 5.0;
-    let current_ratio = width as f64 / height as f64;
+    let (new_width, new_height) = exif_frame::layout::fit_to_4_5(width, height);
 
-    if (current_ratio - target_ratio).abs() < 0.001 {
+    // 既に厳密な 4:5 ならコピーを作らない
+    if (new_width, new_height) == (width, height) {
         return img;
     }
-
-    let (new_width, new_height) = if current_ratio > target_ratio {
-        // 横長すぎる → 上下にパディング
-        let new_height = (width as f64 / target_ratio).round() as u32;
-        (width, new_height)
-    } else {
-        // 縦長すぎる → 左右にパディング
-        let new_width = (height as f64 * target_ratio).round() as u32;
-        (new_width, height)
-    };
 
     let mut canvas = RgbaImage::from_pixel(new_width, new_height, bg_color.to_rgba());
 
@@ -920,17 +915,15 @@ mod tests {
 
         let output_img = image::open(&result.output_path).unwrap();
         let (w, h) = output_img.dimensions();
-        let ratio = w as f64 / h as f64;
-        assert!(
-            (ratio - 0.8).abs() < 0.02,
-            "pad結果のアスペクト比が4:5でない: {}x{} (ratio={})",
-            w,
-            h,
-            ratio
+        // 4:5 は「おおむね 0.8」ではなく厳密な整数比（k*4 x k*5）
+        assert_eq!(
+            (w, h),
+            (800, 1000),
+            "800x400 は 800x1000 にパディングされる"
         );
-        // パディングは元画像以上のサイズになる
-        assert!(w >= 800, "幅が元画像より小さい");
-        assert!(h >= 400, "高さが元画像より小さい");
+        assert_eq!(w * 5, h * 4, "canvas must be exactly 4:5");
+        // パディングは元画像以上のサイズになる（写真が欠けない）
+        assert!(w >= 800 && h >= 400, "元画像がキャンバスに収まっていない");
     }
 
     #[test]
@@ -948,10 +941,65 @@ mod tests {
         let result = process_image(&input, out.path(), &config, None, None).unwrap();
         assert!(Path::new(&result.output_path).exists());
 
-        let output_img = image::open(&result.output_path).unwrap();
-        let (w, h) = output_img.dimensions();
-        let ratio = w as f64 / h as f64;
-        assert!((ratio - 0.8).abs() < 0.02);
+        let (w, h) = image::open(&result.output_path).unwrap().dimensions();
+        assert_eq!(
+            (w, h),
+            (640, 800),
+            "400x800 は左右にパディングされて 640x800"
+        );
+        assert_eq!(w * 5, h * 4, "canvas must be exactly 4:5");
+    }
+
+    /// 仕様: pad の出力キャンバスは `fit_to_4_5` と同じ厳密な k*4 x k*5（spec §4 / §9 #5）。
+    ///
+    /// 400x501 は比率差 0.0016 で旧実装の早期 return 帯の外にあるが、
+    /// `round(501 * 0.8) = 401` により 401x501（401*5=2005, 501*4=2004）を出していた。
+    #[test]
+    fn pad_mode_produces_an_exact_4_5_canvas_for_a_rounded_size() {
+        let dir = tempfile::tempdir().unwrap();
+        let out = tempfile::tempdir().unwrap();
+        let input = dir.path().join("near_4_5.jpg");
+        create_test_image(&input, 400, 501);
+
+        let config = ProcessingConfig {
+            mode: ConversionMode::Pad,
+            ..test_config()
+        };
+        let result = process_image(&input, out.path(), &config, None, None).unwrap();
+
+        let (w, h) = image::open(&result.output_path).unwrap().dimensions();
+        assert_eq!(
+            (w, h),
+            (404, 505),
+            "400x501 が収まる最小の 4:5 キャンバスは k=101"
+        );
+        assert_eq!(w * 5, h * 4, "canvas must be exactly 4:5");
+    }
+
+    /// 仕様: 「ほぼ 4:5」の入力もパディングを省略されない（spec §4）。
+    ///
+    /// 800x1001 は比率差 0.0008 で旧実装の早期 return 帯に入り、
+    /// 800x1001（800*5=4000, 1001*4=4004）のまま素通りしていた。
+    #[test]
+    fn pad_mode_does_not_pass_through_almost_4_5_input() {
+        let dir = tempfile::tempdir().unwrap();
+        let out = tempfile::tempdir().unwrap();
+        let input = dir.path().join("almost_4_5.jpg");
+        create_test_image(&input, 800, 1001);
+
+        let config = ProcessingConfig {
+            mode: ConversionMode::Pad,
+            ..test_config()
+        };
+        let result = process_image(&input, out.path(), &config, None, None).unwrap();
+
+        let (w, h) = image::open(&result.output_path).unwrap().dimensions();
+        assert_eq!(
+            (w, h),
+            (804, 1005),
+            "800x1001 が収まる最小の 4:5 キャンバスは k=201"
+        );
+        assert_eq!(w * 5, h * 4, "canvas must be exactly 4:5");
     }
 
     // =========================================================
