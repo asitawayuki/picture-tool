@@ -336,11 +336,15 @@ pub fn process_image(
     // 切り落として捨てる画素まで Lanczos3 で再サンプルすることになるため
     // （crop → 最終縮小の順の方が安く、丸めも一度で済む / spec §4）。
     // 縮小方向にしか働かない: ガードを満たさなければ何もしない。
+    // 原寸バッファはここで解放する（resize は &self なので明示的に drop しないと
+    // シャドーイングされた元の束縛がスコープ末尾まで死荷重として残る）。
     let img = match (target, config.mode) {
         (Some((target_w, target_h)), ConversionMode::Pad)
             if exif_frame::layout::fit_to_4_5(img.width(), img.height()).0 > target_w =>
         {
-            img.resize(target_w, target_h, image::imageops::FilterType::Lanczos3)
+            let shrunk = img.resize(target_w, target_h, image::imageops::FilterType::Lanczos3);
+            drop(img);
+            shrunk
         }
         _ => img,
     };
@@ -1892,6 +1896,8 @@ mod tests {
         // crop: 中央クロップの結果も元の高さを保ったまま
         let (w, h) =
             process_and_measure(800, 533, &config_with_max_width(ConversionMode::Crop, 1080));
+        // crop は早期 return と round が残るため厳密 4:5 にならない
+        // （426*5=2130 ≠ 533*4=2132）。spec §4 で今回の範囲外と判断済み。
         assert_eq!((w, h), (426, 533), "crop も拡大されない");
     }
 
@@ -1911,8 +1917,20 @@ mod tests {
     /// 「幅」を指定しても縦写真では長辺が幅*5/4 を大きく超え、上限の意味を持たない。
     #[test]
     fn quality_mode_ignores_max_width() {
-        let config = config_with_max_width(ConversionMode::Quality, 1080);
-        let (w, h) = process_and_measure(1600, 900, &config);
-        assert_eq!((w, h), (1600, 900), "quality モードでは寸法が変わらない");
+        let (input_w, input_h) = (1600, 900);
+        let max_width = 1080;
+        let config = config_with_max_width(ConversionMode::Quality, max_width);
+        // 前提: 入力幅が上限より大きいこと。そうでないと「quality が無視する」ではなく
+        // 「そもそも縮小対象でない」ために寸法不変になり、このテストが vacuous に green になる。
+        assert!(
+            input_w > max_width,
+            "入力幅は上限より大きくなければならない"
+        );
+        let (w, h) = process_and_measure(input_w, input_h, &config);
+        assert_eq!(
+            (w, h),
+            (input_w, input_h),
+            "quality モードでは寸法が変わらない"
+        );
     }
 }

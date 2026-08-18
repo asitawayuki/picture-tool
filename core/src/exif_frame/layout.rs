@@ -191,6 +191,12 @@ pub fn calculate_pad_exif_layout(
         let shrink_w = (photo_width as f64 - new_photo_w as f64) / photo_width as f64;
         let shrink_h = (photo_height as f64 - new_photo_h as f64) / photo_height as f64;
         let max_shrink = shrink_w.max(shrink_h);
+        // 現状この分岐には到達しない: exif_bar_size = max(EXIF_BAR_RATIO * short_side,
+        // EXIF_BAR_MIN_PX)、deficit <= exif_bar_size で縮小は短辺側に効くため、
+        // shrink 比 <= max(EXIF_BAR_MIN_PX / short_side, EXIF_BAR_RATIO)。
+        // short_side >= MIN_SHORT_SIDE (200) なので上限は 30/200 = 15% < MAX_SHRINK_RATIO (20%)。
+        // MIN_SHORT_SIDE やバーの最小 px を変更すると到達可能になり得るので、
+        // 変更時はこの不等式を再検算すること（さもないと警告文の「短辺不足」断定が静かに嘘になる）。
         if max_shrink > MAX_SHRINK_RATIO {
             return skip_layout(photo_width, photo_height);
         }

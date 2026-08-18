@@ -94,8 +94,8 @@ picture-tool --input ./photos --output ./out --mode crop --quality 90 --max-size
 | 検証・収集 | `validate_config`, `is_supported_image`, `collect_image_files` |
 | 変換 | `process_image`, `process_batch`（`ProgressCallback` で進捗とキャンセル） |
 | EXIF | `read_exif_info`, `apply_orientation`, `oriented_dimensions`, `open_image_oriented`, `image_dimensions_oriented` |
-| base64出力（GUI用） | `generate_thumbnail_base64`, `generate_full_image_base64`, `generate_exif_frame_preview_base64` |
-| Exifフレーム | `exif_frame::render_exif_frame`, `exif_frame::AssetDirs`, `exif_frame::ExifAssets`, `exif_frame::preset::{list_all_presets, save_preset, delete_preset}` |
+| base64出力（GUI用） | `generate_thumbnail_base64`, `generate_full_image_base64`, `generate_exif_frame_preview_base64`（→ `ExifFramePreview { base64, warnings }`） |
+| Exifフレーム | `exif_frame::render_exif_frame`（→ `ExifFrameOutput { image, warnings }`）, `exif_frame::AssetDirs`, `exif_frame::ExifAssets`, `exif_frame::preset::{list_all_presets, save_preset, delete_preset}` |
 | 定数 | `CANCELLED_ERROR`（着手前にキャンセルされた印）, `THUMBNAIL_MAX_DIMENSION` |
 
 `ExifAssets` は**バッチの前に1回だけ**構築して使い回す（画像ごとに作るとモデルマップを
