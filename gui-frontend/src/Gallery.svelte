@@ -2,6 +2,11 @@
   import Button from "./lib/ui/Button.svelte";
   import IconButton from "./lib/ui/IconButton.svelte";
   import Card from "./lib/ui/Card.svelte";
+  import TextField from "./lib/ui/TextField.svelte";
+  import Switch from "./lib/ui/Switch.svelte";
+  import Slider from "./lib/ui/Slider.svelte";
+  import Select from "./lib/ui/Select.svelte";
+  import SegmentedButton from "./lib/ui/SegmentedButton.svelte";
 
   /**
    * ここだけは data-theme を手で切り替える。
@@ -22,6 +27,16 @@
   const LEVELS = [0, 1, 2, 3] as const;
 
   let toggled = $state(false);
+
+  let text = $state("キャプション");
+  let comment = $state("複数行のコメント\n2 行目");
+  let numeric = $state<number | null>(1080);
+  let toggleOn = $state(true);
+  let dangerOn = $state(false);
+  let quality = $state(90);
+  let selected = $state("crop");
+  let bg = $state("white");
+  let font = $state("");
 </script>
 
 <div class="gallery">
@@ -81,6 +96,60 @@
       {/each}
     </div>
   </section>
+
+  <section class="specimen" data-specimen="TextField">
+    <h2>TextField</h2>
+    <div class="row grid">
+      <TextField bind:value={text} label="タイトル" placeholder="未設定" />
+      <TextField bind:value={numeric} label="出力幅の上限" type="number" suffix="px"
+        min={4} max={20000} normalize={(v) => Math.floor(Math.min(Math.max(v, 4), 20000) / 4) * 4}
+        hint="4 の倍数へ切り捨てる" />
+      <TextField bind:value={text} label="エラー状態" error="値が範囲外です" />
+      <TextField bind:value={text} label="無効" disabled />
+      <TextField bind:value={comment} label="コメント" multiline rows={4} />
+    </div>
+  </section>
+
+  <section class="specimen" data-specimen="Switch">
+    <h2>Switch</h2>
+    <div class="row">
+      <Switch bind:checked={toggleOn} label="Exif フレーム" />
+      <Switch bind:checked={dangerOn} label="元ファイルを削除" danger />
+      <Switch bind:checked={toggleOn} label="無効" disabled />
+    </div>
+  </section>
+
+  <section class="specimen" data-specimen="Slider">
+    <h2>Slider</h2>
+    <div class="row grid">
+      <Slider bind:value={quality} label="品質" min={1} max={100} suffix="%" />
+      <Slider bind:value={quality} label="無効" min={1} max={100} disabled />
+    </div>
+  </section>
+
+  <section class="specimen" data-specimen="Select">
+    <h2>Select</h2>
+    <div class="row grid">
+      <Select bind:value={font} label="フォント"
+        options={[{ value: "", label: "同梱フォント" }, { value: "/a.ttf", label: "Noto Sans JP" }]} />
+      <Select bind:value={font} label="無効" disabled
+        options={[{ value: "", label: "同梱フォント" }]} />
+    </div>
+  </section>
+
+  <section class="specimen" data-specimen="SegmentedButton">
+    <h2>SegmentedButton</h2>
+    <div class="row grid">
+      <SegmentedButton bind:value={selected} label="変換モード"
+        options={[
+          { value: "crop", label: "Crop" },
+          { value: "pad", label: "Pad" },
+          { value: "quality", label: "Quality" },
+        ]} />
+      <SegmentedButton bind:value={bg} label="背景色"
+        options={[{ value: "white", label: "白" }, { value: "black", label: "黒" }]} />
+    </div>
+  </section>
 </div>
 
 <style>
@@ -134,6 +203,12 @@
     align-items: center;
     gap: var(--space-3);
     margin-bottom: var(--space-3);
+  }
+
+  .row.grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+    align-items: start;
   }
 
   .row.block {

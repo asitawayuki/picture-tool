@@ -9577,6 +9577,27 @@ pressed `0.10`、キーボード Tab の `:focus-visible` で `0.10` ＋ outline
 `bunfig.toml` の効果を実測で確認した。`e2e/gallery.spec.ts` を足したあとも
 `bun test` は `Ran 44 tests across 1 file` のままで、e2e を拾っていない。
 
+### Task 4 — スライダーの疑似要素は computed style で検査できない
+
+計画 Step 10 の目視を Playwright MCP で数値として取ったが、
+**`getComputedStyle(input, "::-webkit-slider-runnable-track")` と
+`"::-webkit-slider-thumb"` は Chromium で `rgba(0, 0, 0, 0)` を返す。**
+これは `Slider.svelte` の CSS が効いていないのではなく、Chromium が
+この 2 つの疑似要素を `getComputedStyle` に公開していないため
+（スクリーンショットではトラックもつまみも正しく塗られている）。
+**将来この 2 つを数値で assert するテストを書かないこと。** 偽陰性になる。
+スライダーの見た目は `e2e/__screenshots__/gallery-{light,dark}.png` で見る。
+
+他の 4 部品は数値で取れた。実測値:
+
+- `Switch` on: トラック `rgb(73, 75, 214)`（primary）、つまみ `left: 26px` / 24×24px。
+  off: `left: 6px` / 16×16px。`danger` on はトラック `rgb(186, 26, 26)`（error）
+- `Switch` の当たり判定は計画の主張どおり `.track`
+  （`elementFromPoint` が `track state-layer …` を返す）。hover で `::after` が `0.08`
+- `SegmentedButton` は `ArrowRight` で `crop` → `pad` に移り、`bind:group` 経由で
+  `.selected` クラスも追従する。フォーカスリングは `.text` に出る（`3px solid`）
+- `TextField` の `error` は枠と補足文の両方が `rgb(186, 26, 26)` になる
+
 ### Task 9 — `localStorage` の実機確認
 
 ### Task 14 — フィルムストリップの要素数

@@ -10,7 +10,16 @@ import { expect, test } from "@playwright/test";
  * 明暗の切り替えは data-theme で行う。tokens.css の 4 ブロック構造が
  * 両方向に効かないと、ここで同じ色が返る。
  */
-const SPECIMENS = ["Button", "IconButton", "Card"];
+const SPECIMENS = [
+  "Button",
+  "IconButton",
+  "Card",
+  "TextField",
+  "Switch",
+  "Slider",
+  "Select",
+  "SegmentedButton",
+];
 
 test.describe("部品ギャラリー", () => {
   test("すべての節が描画される", async ({ page }) => {
@@ -54,4 +63,23 @@ test.describe("部品ギャラリー", () => {
       });
     }
   });
+});
+
+test("TextField(number) は正規化の結果が同値でも表示を戻す", async ({ page }) => {
+  await page.goto("/gallery.html");
+  const input = page.getByLabel("出力幅の上限");
+
+  // 前提条件: 初期値が 1080（4 の倍数）であること。ここが崩れていると
+  // 「1002 を入れても 1000 に戻る」という主張の土台が消える
+  await expect(input).toHaveValue("1080");
+
+  // 1004 → 正規化で 1004（4 の倍数なのでそのまま）
+  await input.fill("1004");
+  await input.blur();
+  await expect(input).toHaveValue("1004");
+
+  // 1006 → 正規化で 1004。state は 1004 のまま動かないが、表示は戻る
+  await input.fill("1006");
+  await input.blur();
+  await expect(input).toHaveValue("1004");
 });
