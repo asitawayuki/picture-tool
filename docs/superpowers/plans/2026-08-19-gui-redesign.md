@@ -9551,6 +9551,32 @@ main には一切コミットしない。全 18 タスクを 7 チャットに�
 （`#[0-9a-f]{6}`）と一致する。大文字化されると 21 ロールの前提条件テストが
 先に落ちるので、ここは検知できる。
 
+### Task 2 — 見た目の確認は Playwright MCP で行った
+
+計画 Step 4 は「ブラウザで開いて 3 カラムが出ていればよい」だが、目視だけだと
+「トークンが解決されている」ことまでは分からない（旧 app.css が全部の色を
+持っているので、tokens.css が丸ごと読まれていなくても画面は同じに見える）。
+`vite dev` に Playwright MCP を当て、`getComputedStyle(document.documentElement)`
+で `--md-sys-color-primary` = `#494bd6`、`--space-4` = `16px`、
+`--md-sys-typescale-body-md`、`--md-sys-shape-corner-md` = `12px` が
+実際に解決されることを確認した。3 カラムの骨格は現行どおり。
+
+### Task 3 — 状態レイヤーの実測とフォーカスリングの丸め
+
+計画 Step 10 の「hover・focus・pressed を実際に触って確認」を Playwright MCP で
+数値として取った。`::after` の `opacity` が idle `0` → hover `0.08` →
+pressed `0.10`、キーボード Tab の `:focus-visible` で `0.10` ＋ outline。
+トークンの値と一致する。
+
+**フォーカスリングの計算値は `3px` ではなく `2.4px` になる。** これは実装の誤りでは
+なく、Chrome が outline 幅をデバイスピクセル境界へ丸めるため
+（dpr 1.25 で 3 CSS px = 3.75 デバイス px → 3 デバイス px → 2.4 CSS px）。
+`--md-sys-state-focus-ring` 自体は `3px solid #494bd6` で正しい。
+**将来この値を検査するテストを書くなら、`3px` 固定で assert しないこと。**
+
+`bunfig.toml` の効果を実測で確認した。`e2e/gallery.spec.ts` を足したあとも
+`bun test` は `Ran 44 tests across 1 file` のままで、e2e を拾っていない。
+
 ### Task 9 — `localStorage` の実機確認
 
 ### Task 14 — フィルムストリップの要素数
