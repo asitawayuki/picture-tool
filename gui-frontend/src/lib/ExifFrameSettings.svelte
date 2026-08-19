@@ -8,7 +8,7 @@
   interface Props {
     /** プリセット一覧は App が唯一の保持者。ここでは読むだけ。 */
     presets: ExifFrameConfig[];
-    /** SettingsPanel で選択中のプリセット。これを初期値にしないと別プリセットを上書きしてしまう。 */
+    /** ConvertPanel で選択中のプリセット。これを初期値にしないと別プリセットを上書きしてしまう。 */
     selectedPresetName: string;
     previewImagePath: string | null;
     bgColor: "white" | "black";

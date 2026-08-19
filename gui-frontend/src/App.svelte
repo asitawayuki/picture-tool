@@ -1,11 +1,12 @@
 <script lang="ts">
   import { onMount } from "svelte";
+  import { SvelteSet } from "svelte/reactivity";
   import AppShell from "./lib/shell/AppShell.svelte";
   import { createLayout } from "./lib/shell/layout.svelte";
   import type { AppMode } from "./lib/shell/modes";
   import FolderTree from "./lib/browser/FolderTree.svelte";
   import ThumbnailGrid from "./lib/ThumbnailGrid.svelte";
-  import SettingsPanel from "./lib/SettingsPanel.svelte";
+  import ConvertPanel from "./lib/panels/ConvertPanel.svelte";
   import ProgressOverlay from "./lib/ProgressOverlay.svelte";
   import ImagePreview from "./lib/ImagePreview.svelte";
   import ExifFrameSettings from "./lib/ExifFrameSettings.svelte";
@@ -37,7 +38,9 @@
 
   const layout = createLayout();
 
-  let selectedImages = $state<ImageEntry[]>([]);
+  // 変換モード専用の選択。フォルダーを変えたらクリアする（spec §3-2）
+  const selectedPaths = new SvelteSet<string>();
+
   let outputFolder = $state("");
   let config = $state<ProcessingConfig>({
     mode: "crop",
@@ -81,7 +84,7 @@
   }
 
   // --- 派生状態 ---
-  let selectedPaths = $derived(new Set(selectedImages.map((img) => img.path)));
+  let selectedImages = $derived(images.filter((img) => selectedPaths.has(img.path)));
   let canProcess = $derived(
     selectedImages.length > 0 && !convert.processing && outputFolder !== ""
   );
@@ -102,6 +105,9 @@
     currentPage = 0;
     // フォルダーを変えたら最後に触った写真は無効
     focusedPath = null;
+    // 選択は常に現在のフォルダー内に閉じる。SelectionList を廃止したので
+    // 画面外の選択を可視化・解除する窓口がもう無い（spec §3-2 / §5-1）
+    selectedPaths.clear();
     const token = ++listImagesToken;
     try {
       const result = await listImages(path);
@@ -114,13 +120,15 @@
     }
   }
 
+  // クリックは「選択のトグル ＋ focusedPath の移動」を同時に行う（spec §3-2）
   function handleToggleSelect(image: ImageEntry) {
-    const idx = selectedImages.findIndex((img) => img.path === image.path);
-    if (idx >= 0) {
-      selectedImages = selectedImages.filter((_, i) => i !== idx);
-    } else {
-      selectedImages = [...selectedImages, image];
-    }
+    if (selectedPaths.has(image.path)) selectedPaths.delete(image.path);
+    else selectedPaths.add(image.path);
+    focusedPath = image.path;
+  }
+
+  function handleClearSelection() {
+    selectedPaths.clear();
   }
 
   async function handlePickOutputFolder() {
@@ -185,18 +193,17 @@
 
   {#snippet right()}
     {#if mode === "convert"}
-      <SettingsPanel
+      <ConvertPanel
         bind:config
         {outputFolder}
+        selectedCount={selectedPaths.size}
         {canProcess}
+        bind:exifFrameEnabled
+        presetNames={presets.presets.map((p) => p.name)}
+        bind:selectedPresetName={presets.selectedName}
         onPickOutputFolder={handlePickOutputFolder}
         onProcess={handleProcess}
-        {exifFrameEnabled}
-        selectedPresetName={presets.selectedName}
-        presets={presets.presets}
-        onExifFrameEnabledChange={(enabled) => (exifFrameEnabled = enabled)}
-        onPresetChange={(name) => (presets.selectedName = name)}
-        onOpenExifSettings={() => (showExifFrameSettings = true)}
+        onEditFrame={() => (mode = "frame")}
       />
     {:else if mode === "metadata"}
       <div class="placeholder">

@@ -91,7 +91,24 @@ export async function installTauriStub(page: Page, options: StubOptions = {}) {
       pick_output_folder: () => "/output",
       load_favorites: () => ["/photos"],
       save_favorites: () => null,
-      process_images: () => ({ results: [], failures: [], warnings: [] }),
+      // 変換の通し検査（Task 10 Step 7）のために、依頼された分だけ成功を返し、
+      // 渡された引数を残す。空配列を返すと結果ダイアログが常に
+      // 「0 成功 / N 未処理」になり、何を送ったかも見えない
+      process_images: (a) => {
+        (window as any).__lastProcessArgs = a;
+        return {
+          results: (a.files as string[]).map((input_path) => ({
+            input_path,
+            output_path: `${a.outputFolder}/${input_path.split("/").pop()}`,
+            final_size_mb: 3.2,
+            final_quality: 88,
+            size_limit_exceeded: false,
+            warnings: [],
+          })),
+          failures: [],
+          warnings: [],
+        };
+      },
       cancel_processing: () => null,
       render_exif_frame_preview: () => ({
         data_url: `data:image/jpeg;base64,${jpegFor(0, 400)}`,
@@ -165,5 +182,18 @@ export async function clearStorageOnce(page: Page) {
  * 可視ラベルをクリックすれば `label` の既定動作で `input` が切り替わる。
  */
 export function toggleSwitch(page: Page, label: string) {
+  return page.getByText(label, { exact: true }).click();
+}
+
+/**
+ * `SegmentedButton` の選択肢を選ぶ。
+ *
+ * `getByRole("radio", …).click()` は通らない ── `SegmentedButton` の `input` は
+ * `position: absolute; opacity: 0; pointer-events: none` で隠してあり、当たり判定は
+ * 上に載る `.text` が取る。Playwright の actionability チェックが
+ * `.text intercepts pointer events` で落ちる（`Switch` と同じ理由）。
+ * 可視ラベルをクリックすれば `label` の既定動作で `input` が選ばれる。
+ */
+export function selectSegment(page: Page, label: string) {
   return page.getByText(label, { exact: true }).click();
 }

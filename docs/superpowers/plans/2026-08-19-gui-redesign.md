@@ -9731,6 +9731,57 @@ spec §8 の懸念（Linux で毎回既定に戻る体験になり得る）は�
 2 つ目が効かない）。
 
 
+### Task 10 — TextField の空欄を親へ渡せるようにした（normalize の型を広げた）
+
+計画 Step 1 のテンプレートは `max_size_mb` と `max_width` を `TextField` の
+`normalize` で丸めるが、**入力欄を空にしたときの落とし先が無かった。**
+`TextField.handleNumberChange` は空欄を `null` にし、`normalize` は
+`next !== null` のときしか呼ばれない。結果:
+
+- `config.max_size_mb` に `null` が入る。Rust 側は必須の数値なので変換が落ちる
+- `config.max_width` に `null` が入る。トグルは on のままなのに「無制限」になる
+
+`onchange` で親が戻す形にしても直らない。`TextField` の DOM 書き戻し
+（`el.value = …`）は `normalize` の直後に終わっており、親が同じイベント内で
+値を戻しても **state が動かないので再描画されず、表示だけ空のまま残る**
+（`TextField` 自身が Task 4 で潰したのと同じずれが、1 手ずれて再発する）。
+
+`normalize` の型を `(value: number | null) => number | null` に広げ、
+**空欄も `normalize` を通す**ようにした。空欄の意味を決めるのは項目ごとに違う
+（最大サイズは「直前の値」、出力幅は「直前の値」、フレームの任意項目なら
+「未設定」もあり得る）ので、決めるのは呼び出し側で正しい。
+`Gallery.svelte` の 1 箇所も追随させた。
+
+この 2 つは e2e で**先に落ちることを確認してから**直している
+（`if (normalize)` を元の `if (next !== null && normalize)` へ戻すと
+「出力幅を空欄に…」「最大サイズは 1〜1024MB…」の 2 件だけが落ちる）。
+
+### Task 10 — SegmentedButton も `getByRole(...).click()` では押せない
+
+計画 Step 5 の `page.getByRole("radio", { name: "Pad" }).click()` は通らない。
+`SegmentedButton` の `input` は `opacity: 0; pointer-events: none` で隠してあり、
+当たり判定は上に載る `.text` が取るため、Playwright が
+`<span class="text">Pad</span> intercepts pointer events` で落ちる。
+`Switch` と同じ形なので、`e2e/stub.ts` に `toggleSwitch` と並べて
+`selectSegment(page, label)` を足した。**可視ラベルをクリックする**のが両者の答え。
+
+### Task 10 — 実機の代わりに「通し」を e2e で検査した
+
+Step 7 の実機確認（変換の一連の操作）は、Task 7 / 9 と同じ理由で実行できない
+（GUI ウィンドウを操作する手段が無い）。Task 7 の実施メモが
+「Task 10 で e2e スタブ経由の通しの検査を足すこと」と書き残していたので、それを行った。
+
+そのために **`e2e/stub.ts` の `process_images` を、依頼された分だけ成功を返し
+引数を `window.__lastProcessArgs` に残す形に変えた**。空配列を返す元の形だと
+結果ダイアログが常に「0 成功 / N 未処理」になり、
+**何を送ったのかがテストから見えない**（パネルの写し間違いが素通りする）。
+検査しているのは「選択 → 出力先 → 変換 → 結果ダイアログ」の通過と、
+バックエンドへ渡る `config` が画面の表示どおりであること
+（`1002` と入力して画面に `1000` が出ているなら、渡る値も `1000`）。
+
+**実機で見ていないので言えないこと**: 実際の画像が変換されること、
+crop / pad / quality の出力そのもの。これは core の責務で本刷新では触っていない。
+
 ### Task 14 — フィルムストリップの要素数
 
 ### Task 15 — スクロール測定と LRU 上限
@@ -9755,6 +9806,9 @@ spec §8 の懸念（Linux で毎回既定に戻る体験になり得る）は�
   「保存されていない」ように見えるため
 - **`Toast` の warning と success が同じ帯色**（Task 6 Step 5）。spec §1-1 が
   warning / success のロールを定義していないことの帰結で、区別はアイコンが持つ
+- **`TextField` の `normalize` が空欄（`null`）も受ける**（Task 10）。spec §2 は
+  `normalize?: (v: number) => number` と書いているが、これだと「空欄にされたとき
+  何に落とすか」を親が決められず、`max_size_mb` に `null` が入る
 
 ---
 

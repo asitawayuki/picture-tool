@@ -108,7 +108,8 @@
     <div class="row grid">
       <TextField bind:value={text} label="タイトル" placeholder="未設定" />
       <TextField bind:value={numeric} label="出力幅の上限" type="number" suffix="px"
-        min={4} max={20000} normalize={(v) => Math.floor(Math.min(Math.max(v, 4), 20000) / 4) * 4}
+        min={4} max={20000}
+        normalize={(v) => (v === null ? null : Math.floor(Math.min(Math.max(v, 4), 20000) / 4) * 4)}
         hint="4 の倍数へ切り捨てる" />
       <TextField bind:value={text} label="エラー状態" error="値が範囲外です" />
       <TextField bind:value={text} label="無効" disabled />

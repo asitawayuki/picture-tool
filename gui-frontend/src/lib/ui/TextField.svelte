@@ -27,8 +27,12 @@
      * ここに寄せることで、正規化後に値が変わらなかった場合の表示ずれ
      * （1000 のときに 1002 を入力すると state が動かず表示だけ 1002 が残る）を
      * このコンポーネント側で 1 回だけ潰せる。
+     *
+     * **空欄（null）も通す。** 「無指定」を許さない項目（最大サイズなど）は
+     * ここで直前の値へ戻す。onchange で親が戻しても、DOM への書き戻しは
+     * 既に終わっているので表示だけ空のまま残る。
      */
-    normalize?: (value: number) => number;
+    normalize?: (value: number | null) => number | null;
     /** 確定後に呼ばれる。value は既に更新済み */
     onchange?: () => void;
   }
@@ -70,7 +74,7 @@
     const parsed = Number(raw);
     let next: number | null =
       raw === "" || !Number.isFinite(parsed) ? null : parsed;
-    if (next !== null && normalize) next = normalize(next);
+    if (normalize) next = normalize(next);
     value = next as T;
     // 正規化の結果が現在値と同じでも DOM は元の入力のままなので、明示的に戻す
     el.value = next === null ? "" : String(next);
