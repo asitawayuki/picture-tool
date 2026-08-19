@@ -49,13 +49,18 @@ export async function installTauriStub(page: Page, options: StubOptions = {}) {
       return m ? Number(m[1]) : 0;
     }
 
-    const images = Array.from({ length: imageCount }, (_, i) => ({
-      name: `photo-${String(i).padStart(4, "0")}.jpg`,
-      path: `/photos/${i}.jpg`,
-      width: 4000,
-      height: 3000,
-      size_bytes: 4_500_000,
-    }));
+    /** フォルダーごとに別のパスを返す。同じパスを返すと、フォルダーを変えても
+     *  キャッシュが当たってしまい「取り直している」ことを検査できない */
+    function imagesFor(folder: string) {
+      const dir = folder.replace(/\/+$/, "") || "/photos";
+      return Array.from({ length: imageCount }, (_, i) => ({
+        name: `photo-${String(i).padStart(4, "0")}.jpg`,
+        path: `${dir}/${i}.jpg`,
+        width: 4000,
+        height: 3000,
+        size_bytes: 4_500_000,
+      }));
+    }
 
     const presets = [
       {
@@ -80,8 +85,14 @@ export async function installTauriStub(page: Page, options: StubOptions = {}) {
         { name: "photos", path: "/photos", is_dir: true, is_image: false },
         { name: "archive", path: "/archive", is_dir: true, is_image: false },
       ],
-      list_images: () => images,
-      get_thumbnail: (a) => jpegFor(indexOfPath(a.path), a.maxDimension),
+      list_images: (a) => imagesFor(a.path ?? "/photos"),
+      // 取得の記録を残す。サムネイルは「出ている」だけでは検査にならず、
+      // どの解像度で何回取りに来たかを見ないと再取得の有無が判らない
+      get_thumbnail: (a) => {
+        const log = ((window as any).__thumbnailRequests ??= []);
+        log.push({ path: a.path, maxDimension: a.maxDimension });
+        return jpegFor(indexOfPath(a.path), a.maxDimension);
+      },
       get_full_image: (a) => jpegFor(indexOfPath(a.path), 800),
       get_exif_info: () => ({
         camera_make: "SONY", camera_model: "ILCE-7M4", lens_model: "FE 35mm F1.4 GM",

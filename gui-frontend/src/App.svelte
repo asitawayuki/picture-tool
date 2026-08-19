@@ -93,6 +93,11 @@
   onMount(() => {
     const unsubscribe = convert.subscribeProgress();
     presets.reload();
+    // キャッシュ上限を実測で決める（Task 15 / spec §7-2）ための窓口。
+    // import.meta.env.DEV で囲んであるので本番バンドルには残らない
+    if (import.meta.env.DEV) {
+      (window as unknown as Record<string, unknown>).__thumbnailStats = thumbnails.stats;
+    }
     return unsubscribe;
   });
 
@@ -108,6 +113,9 @@
     // 選択は常に現在のフォルダー内に閉じる。SelectionList を廃止したので
     // 画面外の選択を可視化・解除する窓口がもう無い（spec §3-2 / §5-1）
     selectedPaths.clear();
+    // 初回 1 画面分の目安。正確な可視枚数は PhotoGrid が出すが、
+    // ここでは「上から順に流す枚数」の見積もりで足りる
+    thumbnails.resetForFolder(30);
     const token = ++listImagesToken;
     try {
       const result = await listImages(path);
