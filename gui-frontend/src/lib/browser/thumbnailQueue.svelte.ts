@@ -1,7 +1,7 @@
 import { SvelteMap } from "svelte/reactivity";
 import { getThumbnail } from "../api";
 import { describeError, toast } from "../toasts.svelte";
-import { LruBudget } from "./thumbnailCache";
+import { CACHE_BYTE_LIMIT, LruBudget } from "./thumbnailCache";
 import { RequestQueue, type RequestKind } from "./requestQueue";
 
 /**
@@ -22,14 +22,6 @@ export interface ThumbnailQueue {
 }
 
 const MAX_CONCURRENT = 3;
-
-/**
- * サムネイルキャッシュのバイト上限。
- *
- * **暫定値。Task 15（spec §7-2）の実測で確定させ、spec §4-2 / §8 に追記する。**
- * 1 枚あたりの実バイト数 × 保持したい枚数から決める。
- */
-export const CACHE_BYTE_LIMIT = 64 * 1024 * 1024;
 
 function keyOf(path: string, maxDimension: number): string {
   return `${path}:${maxDimension}`;

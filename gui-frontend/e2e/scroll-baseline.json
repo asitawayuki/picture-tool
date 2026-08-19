@@ -1,0 +1,7 @@
+{
+  "_comment": "spec §7-2 のベースライン。現行 ThumbnailGrid（Task 13 の 1 つ前 = 7be9bbe）/ 50 枚 / 一定速度スクロールを 3 回測った中央値。測定マシンに依存するので、別のマシンで測り直したらこのファイルごと更新する",
+  "machine": "Linux biwak 7.1.8-200.fc44.x86_64 / Playwright Chromium viewport 1440x800（開発機の論理解像度は spec §3-1 と同じ 3072x1920）",
+  "measuredAt": "2026-08-19",
+  "p95": 16.7,
+  "jankRatio": 0
+}
