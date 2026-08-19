@@ -7,6 +7,9 @@
   import Slider from "./lib/ui/Slider.svelte";
   import Select from "./lib/ui/Select.svelte";
   import SegmentedButton from "./lib/ui/SegmentedButton.svelte";
+  import Rating from "./lib/ui/Rating.svelte";
+  import LinearProgress from "./lib/ui/LinearProgress.svelte";
+  import Dialog from "./lib/ui/Dialog.svelte";
 
   /**
    * ここだけは data-theme を手で切り替える。
@@ -37,6 +40,9 @@
   let selected = $state("crop");
   let bg = $state("white");
   let font = $state("");
+  let rating = $state(3);
+  let dialogOpen = $state(false);
+  let dangerDialogOpen = $state(false);
 </script>
 
 <div class="gallery">
@@ -150,7 +156,63 @@
         options={[{ value: "white", label: "白" }, { value: "black", label: "黒" }]} />
     </div>
   </section>
+
+  <section class="specimen" data-specimen="Rating">
+    <h2>Rating</h2>
+    <div class="row">
+      <Rating bind:value={rating} />
+      <Rating value={4} readonly />
+      <Rating value={0} disabled />
+      <span>value = {rating}</span>
+    </div>
+  </section>
+
+  <section class="specimen" data-specimen="LinearProgress">
+    <h2>LinearProgress</h2>
+    <div class="row grid">
+      <LinearProgress value={0} />
+      <LinearProgress value={40} />
+      <LinearProgress value={100} />
+      <LinearProgress />
+    </div>
+  </section>
+
+  <section class="specimen" data-specimen="Dialog">
+    <h2>Dialog</h2>
+    <div class="row">
+      <Button onclick={() => (dialogOpen = true)}>通常のダイアログ</Button>
+      <Button variant="filled" danger onclick={() => (dangerDialogOpen = true)}>
+        危険なダイアログ
+      </Button>
+    </div>
+  </section>
 </div>
+
+{#if dialogOpen}
+  <Dialog title="変換結果" onClose={() => (dialogOpen = false)}>
+    <p>本文。Card を並べて中身を作る。</p>
+    {#snippet actions()}
+      <Button variant="text" onclick={() => (dialogOpen = false)}>閉じる</Button>
+    {/snippet}
+  </Dialog>
+{/if}
+
+{#if dangerDialogOpen}
+  <Dialog
+    title="元ファイルを削除します"
+    danger
+    initialFocus="footer button"
+    onClose={() => (dangerDialogOpen = false)}
+  >
+    <p>削除したファイルはゴミ箱に入らず、元に戻せません。</p>
+    {#snippet actions()}
+      <Button variant="text" onclick={() => (dangerDialogOpen = false)}>キャンセル</Button>
+      <Button variant="filled" danger onclick={() => (dangerDialogOpen = false)}>
+        削除して変換
+      </Button>
+    {/snippet}
+  </Dialog>
+{/if}
 
 <style>
   .gallery {

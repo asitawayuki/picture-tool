@@ -19,6 +19,9 @@ const SPECIMENS = [
   "Slider",
   "Select",
   "SegmentedButton",
+  "Rating",
+  "LinearProgress",
+  "Dialog",
 ];
 
 test.describe("部品ギャラリー", () => {
@@ -82,4 +85,63 @@ test("TextField(number) は正規化の結果が同値でも表示を戻す", as
   await input.fill("1006");
   await input.blur();
   await expect(input).toHaveValue("1004");
+});
+
+test("Dialog は Esc で閉じ、フォーカスを元の場所へ返す", async ({ page }) => {
+  await page.goto("/gallery.html");
+  const opener = page.getByRole("button", { name: "通常のダイアログ" });
+  await opener.click();
+
+  const dialog = page.getByRole("dialog", { name: "変換結果" });
+  await expect(dialog).toBeVisible();
+
+  await page.keyboard.press("Escape");
+  await expect(dialog).toHaveCount(0);
+  // focusTrap の destroy が元のフォーカスへ戻すこと
+  await expect(opener).toBeFocused();
+});
+
+test("Dialog のフォーカスは中に閉じ込められる", async ({ page }) => {
+  await page.goto("/gallery.html");
+  await page.getByRole("button", { name: "通常のダイアログ" }).click();
+
+  const inside = page.getByRole("dialog", { name: "変換結果" });
+  // 前提条件: ダイアログの外にもフォーカス可能な要素が存在すること。
+  // 存在しなければ「外へ出ない」は自明に成立してしまう
+  expect(await page.getByRole("button", { name: "危険なダイアログ" }).count()).toBe(1);
+
+  for (let i = 0; i < 8; i++) {
+    await page.keyboard.press("Tab");
+    expect(await inside.evaluate((el) => el.contains(document.activeElement))).toBe(true);
+  }
+});
+
+test("Rating は同じ★の再クリックで 0 に戻る", async ({ page }) => {
+  await page.goto("/gallery.html");
+  const rating = page.getByRole("slider", { name: "レーティング" }).first();
+
+  // 前提条件: 初期値が 3
+  await expect(rating).toHaveAttribute("aria-valuenow", "3");
+
+  await rating.locator("button").nth(2).click(); // 3 番目の★ = 現在値と同じ
+  await expect(rating).toHaveAttribute("aria-valuenow", "0");
+
+  await rating.locator("button").nth(4).click(); // 5 番目の★
+  await expect(rating).toHaveAttribute("aria-valuenow", "5");
+});
+
+test("Rating は矢印キーで増減し 0〜5 で止まる", async ({ page }) => {
+  await page.goto("/gallery.html");
+  const rating = page.getByRole("slider", { name: "レーティング" }).first();
+  await rating.focus();
+
+  await page.keyboard.press("End");
+  await expect(rating).toHaveAttribute("aria-valuenow", "5");
+  await page.keyboard.press("ArrowRight");
+  await expect(rating).toHaveAttribute("aria-valuenow", "5");
+
+  await page.keyboard.press("Home");
+  await expect(rating).toHaveAttribute("aria-valuenow", "0");
+  await page.keyboard.press("ArrowLeft");
+  await expect(rating).toHaveAttribute("aria-valuenow", "0");
 });

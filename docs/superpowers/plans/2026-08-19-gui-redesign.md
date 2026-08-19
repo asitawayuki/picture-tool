@@ -9598,6 +9598,26 @@ pressed `0.10`、キーボード Tab の `:focus-visible` で `0.10` ＋ outline
   `.selected` クラスも追従する。フォーカスリングは `.text` に出る（`3px solid`）
 - `TextField` の `error` は枠と補足文の両方が `rgb(186, 26, 26)` になる
 
+### Task 5 — 危険なダイアログの初期フォーカスと Rating のロケータ
+
+`initialFocus="footer button"` が意図どおり働くことを実測した。破壊的な
+ダイアログを開いた直後の `document.activeElement` は「キャンセル」で、
+`role` は `alertdialog`、`aria-labelledby` はタイトルを指す。
+**この安全側への着地は `actions` snippet の並び順（1 つ目がキャンセル）に
+依存している。** 順序を入れ替えると `footer button` は「削除して変換」を
+掴むので、`Dialog` を使う側はこの並びを守ること。
+
+**`Rating` と `Slider` はどちらも `role="slider"` になる。** ギャラリーでは
+`Slider` が「品質」「無効」、`Rating` が既定ラベルの「レーティング」なので
+アクセシブル名で分離できているが、`getByRole("slider")` を名前なしで
+使うと両者を掴む。e2e は名前つきで引くこと。
+また `Rating` を 3 個並べてあり全部が既定ラベルなので、`.first()` が
+`bind:value` されている 1 個目を指すという並び順への依存もある。
+
+`LinearProgress` の indeterminate は `tokens.css` の
+`prefers-reduced-motion` 規則（`*` に `animation-duration: 0.01ms !important`）に
+そのまま当たるので、個別の打ち消しは書いていない。
+
 ### Task 9 — `localStorage` の実機確認
 
 ### Task 14 — フィルムストリップの要素数
