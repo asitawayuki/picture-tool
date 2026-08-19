@@ -10,22 +10,23 @@
 
 | ドキュメント | 内容 |
 |---|---|
+| [specs/2026-08-19-gui-redesign-design.md](superpowers/specs/2026-08-19-gui-redesign-design.md) | **GUI デザイン刷新**（現行）。Material 3 系のトークン層 ＋ プリミティブ 11 個、navigation rail による 3 モード構成、写真グリッドの仮想スクロール化。3 カラム構成の出典はこちらへ移った |
 | [specs/2026-08-12-output-width-limit-design.md](superpowers/specs/2026-08-12-output-width-limit-design.md) | **出力幅の上限指定**（`--max-width`）。pad/crop の 4:5 キャンバスを指定 px 以下に縮小 |
 | [specs/2026-03-29-exif-frame-v2-design.md](superpowers/specs/2026-03-29-exif-frame-v2-design.md) | **Exifフレーム v2**（現行）。padモード限定・2段表示・ロゴ配置 |
 | [specs/2026-03-23-gui-improvements-v2-design.md](superpowers/specs/2026-03-23-gui-improvements-v2-design.md) | GUI 改善 v2 |
-| [specs/2026-03-22-picture-tool-gui-design.md](superpowers/specs/2026-03-22-picture-tool-gui-design.md) | GUI の初期設計（3カラム構成の出典） |
+| [specs/2026-03-22-picture-tool-gui-design.md](superpowers/specs/2026-03-22-picture-tool-gui-design.md) | GUI の初期設計。**レイアウトは GUI デザイン刷新が後継**。フォルダーツリー・お気に入り・変換の流れの出典としてのみ有効 |
 
 ## 設計確定・実装前
 
 | ドキュメント | 内容 |
 |---|---|
-| [specs/2026-08-19-gui-redesign-design.md](superpowers/specs/2026-08-19-gui-redesign-design.md) | **GUI デザイン刷新**。Material 3 系のトークン層 ＋ プリミティブ 11 個、navigation rail による 3 モード構成、写真グリッドの仮想スクロール化。**次に実装するのはこれ** |
-| [specs/2026-08-18-metadata-editing-design.md](superpowers/specs/2026-08-18-metadata-editing-design.md) | **メタデータ編集**（タイトル・コメント・レーティング）。元写真の JPEG に Windows / MWG 系の両方から読める形で書き込む。**実装は GUI デザイン刷新の後** |
+| [specs/2026-08-18-metadata-editing-design.md](superpowers/specs/2026-08-18-metadata-editing-design.md) | **メタデータ編集**（タイトル・コメント・レーティング）。元写真の JPEG に Windows / MWG 系の両方から読める形で書き込む。**次に実装するのはこれ** |
 
 ## 直近の実装計画
 
 | ドキュメント | 内容 |
 |---|---|
+| [plans/2026-08-19-gui-redesign.md](superpowers/plans/2026-08-19-gui-redesign.md) | **GUI デザイン刷新**の実装計画（全 18 タスク）と実施メモ。トークン層・プリミティブ・仮想スクロール・LRU 上限の実測と、spec と食い違った点 |
 | [plans/2026-08-12-output-width-limit.md](superpowers/plans/2026-08-12-output-width-limit.md) | **出力幅の上限指定**（`--max-width`）の実装計画と実施メモ |
 | [plans/2026-08-04-full-codebase-review-fixes.md](superpowers/plans/2026-08-04-full-codebase-review-fixes.md) | **全体レビュー修正（S1〜S7）**。セッションごとの判断・受け入れた残リスク・検証結果 |
 | [plans/2026-03-29-exif-frame-v2.md](superpowers/plans/2026-03-29-exif-frame-v2.md) | Exifフレーム v2 の実装計画 |

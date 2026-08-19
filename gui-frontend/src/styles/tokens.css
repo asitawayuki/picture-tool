@@ -107,6 +107,13 @@
   --md-sys-shape-corner-lg: 16px;   /* ダイアログ */
   --md-sys-shape-corner-full: 999px; /* ボタン、セグメント、選択インジケータ */
 
+  /* ---- 構造的な寸法（spec §3-1） ----
+   * 部品固有の内部寸法は各コンポーネントに直接書く（Global Constraints）が、
+   * rail 幅だけは NavigationRail・AppShell の当たり判定・Toast の左端が
+   * 同じ値を見ている必要があるのでここに置く。
+   */
+  --rail-width: 80px;
+
   /* ---- 余白（spec §1-4）: 4px グリッドの 6 段 ---- */
   --space-1: 4px;
   --space-2: 8px;

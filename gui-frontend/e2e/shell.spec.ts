@@ -62,6 +62,32 @@ test.describe("アプリシェル", () => {
     );
   });
 
+  test("カラム幅はキーボードでも動く（ポインタを持たない利用者の経路）", async ({
+    page,
+  }) => {
+    await page.goto("/");
+    const handle = page.getByRole("separator", { name: "左カラムの幅" });
+    // 前提条件: 既定幅は 240px（columns.ts の COLUMN_SPECS.folder.default）
+    await expect(handle).toHaveAttribute("aria-valuenow", "240");
+
+    // Tab だけで到達できること。focus() で飛ばすと「タブ順に居る」を検査できない
+    let reached = false;
+    for (let i = 0; i < 40 && !reached; i++) {
+      await page.keyboard.press("Tab");
+      reached =
+        (await page.evaluate(() => document.activeElement?.getAttribute("aria-label"))) ===
+        "左カラムの幅";
+    }
+    expect(reached).toBe(true);
+
+    // 左右キーで 16px ずつ（AppShell の KEYBOARD_STEP）
+    await page.keyboard.press("ArrowRight");
+    await expect(handle).toHaveAttribute("aria-valuenow", "256");
+    await page.keyboard.press("ArrowLeft");
+    await page.keyboard.press("ArrowLeft");
+    await expect(handle).toHaveAttribute("aria-valuenow", "224");
+  });
+
   test("localStorage に壊れた値が入っていても既定幅で起動する", async ({ page }) => {
     await page.addInitScript(() => {
       localStorage.setItem(

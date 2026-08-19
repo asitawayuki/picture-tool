@@ -111,7 +111,24 @@ picture-tool --input ./photos --output ./out --mode crop --quality 90 --max-size
 
 ## GUI
 
-3カラムレイアウト: フォルダーツリー | サムネイルグリッド | 選択リスト+設定
+navigation rail による 3 モード構成（変換 / 情報 / フレーム）。
+デザイントークンとプリミティブは `gui-frontend/src/styles/` と
+`gui-frontend/src/lib/ui/`。**他のファイルに生の色を書かない**
+（余白・角丸・タイポもトークン経由。部品固有の内部寸法だけは例外）。
+
+| モード | 左 | 中央 | 右 |
+|---|---|---|---|
+| 変換 | フォルダーツリー | 写真グリッド | 変換設定 |
+| 情報 | フォルダーツリー | 写真グリッド | メタデータ |
+| フレーム | プリセット一覧 | フレームのプレビュー | フレーム設定 |
+
+カラム幅と右パネルの折りたたみは `localStorage` に永続化する
+（`gui-frontend/src/lib/shell/columns.ts`）。テーマは OS 追従のみ。
+
+フロントの検証は 2 系統:
+- `bun test` — runes を含まない純粋ロジック（幅のクランプ・グリッド寸法・LRU・キュー）
+- `bun run e2e` — Playwright。`vite dev` に当てる。見た目の検証は
+  `e2e/stub.ts` が `window.__TAURI_INTERNALS__` を差し替える
 
 ### バックエンド（`gui/src/`）の前提
 

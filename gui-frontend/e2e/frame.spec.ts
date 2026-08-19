@@ -11,25 +11,6 @@ import { clearStorageOnce, installTauriStub, selectSegment } from "./stub";
  * プリセットが増える／消える。ここが本タスクで最も壊れやすい。
  */
 
-/**
- * 出ているトーストを閉じる。
- *
- * **トーストは右パネル最下部の主ボタン（保存・削除）に重なる。**
- * `.toast-stack` は画面右下の `position: fixed` で、個々のトーストは
- * `pointer-events: auto` を持つため、消えるまでその下のボタンはクリックできない
- * （成功 4 秒・エラー 8 秒）。実アプリでも同じことが起き、変換パネルの
- * 「N 枚を変換」も同じ位置にある。本計画の実施メモに Task 18 の宿題として記録した。
- *
- * 待てば通るが 1 回あたり数秒を捨て、将来トーストの寿命が延びると落ちるので、
- * 保存の直後に続けて押す検査では明示的に閉じる。
- */
-async function dismissToasts(page: Page) {
-  const closes = page
-    .getByRole("region", { name: "通知" })
-    .getByRole("button", { name: "閉じる" });
-  for (const button of await closes.all()) await button.click();
-}
-
 /** フォルダーを開いて 1 枚選び、見本写真を持たせた状態でフレームモードへ入る */
 async function enterFrameMode(page: Page) {
   await page.getByRole("button", { name: "photos", exact: false }).first().click();
@@ -75,6 +56,38 @@ test.describe("フレームモード", () => {
     await expect(page.getByRole("img", { name: "Exif フレームのプレビュー" })).toBeVisible();
   });
 
+  test("生成が始まる前に「生成できませんでした」を出さない", async ({ page }) => {
+    // プレビューの生成は 300ms の debounce を挟む。その待ち時間に失敗の文言を
+    // 出すと、まだ 1 度も要求していない状態を「失敗」と偽って伝えることになる。
+    //
+    // **`toBeHidden()` では検出できない。** 自動リトライが 300ms を待ち越して
+    // しまい、窓の中に何が出ていたかを見ずに通る（実測で確認済み）。
+    // 画面に出た文字列を MutationObserver で全部記録して、その履歴を見る
+    await page.evaluate(() => {
+      const seen: string[] = [];
+      (window as unknown as { __seenText: string[] }).__seenText = seen;
+      new MutationObserver(() => seen.push(document.body.innerText)).observe(
+        document.body,
+        { childList: true, subtree: true, characterData: true }
+      );
+    });
+
+    const rail = page.getByRole("navigation", { name: "モード" });
+    await rail.getByRole("button", { name: "変換" }).click();
+    await rail.getByRole("button", { name: "フレーム" }).click();
+
+    // 前提条件: この後ちゃんと絵が出ること。ずっと出ないなら
+    // 「失敗と出ない」は失敗を握りつぶしただけになる
+    await expect(page.getByRole("img", { name: "Exif フレームのプレビュー" })).toBeVisible();
+
+    const seen = await page.evaluate(
+      () => (window as unknown as { __seenText: string[] }).__seenText
+    );
+    // 前提条件: 記録が空でないこと。空なら「出なかった」は自明に成立する
+    expect(seen.length).toBeGreaterThan(0);
+    expect(seen.filter((t) => t.includes("プレビューを生成できませんでした"))).toEqual([]);
+  });
+
   test("表示項目チップの入切が押下状態に出る", async ({ page }) => {
     const chip = page.getByRole("button", { name: "日時" });
     // 前提条件: 既定では日時は切
@@ -106,7 +119,6 @@ test.describe("フレームモード", () => {
     // 前提条件: 保存されて一覧に出ていること。ここが無いと
     // 「旧名が消えた」は「そもそも作られていない」でも成立してしまう
     await expect(page.getByRole("button", { name: "preset-1", exact: true })).toBeVisible();
-    await dismissToasts(page);
 
     await page.getByRole("button", { name: "preset-1", exact: true }).dblclick();
     const rename = page.getByRole("textbox", { name: "プリセット名" });
@@ -139,11 +151,9 @@ test.describe("フレームモード", () => {
     await page.getByRole("button", { name: "新規保存" }).click();
     // 前提条件: 消す対象が実在すること
     await expect(page.getByRole("button", { name: "preset-1", exact: true })).toBeVisible();
-    await dismissToasts(page);
 
     await page.getByRole("button", { name: "preset-1 を削除" }).click();
     await expect(page.getByRole("button", { name: "preset-1", exact: true })).toHaveCount(0);
-    await dismissToasts(page);
 
     // 編集中のプリセットを消したので、下書きはディスク上に無い実体を指している。
     // ここで保存すると、消したはずのプリセットが書き戻される

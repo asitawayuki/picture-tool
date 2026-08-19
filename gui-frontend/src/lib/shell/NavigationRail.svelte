@@ -32,8 +32,9 @@
     flex-direction: column;
     align-items: center;
     gap: var(--space-3);
-    /* rail 幅は 80px 固定（spec §3-1）。ここだけは構造的な寸法 */
-    width: 80px;
+    /* rail 幅は 80px 固定（spec §3-1）。AppShell の当たり判定と
+       Toast の左端が同じ値を見るのでトークンから引く */
+    width: var(--rail-width);
     flex-shrink: 0;
     padding: var(--space-3) 0;
     background: var(--md-sys-color-surface);

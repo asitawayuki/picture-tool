@@ -15,9 +15,16 @@
 </div>
 
 <style>
+  /**
+   * **左下に置く。** 右下は 3 モードすべてで右パネル最下部の主ボタン
+   * （「N 枚を変換」「保存して次の写真へ」「保存」）の位置であり、そこへ重ねると
+   * 消えるまで（成功 4 秒・エラー 8 秒）主導線が隠れ、クリックも通らなくなる。
+   * 左下は 3 モードとも押すものが無い（フォルダーツリーの余白、
+   * プリセット一覧の説明文）。rail の幅ぶんだけ内側から始める。
+   */
   .toast-stack {
     position: fixed;
-    right: var(--space-4);
+    left: calc(var(--rail-width) + var(--space-4));
     bottom: var(--space-4);
     z-index: 600;
     display: flex;

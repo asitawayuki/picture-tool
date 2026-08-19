@@ -28,6 +28,7 @@
   let shell: HTMLDivElement | undefined = $state();
   let dragging = $state<"left" | "right" | null>(null);
 
+  /** ドラッグの座標計算に使う。CSS 側は tokens.css の --rail-width。動かすなら両方 */
   const RAIL_WIDTH = 80;
   const KEYBOARD_STEP = 16;
 

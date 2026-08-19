@@ -26,9 +26,13 @@
     const path = imagePath;
     if (!path || !snapshot) return;
 
+    // **loading は debounce の前に立てる。** 後ろ（setTimeout の中）で立てると、
+    // 待っている 300ms のあいだ `!loading && !src` になり、まだ 1 度も要求して
+    // いないのに「生成できませんでした」が出る（フレームモードへ入った直後の
+    // 300ms がそれに当たる）
+    loading = true;
     clearTimeout(debounceTimer);
     debounceTimer = setTimeout(async () => {
-      loading = true;
       try {
         const preview = await renderExifFramePreview(path, snapshot, bg);
         src = preview.data_url;
