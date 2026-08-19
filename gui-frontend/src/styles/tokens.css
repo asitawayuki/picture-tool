@@ -1,0 +1,214 @@
+/* Material 3 系デザイントークン。
+ *
+ * 色の値そのものは color-tokens.css（生成物）にある。ここは「どのロールを
+ * どのテーマで使うか」の割り当てと、色以外のトークンを持つ。
+ *
+ * **このファイルと color-tokens.css 以外に生の色を書かないこと。**
+ * それが「場当たり的」の再発防止線である（spec §1）。
+ * 余白・角丸・タイポ・モーションもここのトークンを使う。
+ * ただし部品固有の内部寸法（トラック 52×32px、アイコン 18px など）は
+ * 各コンポーネント内に直接書いてよい（Global Constraints）。
+ */
+@import "./color-tokens.css";
+
+/* ---- 色ロールの割り当て（spec §1-7） ----
+ *
+ * 4 ブロックで書く。ダークを :root だけで定義してライトをメディアクエリ内の
+ * :root で上書きする構造にしてはならない。メディアクエリは詳細度を変えないので、
+ * 将来 data-theme="dark" を足してもライトの OS では効かなくなる。
+ * :root:not([data-theme="dark"]) がメディアクエリ側を降ろすこの形なら
+ * 両方向の上書きが成立する。
+ *
+ * 本刷新で使うのは OS 追従の経路だけ（手動切替は入れない）。
+ */
+:root,
+:root[data-theme="dark"] {
+  --md-sys-color-primary: var(--_dark-primary);
+  --md-sys-color-on-primary: var(--_dark-on-primary);
+  --md-sys-color-primary-container: var(--_dark-primary-container);
+  --md-sys-color-on-primary-container: var(--_dark-on-primary-container);
+  --md-sys-color-surface: var(--_dark-surface);
+  --md-sys-color-surface-container-lowest: var(--_dark-surface-container-lowest);
+  --md-sys-color-surface-container-low: var(--_dark-surface-container-low);
+  --md-sys-color-surface-container: var(--_dark-surface-container);
+  --md-sys-color-surface-container-high: var(--_dark-surface-container-high);
+  --md-sys-color-surface-container-highest: var(--_dark-surface-container-highest);
+  --md-sys-color-on-surface: var(--_dark-on-surface);
+  --md-sys-color-on-surface-variant: var(--_dark-on-surface-variant);
+  --md-sys-color-outline: var(--_dark-outline);
+  --md-sys-color-outline-variant: var(--_dark-outline-variant);
+  --md-sys-color-error: var(--_dark-error);
+  --md-sys-color-on-error: var(--_dark-on-error);
+  --md-sys-color-error-container: var(--_dark-error-container);
+  --md-sys-color-on-error-container: var(--_dark-on-error-container);
+  --md-sys-color-inverse-surface: var(--_dark-inverse-surface);
+  --md-sys-color-inverse-on-surface: var(--_dark-inverse-on-surface);
+  --md-sys-color-scrim: var(--_dark-scrim);
+  color-scheme: dark;
+}
+
+@media (prefers-color-scheme: light) {
+  :root:not([data-theme="dark"]) {
+    --md-sys-color-primary: var(--_light-primary);
+    --md-sys-color-on-primary: var(--_light-on-primary);
+    --md-sys-color-primary-container: var(--_light-primary-container);
+    --md-sys-color-on-primary-container: var(--_light-on-primary-container);
+    --md-sys-color-surface: var(--_light-surface);
+    --md-sys-color-surface-container-lowest: var(--_light-surface-container-lowest);
+    --md-sys-color-surface-container-low: var(--_light-surface-container-low);
+    --md-sys-color-surface-container: var(--_light-surface-container);
+    --md-sys-color-surface-container-high: var(--_light-surface-container-high);
+    --md-sys-color-surface-container-highest: var(--_light-surface-container-highest);
+    --md-sys-color-on-surface: var(--_light-on-surface);
+    --md-sys-color-on-surface-variant: var(--_light-on-surface-variant);
+    --md-sys-color-outline: var(--_light-outline);
+    --md-sys-color-outline-variant: var(--_light-outline-variant);
+    --md-sys-color-error: var(--_light-error);
+    --md-sys-color-on-error: var(--_light-on-error);
+    --md-sys-color-error-container: var(--_light-error-container);
+    --md-sys-color-on-error-container: var(--_light-on-error-container);
+    --md-sys-color-inverse-surface: var(--_light-inverse-surface);
+    --md-sys-color-inverse-on-surface: var(--_light-inverse-on-surface);
+    --md-sys-color-scrim: var(--_light-scrim);
+    color-scheme: light;
+  }
+}
+
+:root[data-theme="light"] {
+  --md-sys-color-primary: var(--_light-primary);
+  --md-sys-color-on-primary: var(--_light-on-primary);
+  --md-sys-color-primary-container: var(--_light-primary-container);
+  --md-sys-color-on-primary-container: var(--_light-on-primary-container);
+  --md-sys-color-surface: var(--_light-surface);
+  --md-sys-color-surface-container-lowest: var(--_light-surface-container-lowest);
+  --md-sys-color-surface-container-low: var(--_light-surface-container-low);
+  --md-sys-color-surface-container: var(--_light-surface-container);
+  --md-sys-color-surface-container-high: var(--_light-surface-container-high);
+  --md-sys-color-surface-container-highest: var(--_light-surface-container-highest);
+  --md-sys-color-on-surface: var(--_light-on-surface);
+  --md-sys-color-on-surface-variant: var(--_light-on-surface-variant);
+  --md-sys-color-outline: var(--_light-outline);
+  --md-sys-color-outline-variant: var(--_light-outline-variant);
+  --md-sys-color-error: var(--_light-error);
+  --md-sys-color-on-error: var(--_light-on-error);
+  --md-sys-color-error-container: var(--_light-error-container);
+  --md-sys-color-on-error-container: var(--_light-on-error-container);
+  --md-sys-color-inverse-surface: var(--_light-inverse-surface);
+  --md-sys-color-inverse-on-surface: var(--_light-inverse-on-surface);
+  --md-sys-color-scrim: var(--_light-scrim);
+  color-scheme: light;
+}
+
+:root {
+  /* ---- 形状（spec §1-3） ---- */
+  --md-sys-shape-corner-xs: 4px;    /* チップ、バッジ */
+  --md-sys-shape-corner-sm: 8px;    /* テキストフィールド、サムネイル */
+  --md-sys-shape-corner-md: 12px;   /* カード、パネル */
+  --md-sys-shape-corner-lg: 16px;   /* ダイアログ */
+  --md-sys-shape-corner-full: 999px; /* ボタン、セグメント、選択インジケータ */
+
+  /* ---- 余白（spec §1-4）: 4px グリッドの 6 段 ---- */
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 24px;
+  --space-6: 32px;
+
+  /* ---- タイポ（spec §1-4）: 実際に使う 5 段だけ ----
+   * Web フォントは読み込まない。日本語は OS 同梱にフォールバックする。
+   * font: 短縮形で持つので、使う側は font: var(--md-sys-typescale-body-md); と書く。
+   */
+  --md-ref-typeface-plain: system-ui, -apple-system, "Segoe UI", "Yu Gothic UI",
+    "Hiragino Sans", "Noto Sans JP", Roboto, sans-serif;
+  --md-sys-typescale-title-md: 500 16px/24px var(--md-ref-typeface-plain);
+  --md-sys-typescale-title-sm: 500 14px/20px var(--md-ref-typeface-plain);
+  --md-sys-typescale-body-md: 400 14px/20px var(--md-ref-typeface-plain);
+  --md-sys-typescale-body-sm: 400 12px/16px var(--md-ref-typeface-plain);
+  --md-sys-typescale-label-lg: 500 14px/20px var(--md-ref-typeface-plain);
+  --md-sys-typescale-label-lg-tracking: 0.1px;
+
+  /* ---- 状態レイヤー（spec §1-5） ---- */
+  --md-sys-state-hover-opacity: 0.08;
+  --md-sys-state-focus-opacity: 0.10;
+  --md-sys-state-pressed-opacity: 0.10;
+  --md-sys-state-focus-ring: 3px solid var(--md-sys-color-primary);
+  --md-sys-state-focus-ring-offset: 2px;
+
+  /* ---- elevation（spec §1-5）: 4 段のみ ----
+   * ダークでは影がほぼ見えないため、surface-container 系の明度差を主、
+   * box-shadow を従として併用する。backdrop-filter は使わない。
+   */
+  --md-sys-elevation-surface-0: var(--md-sys-color-surface);
+  --md-sys-elevation-surface-1: var(--md-sys-color-surface-container-low);
+  --md-sys-elevation-surface-2: var(--md-sys-color-surface-container);
+  --md-sys-elevation-surface-3: var(--md-sys-color-surface-container-high);
+  --md-sys-elevation-shadow-0: none;
+  --md-sys-elevation-shadow-1: 0 1px 2px 0 rgb(0 0 0 / 0.30), 0 1px 3px 1px rgb(0 0 0 / 0.15);
+  --md-sys-elevation-shadow-2: 0 1px 2px 0 rgb(0 0 0 / 0.30), 0 2px 6px 2px rgb(0 0 0 / 0.15);
+  --md-sys-elevation-shadow-3: 0 1px 3px 0 rgb(0 0 0 / 0.30), 0 4px 8px 3px rgb(0 0 0 / 0.15);
+
+  /* ---- モーション（spec §1-6） ---- */
+  --md-sys-motion-duration-short: 150ms;
+  --md-sys-motion-duration-medium: 250ms;
+  --md-sys-motion-easing-standard: cubic-bezier(0.2, 0, 0, 1);
+  --md-sys-motion-easing-emphasized-decelerate: cubic-bezier(0.05, 0.7, 0.1, 1);
+}
+
+/* ---- 状態レイヤーの唯一の実装（spec §1-5） ----
+ *
+ * これを付けた要素は position: relative になり、::after が全面を覆う。
+ * 塗りは currentColor なので、対になる on-* 色が自動的に使われる。
+ * hover と選択状態を混ぜないために、background を直接書き換える実装は禁止。
+ *
+ * tokens.css は Svelte の外側にある素の CSS なので、このクラスは
+ * どのコンポーネントからでも素直に使える（スコープが付かない）。
+ */
+.state-layer {
+  position: relative;
+  isolation: isolate;
+}
+
+.state-layer::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  background: currentColor;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity var(--md-sys-motion-duration-short)
+    var(--md-sys-motion-easing-standard);
+}
+
+.state-layer:hover:not(:disabled)::after {
+  opacity: var(--md-sys-state-hover-opacity);
+}
+
+.state-layer:focus-visible::after {
+  opacity: var(--md-sys-state-focus-opacity);
+}
+
+.state-layer:active:not(:disabled)::after {
+  opacity: var(--md-sys-state-pressed-opacity);
+}
+
+/* フォーカスリングは状態レイヤーとは別に、輪郭として出す */
+:focus-visible {
+  outline: var(--md-sys-state-focus-ring);
+  outline-offset: var(--md-sys-state-focus-ring-offset);
+}
+
+/* ---- prefers-reduced-motion（spec §1-6 / §7-3） ----
+ * すべてのトランジションを止める。個別のコンポーネントで書かない。
+ */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    transition-duration: 0.01ms !important;
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    scroll-behavior: auto !important;
+  }
+}
