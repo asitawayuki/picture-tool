@@ -1,12 +1,15 @@
 <script lang="ts">
   import { onMount } from "svelte";
-  import FolderTree from "./lib/FolderTree.svelte";
+  import AppShell from "./lib/shell/AppShell.svelte";
+  import { createLayout } from "./lib/shell/layout.svelte";
+  import type { AppMode } from "./lib/shell/modes";
+  import FolderTree from "./lib/browser/FolderTree.svelte";
   import ThumbnailGrid from "./lib/ThumbnailGrid.svelte";
-  import SelectionList from "./lib/SelectionList.svelte";
   import SettingsPanel from "./lib/SettingsPanel.svelte";
   import ProgressOverlay from "./lib/ProgressOverlay.svelte";
   import ImagePreview from "./lib/ImagePreview.svelte";
   import ExifFrameSettings from "./lib/ExifFrameSettings.svelte";
+  import Card from "./lib/ui/Card.svelte";
   import Dialog from "./lib/ui/Dialog.svelte";
   import Button from "./lib/ui/Button.svelte";
   import ResultDialog from "./lib/ResultDialog.svelte";
@@ -19,7 +22,21 @@
   import type { ImageEntry, ProcessingConfig } from "./lib/types";
 
   // --- 状態 ---
+  let mode = $state<AppMode>("convert");
+
+  // 全モードで共有。rail の切替では破棄しない
+  let currentFolder = $state("");
   let images = $state<ImageEntry[]>([]);
+
+  // 最後にクリックした 1 枚。フレームの見本写真の出所（spec §3-2）
+  let focusedPath = $state<string | null>(null);
+
+  // メタデータの編集対象。未保存ガードはこれの変更にだけ掛かる。
+  // 本刷新では読むだけで、ガードの配線は次工程（spec §5-2）
+  let editingPath = $state<string | null>(null);
+
+  const layout = createLayout();
+
   let selectedImages = $state<ImageEntry[]>([]);
   let outputFolder = $state("");
   let config = $state<ProcessingConfig>({
@@ -77,13 +94,14 @@
   });
 
   // --- ハンドラー ---
-  let currentFolder = $state("");
   // フォルダー連打で古い listImages の応答が新しい一覧を上書きしないようトークンで守る
   let listImagesToken = 0;
 
   async function handleSelectFolder(path: string) {
     currentFolder = path;
     currentPage = 0;
+    // フォルダーを変えたら最後に触った写真は無効
+    focusedPath = null;
     const token = ++listImagesToken;
     try {
       const result = await listImages(path);
@@ -103,10 +121,6 @@
     } else {
       selectedImages = [...selectedImages, image];
     }
-  }
-
-  function handleRemove(image: ImageEntry) {
-    selectedImages = selectedImages.filter((img) => img.path !== image.path);
   }
 
   async function handlePickOutputFolder() {
@@ -143,12 +157,20 @@
   }
 </script>
 
-<div class="app">
-  <div class="left-panel">
-    <FolderTree onSelectFolder={handleSelectFolder} />
-  </div>
+<AppShell {mode} onModeChange={(next) => (mode = next)} {layout}>
+  {#snippet left()}
+    {#if mode === "frame"}
+      <div class="placeholder">
+        <Card level={1} title="プリセット一覧">
+          <p>Task 16（段階 7）で実装する。</p>
+        </Card>
+      </div>
+    {:else}
+      <FolderTree onSelectFolder={handleSelectFolder} />
+    {/if}
+  {/snippet}
 
-  <div class="center-panel">
+  {#snippet center()}
     <ThumbnailGrid
       {images}
       {selectedPaths}
@@ -159,31 +181,41 @@
       onPreview={handlePreview}
       onPageChange={(page) => (currentPage = page)}
     />
-  </div>
+  {/snippet}
 
-  <div class="right-panel">
-    <SelectionList
-      {selectedImages}
-      thumbnailFor={thumbnails.get}
-      onRemove={handleRemove}
-      onRequestThumbnail={thumbnails.request}
-      onPreview={handlePreview}
-    />
-    <SettingsPanel
-      bind:config
-      {outputFolder}
-      {canProcess}
-      onPickOutputFolder={handlePickOutputFolder}
-      onProcess={handleProcess}
-      {exifFrameEnabled}
-      selectedPresetName={presets.selectedName}
-      presets={presets.presets}
-      onExifFrameEnabledChange={(enabled) => (exifFrameEnabled = enabled)}
-      onPresetChange={(name) => (presets.selectedName = name)}
-      onOpenExifSettings={() => (showExifFrameSettings = true)}
-    />
-  </div>
-</div>
+  {#snippet right()}
+    {#if mode === "convert"}
+      <SettingsPanel
+        bind:config
+        {outputFolder}
+        {canProcess}
+        onPickOutputFolder={handlePickOutputFolder}
+        onProcess={handleProcess}
+        {exifFrameEnabled}
+        selectedPresetName={presets.selectedName}
+        presets={presets.presets}
+        onExifFrameEnabledChange={(enabled) => (exifFrameEnabled = enabled)}
+        onPresetChange={(name) => (presets.selectedName = name)}
+        onOpenExifSettings={() => (showExifFrameSettings = true)}
+      />
+    {:else if mode === "metadata"}
+      <div class="placeholder">
+        <Card level={1} title="メタデータ">
+          <p>Task 17（段階 8）で実装する。</p>
+        </Card>
+      </div>
+    {:else}
+      <div class="placeholder">
+        <Card level={1} title="フレーム設定">
+          <p>Task 16（段階 7）で実装する。</p>
+          <Button variant="outlined" onclick={() => (showExifFrameSettings = true)}>
+            現行の Exif フレーム設定を開く
+          </Button>
+        </Card>
+      </div>
+    {/if}
+  {/snippet}
+</AppShell>
 
 {#if previewImage}
   <ImagePreview
@@ -241,32 +273,8 @@
 <Toast />
 
 <style>
-  .app {
-    display: flex;
-    height: 100vh;
-    overflow: hidden;
-  }
-
-  .left-panel {
-    width: 220px;
-    min-width: 180px;
-    border-right: 1px solid var(--md-sys-color-outline-variant);
-    overflow: hidden;
-  }
-
-  .center-panel {
-    flex: 1;
-    overflow: hidden;
-  }
-
-  .right-panel {
-    width: 240px;
-    min-width: 200px;
-    border-left: 1px solid var(--md-sys-color-outline-variant);
-    background: var(--md-sys-color-surface-container-low);
-    display: flex;
-    flex-direction: column;
-    overflow: hidden;
+  .placeholder {
+    padding: var(--space-4);
   }
 
   .dialog-detail {

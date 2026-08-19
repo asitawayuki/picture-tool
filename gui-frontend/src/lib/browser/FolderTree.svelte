@@ -1,8 +1,8 @@
 <script lang="ts">
   import { onMount } from "svelte";
-  import { listDirectory, listDrives, loadFavorites, saveFavorites } from "./api";
-  import { toast, describeError } from "./toasts.svelte";
-  import type { FileEntry } from "./types";
+  import { listDirectory, listDrives, loadFavorites, saveFavorites } from "../api";
+  import { toast, describeError } from "../toasts.svelte";
+  import type { FileEntry } from "../types";
 
   interface Props {
     onSelectFolder: (path: string) => void;
