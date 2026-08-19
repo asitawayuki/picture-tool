@@ -8,6 +8,14 @@ import { clearStorageOnce, installTauriStub } from "./stub";
  * 見ている。ここで見るのは **runes と DOM を繋いだ結果**：ロール構造、
  * 仮想化で DOM に出る枚数、キー割り当て（現行から変わる）、フォーカスの行方。
  */
+/**
+ * スクロールする箱は `role="listbox"` の要素**ではない**。仮想化の余白は
+ * listbox 側の padding で作っており、padding は要素自身の箱を膨らませるので、
+ * スクローラーと兼ねられない（PhotoGrid.svelte のコメント）。
+ * 位置を動かすときは外側の `.scroller` を掴むこと。
+ */
+const scrollerOf = (page: import("@playwright/test").Page) => page.locator(".scroller");
+
 test.describe("写真グリッド", () => {
   test.beforeEach(async ({ page }) => {
     await installTauriStub(page, { imageCount: 3000 });
@@ -90,7 +98,7 @@ test.describe("写真グリッド", () => {
     );
 
     // 1 枚目が描画範囲から確実に外れるところまで飛ばす
-    await grid.evaluate((el) => (el.scrollTop = el.scrollHeight));
+    await scrollerOf(page).evaluate((el) => (el.scrollTop = el.scrollHeight));
 
     await expect
       .poll(() =>
@@ -105,10 +113,91 @@ test.describe("写真グリッド", () => {
 
   test("末尾までスクロールしても最後の 1 枚に到達できる", async ({ page }) => {
     const grid = page.getByRole("listbox", { name: "写真" });
-    await grid.evaluate((el) => (el.scrollTop = el.scrollHeight));
+    await scrollerOf(page).evaluate((el) => (el.scrollTop = el.scrollHeight));
     await expect(grid.getByRole("option").last()).toHaveAttribute(
       "aria-posinset",
       "3000"
     );
+  });
+
+  test("プレビューのフィルムストリップが現在位置を示し、クリックで送れる", async ({
+    page,
+  }) => {
+    const grid = page.getByRole("listbox", { name: "写真" });
+    await grid.getByRole("option").first().dblclick();
+
+    const viewer = page.getByRole("dialog", { name: "画像プレビュー" });
+    await expect(viewer).toBeVisible();
+    await expect(viewer.getByText("1 / 3000")).toBeVisible();
+
+    // ストリップの枠は button のまま（role="listitem" で上書きしない。Step 3）
+    await viewer.getByRole("button", { name: /^5 枚目/ }).click();
+    await expect(viewer.getByText("5 / 3000")).toBeVisible();
+    await expect(viewer.getByRole("button", { name: /^5 枚目/ })).toHaveAttribute(
+      "aria-current",
+      "true"
+    );
+  });
+
+  test("フィルムストリップの枠が実データで埋まる（spec §4-1）", async ({ page }) => {
+    // 見ているのは「グリッドと同じキャッシュから、ストリップ用の解像度で
+    // 実際に絵が届く」ところまで。要求種別（pinned / discardable）の規則そのものは
+    // requestQueue.test.ts が見ており、**ここでは判別できない** ──
+    // 取得キューへの要求は `values`（SvelteMap）を読むので、
+    // グリッドのサムネイルが届くたびにストリップの $effect が再走し、
+    // 捨てられた要求が出し直されるため（実測で確認済み）
+    const grid = page.getByRole("listbox", { name: "写真" });
+    await grid.getByRole("option").first().dblclick();
+
+    const viewer = page.getByRole("dialog", { name: "画像プレビュー" });
+    await expect(viewer).toBeVisible();
+    // ストリップの要求が捌ける前にグリッドを動かす（＝破棄の機会を作る）
+    await scrollerOf(page).evaluate((el) => (el.scrollTop = el.scrollHeight));
+
+    await expect(
+      viewer.getByRole("button", { name: /^1 枚目/ }).locator("img")
+    ).toHaveAttribute("src", /^data:image\/jpeg;base64,.+/);
+  });
+
+  test("プレビューは ← → で送れ、Esc で閉じる", async ({ page }) => {
+    const grid = page.getByRole("listbox", { name: "写真" });
+    await grid.getByRole("option").first().dblclick();
+    const viewer = page.getByRole("dialog", { name: "画像プレビュー" });
+
+    await page.keyboard.press("ArrowRight");
+    await expect(viewer.getByText("2 / 3000")).toBeVisible();
+    await page.keyboard.press("ArrowLeft");
+    await expect(viewer.getByText("1 / 3000")).toBeVisible();
+
+    await page.keyboard.press("Escape");
+    await expect(viewer).toHaveCount(0);
+  });
+
+  test("プレビューの矩形ドラッグで拡大し、クリックで解除する", async ({ page }) => {
+    // ズームは Task 14 で「移設したが触っていない」唯一の部分。
+    // 壊れていたら写し間違いなので、ここだけは実際にドラッグして見る
+    const grid = page.getByRole("listbox", { name: "写真" });
+    await grid.getByRole("option").first().dblclick();
+    const viewer = page.getByRole("dialog", { name: "画像プレビュー" });
+    const image = viewer.locator("img.preview-image");
+    await expect(image).toBeVisible();
+
+    // 前提条件: 拡大前は transform を持たないこと。
+    // 最初から scale が乗っていたら、以降の期待は何も検出しない
+    expect(await image.evaluate((el) => el.style.transform)).toBe("");
+
+    const box = (await image.boundingBox())!;
+    await page.mouse.move(box.x + 40, box.y + 40);
+    await page.mouse.down();
+    await page.mouse.move(box.x + 240, box.y + 290, { steps: 8 });
+    await page.mouse.up();
+
+    await expect
+      .poll(() => image.evaluate((el) => el.style.transform))
+      .toContain("scale(");
+
+    // ズーム中の画面をクリックすると解除される
+    await page.mouse.click(box.x + box.width / 2, box.y + box.height / 2);
+    await expect.poll(() => image.evaluate((el) => el.style.transform)).toBe("");
   });
 });

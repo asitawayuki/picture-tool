@@ -8,7 +8,7 @@
   import PhotoGrid from "./lib/browser/PhotoGrid.svelte";
   import ConvertPanel from "./lib/panels/ConvertPanel.svelte";
   import ProgressOverlay from "./lib/ProgressOverlay.svelte";
-  import ImagePreview from "./lib/ImagePreview.svelte";
+  import PhotoViewer from "./lib/browser/PhotoViewer.svelte";
   import ExifFrameSettings from "./lib/ExifFrameSettings.svelte";
   import Card from "./lib/ui/Card.svelte";
   import Dialog from "./lib/ui/Dialog.svelte";
@@ -263,10 +263,13 @@
 {/snippet}
 
 {#if previewImage}
-  <ImagePreview
+  <PhotoViewer
     image={previewImage}
     {images}
+    selectionMode={mode === "convert" ? "multi" : "single"}
     {selectedPaths}
+    thumbnailFor={thumbnails.get}
+    onRequestThumbnail={thumbnails.request}
     onToggleSelect={handleToggleSelect}
     onClose={handleClosePreview}
     onNavigate={(img) => {

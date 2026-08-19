@@ -63,7 +63,10 @@
   /** タイルの目標幅。既定 200px は「サムネイルが小さい」への回答（spec §4-1） */
   let targetTileWidth = $state(200);
 
+  /** スクロールする箱。仮想化の余白は持たない */
   let scroller: HTMLDivElement | undefined = $state();
+  /** role="listbox" の箱。仮想化の余白と列指定はこちらに付く */
+  let listbox: HTMLDivElement | undefined = $state();
   let containerWidth = $state(0);
   let viewportHeight = $state(0);
 
@@ -153,8 +156,8 @@
       // preventScroll: スクロール位置は scrollIndexIntoView が決める。
       // ブラウザ既定のスクロールが入ると仮想化の行位置と食い違う
       if (tile !== document.activeElement) tile.focus({ preventScroll: true });
-    } else if (document.activeElement !== scroller) {
-      scroller.focus();
+    } else if (listbox && document.activeElement !== listbox) {
+      listbox.focus();
     }
   });
 
@@ -257,67 +260,86 @@
     {/snippet}
   </GridHeader>
 
-  <!-- スペーサー要素は置かない。上下の余白はこのコンテナの padding で作る
-       （option 以外の子はロール構造を壊す。spec §4-1） -->
+  <!-- 可視高はこの外枠で測る。**スクローラー自身の clientHeight を bind しては
+       ならない** ── 仮想化の余白（padding-top / padding-bottom）はスクローラーに
+       付くので、測る対象と変える対象が同じになり、
+       「余白が伸びる → 測り直す → 描画範囲が変わる → 余白が縮む」の
+       帰還路ができてフレームごとに振動する（実測: 可視範囲が
+       [0,14] と [0,2993] を延々と往復し、毎回 3,000 件の要求を捨てる）。
+       外枠には余白が付かないので高さが動かない -->
+  <!-- **スクロールする箱と listbox を分ける。**
+       仮想化の余白（padding-top / padding-bottom）はスクロールする箱には
+       付けられない ── padding は要素自身の padding box を膨らませるので、
+       `overflow-y: auto` の要素に 34 万 px の padding を付けると、
+       その要素自体が 34 万 px の高さになってスクロールしなくなる
+       （実測: `clientHeight` も 340,977px になり、可視高の測定も壊れる）。
+       余白は内側の listbox に付け、スクロールと可視高は外側の箱が持つ。
+       spec §4-1 の「スペーサー要素を listbox の直接の子にしてはならない」は
+       これで満たされている（listbox の子は option だけ）。 -->
   <div
-    class="grid"
-    role="listbox"
-    aria-label="写真"
-    aria-multiselectable={selectionMode === "multi"}
-    tabindex="-1"
+    class="scroller"
     bind:this={scroller}
-    bind:clientWidth={containerWidth}
     bind:clientHeight={viewportHeight}
     onscroll={(e) => (scrollTop = e.currentTarget.scrollTop)}
-    onkeydown={handleKeydown}
-    style:grid-template-columns="repeat({metrics.columns}, 1fr)"
-    style:padding-top="{GRID_PADDING + range.paddingTop}px"
-    style:padding-bottom="{GRID_PADDING + range.paddingBottom}px"
   >
-    {#each visible as image, offset (image.path)}
-      {@const index = range.startIndex + offset}
-      {@const thumb = thumbnailFor(image.path, metrics.thumbnailSize)}
-      <!-- キーボードは listbox（親）側の onkeydown が composite widget として
-           一括で受ける。ARIA の listbox/option ではそれが正しい形で、
-           option ごとに handler を重ねると同じキーが二重に走る。
-           svelte は role="option" を対話的と見なさないので誤検出になる -->
-      <!-- svelte-ignore a11y_click_events_have_key_events -->
-      <div
-        class="tile state-layer"
-        class:selected={isSelected(image)}
-        class:focused={focusedPath === image.path}
-        role="option"
-        aria-selected={isSelected(image)}
-        aria-setsize={images.length}
-        aria-posinset={index + 1}
-        aria-label={image.name}
-        tabindex={index === rovingIndex ? 0 : -1}
-        data-index={index}
-        onclick={(e) => {
-          // tabindex="-1" の要素はクリックでフォーカスされるが、エンジンによって
-          // 挙動が違う（出荷先は WebKitGTK）。上の $effect が「グリッド内に
-          // フォーカスがある」を前提にしているので、ここで確実に入れておく
-          e.currentTarget.focus({ preventScroll: true });
-          activate(image);
-        }}
-        ondblclick={(e) => {
-          e.preventDefault();
-          onPreview(image);
-        }}
-      >
-        <div class="thumb">
-          {#if thumb}
-            <img src="data:image/jpeg;base64,{thumb}" alt="" />
-          {:else}
-            <div class="placeholder" aria-hidden="true">📷</div>
-          {/if}
-          {#if selectionMode === "multi" && selectedPaths.has(image.path)}
-            <span class="check" aria-hidden="true">✓</span>
-          {/if}
+    <div
+      class="grid"
+      role="listbox"
+      aria-label="写真"
+      aria-multiselectable={selectionMode === "multi"}
+      tabindex="-1"
+      bind:this={listbox}
+      bind:clientWidth={containerWidth}
+      onkeydown={handleKeydown}
+      style:grid-template-columns="repeat({metrics.columns}, 1fr)"
+      style:padding-top="{GRID_PADDING + range.paddingTop}px"
+      style:padding-bottom="{GRID_PADDING + range.paddingBottom}px"
+    >
+      {#each visible as image, offset (image.path)}
+        {@const index = range.startIndex + offset}
+        {@const thumb = thumbnailFor(image.path, metrics.thumbnailSize)}
+        <!-- キーボードは listbox（親）側の onkeydown が composite widget として
+             一括で受ける。ARIA の listbox/option ではそれが正しい形で、
+             option ごとに handler を重ねると同じキーが二重に走る。
+             svelte は role="option" を対話的と見なさないので誤検出になる -->
+        <!-- svelte-ignore a11y_click_events_have_key_events -->
+        <div
+          class="tile state-layer"
+          class:selected={isSelected(image)}
+          class:focused={focusedPath === image.path}
+          role="option"
+          aria-selected={isSelected(image)}
+          aria-setsize={images.length}
+          aria-posinset={index + 1}
+          aria-label={image.name}
+          tabindex={index === rovingIndex ? 0 : -1}
+          data-index={index}
+          onclick={(e) => {
+            // tabindex="-1" の要素はクリックでフォーカスされるが、エンジンによって
+            // 挙動が違う（出荷先は WebKitGTK）。上の $effect が「グリッド内に
+            // フォーカスがある」を前提にしているので、ここで確実に入れておく
+            e.currentTarget.focus({ preventScroll: true });
+            activate(image);
+          }}
+          ondblclick={(e) => {
+            e.preventDefault();
+            onPreview(image);
+          }}
+        >
+          <div class="thumb">
+            {#if thumb}
+              <img src="data:image/jpeg;base64,{thumb}" alt="" />
+            {:else}
+              <div class="placeholder" aria-hidden="true">📷</div>
+            {/if}
+            {#if selectionMode === "multi" && selectedPaths.has(image.path)}
+              <span class="check" aria-hidden="true">✓</span>
+            {/if}
+          </div>
+          <span class="filename">{image.name}</span>
         </div>
-        <span class="filename">{image.name}</span>
-      </div>
-    {/each}
+      {/each}
+    </div>
   </div>
 </div>
 
@@ -334,12 +356,16 @@
     width: 140px;
   }
 
-  /* gap と左右 padding は gridMetrics.ts の GRID_GAP / GRID_PADDING と
-     同じ値であることが行位置の前提。片方だけ変えないこと */
-  .grid {
+  /* スクロールする箱。**ここに padding を付けないこと**（上のコメント） */
+  .scroller {
     flex: 1;
     min-height: 0;
     overflow-y: auto;
+  }
+
+  /* gap と左右 padding は gridMetrics.ts の GRID_GAP / GRID_PADDING と
+     同じ値であることが行位置の前提。片方だけ変えないこと */
+  .grid {
     display: grid;
     gap: var(--space-2);
     align-content: start;
