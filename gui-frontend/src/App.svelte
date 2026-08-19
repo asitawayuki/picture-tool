@@ -7,25 +7,27 @@
   import FolderTree from "./lib/browser/FolderTree.svelte";
   import PhotoGrid from "./lib/browser/PhotoGrid.svelte";
   import ConvertPanel from "./lib/panels/ConvertPanel.svelte";
-  import ProgressOverlay from "./lib/ProgressOverlay.svelte";
-  import PhotoViewer from "./lib/browser/PhotoViewer.svelte";
+  import MetadataPanel from "./lib/panels/MetadataPanel.svelte";
   import PresetList from "./lib/panels/PresetList.svelte";
   import FramePreview from "./lib/panels/FramePreview.svelte";
   import FramePanel from "./lib/panels/FramePanel.svelte";
-  import Card from "./lib/ui/Card.svelte";
-  import Dialog from "./lib/ui/Dialog.svelte";
   import Button from "./lib/ui/Button.svelte";
+  import ProgressOverlay from "./lib/ProgressOverlay.svelte";
+  import DeleteOriginalsDialog from "./lib/DeleteOriginalsDialog.svelte";
   import ResultDialog from "./lib/ResultDialog.svelte";
   import Toast from "./lib/Toast.svelte";
   import { toast, describeError } from "./lib/toasts.svelte";
-  import { listAvailableFonts, listImages, pickOutputFolder } from "./lib/api";
+  import { listImages } from "./lib/api";
   import { createThumbnailQueue } from "./lib/browser/thumbnailQueue.svelte";
   import { createPresetStore } from "./lib/panels/presets.svelte";
   import { createConvertRun } from "./lib/panels/convertRun.svelte";
   import { createFrameDraft } from "./lib/panels/frameDraft.svelte";
-  import type { FontInfo, ImageEntry, ProcessingConfig } from "./lib/types";
+  import { createMetadataDraft } from "./lib/panels/metadataDraft.svelte";
+  import type { ImageEntry } from "./lib/types";
 
   // --- 状態 ---
+  // App が持つのは「モード」「フォルダー」「選択」「フォーカス」の 4 状態と
+  // パネルの差し替えだけ（spec §3-5）。それ以外は下のストアとパネルが持つ。
   let mode = $state<AppMode>("convert");
 
   // 全モードで共有。rail の切替では破棄しない
@@ -39,31 +41,8 @@
   // 本刷新では読むだけで、ガードの配線は次工程（spec §5-2）
   let editingPath = $state<string | null>(null);
 
-  const layout = createLayout();
-
   // 変換モード専用の選択。フォルダーを変えたらクリアする（spec §3-2）
   const selectedPaths = new SvelteSet<string>();
-
-  let outputFolder = $state("");
-  let config = $state<ProcessingConfig>({
-    mode: "crop",
-    bg_color: "white",
-    quality: 90,
-    max_size_mb: 8,
-    delete_originals: false,
-    max_width: null,
-  });
-
-  const thumbnails = createThumbnailQueue();
-  const presets = createPresetStore();
-  const convert = createConvertRun();
-  const frame = createFrameDraft();
-
-  // --- Exifフレーム状態 ---
-  let exifFrameEnabled = $state(false);
-  let fonts = $state<FontInfo[]>([]);
-
-  let previewImage = $state<ImageEntry | null>(null);
 
   /**
    * グリッドのスクロール位置。**App が持つ**（spec §3-2）。
@@ -72,27 +51,34 @@
    */
   let gridScrollTop = $state(0);
 
-  function handlePreview(image: ImageEntry) {
-    previewImage = image;
-  }
-
-  function handleClosePreview() {
-    previewImage = null;
-  }
+  const layout = createLayout();
+  const thumbnails = createThumbnailQueue();
+  const presets = createPresetStore();
+  const convert = createConvertRun();
+  // 下書きは一覧を読み書きするのでプリセットストアを渡す
+  const frame = createFrameDraft(presets);
+  const metadata = createMetadataDraft();
 
   // --- 派生状態 ---
   let selectedImages = $derived(images.filter((img) => selectedPaths.has(img.path)));
-  let canProcess = $derived(
-    selectedImages.length > 0 && !convert.processing && outputFolder !== ""
+  let editingImage = $derived(
+    editingPath === null ? null : (images.find((img) => img.path === editingPath) ?? null)
   );
+  // 選択（App）と変換の設定（convert）にまたがるのでここで導く
+  let canProcess = $derived(
+    selectedImages.length > 0 && !convert.processing && convert.outputFolder !== ""
+  );
+
+  // 編集対象が変わったら下書きを入れ替える。次工程ではここが
+  // read_image_metadata の呼び出し口になる（spec §5-2）
+  $effect(() => {
+    metadata.load(editingPath);
+  });
 
   // --- イベントリスナー ---
   onMount(() => {
     const unsubscribe = convert.subscribeProgress();
     presets.reload();
-    listAvailableFonts()
-      .then((f) => (fonts = f))
-      .catch((e) => toast.error(`フォント一覧の取得に失敗しました: ${describeError(e)}`));
     // キャッシュ上限を実測で決める（Task 15 / spec §7-2）ための窓口。
     // import.meta.env.DEV で囲んであるので本番バンドルには残らない
     if (import.meta.env.DEV) {
@@ -149,64 +135,12 @@
     if (next === "metadata" && editingPath === null) editingPath = focusedPath;
     // 下書きはモードを跨いで保つ。null のときだけ、いま選ばれているプリセットから起こす
     if (next === "frame" && frame.draft === null) {
-      frame.select(presets.selectedName, presets.presets);
+      frame.select(presets.selectedName);
     }
   }
-
-  // --- フレームのプリセット操作 ---
-  async function handleSaveFrame() {
-    const snap = frame.snapshot();
-    // 改名なら「新しい名前で保存 → 旧名を削除」。それ以外は普通の保存
-    const from = frame.renamedFrom;
-    const ok = from ? await presets.rename(from, snap) : await presets.save(snap);
-    // editingName を保存後の名前へ合わせ直す。これをしないと、改名の直後に
-    // もう一度保存したときに renamedFrom が消えた旧名を指し、
-    // 存在しないプリセットを削除しようとする
-    if (ok) frame.select(snap.name, presets.presets);
-  }
-
-  async function handleDeletePreset(name: string) {
-    await presets.remove(name);
-    // 消したのが編集中のものなら、下書きがディスク上に無い実体を指したままになる。
-    // そのまま保存すると消したはずのプリセットが復活するので選び直す
-    if (frame.editingName === name) frame.select(presets.selectedName, presets.presets);
-  }
-
-  function handleClearSelection() {
-    selectedPaths.clear();
-  }
-
-  async function handlePickOutputFolder() {
-    try {
-      // ダイアログは Rust 側が開く。ここで選ばれたフォルダーだけが
-      // バックエンドの書き込み許可対象になる（S6-H8）。
-      const selected = await pickOutputFolder(currentFolder || undefined);
-      if (selected) {
-        outputFolder = selected;
-      }
-    } catch (e) {
-      toast.error(`出力先の選択に失敗しました: ${describeError(e)}`);
-    }
-  }
-
-  // --- 変換実行 ---
-  let showDeleteConfirm = $state(false);
 
   function handleProcess() {
-    if (!canProcess) return;
-    // 元ファイルの一括削除は取り消せないため必ず確認を挟む
-    if (config.delete_originals) {
-      showDeleteConfirm = true;
-      return;
-    }
-    runProcess();
-  }
-
-  function runProcess() {
-    showDeleteConfirm = false;
-    const efConfig =
-      config.mode === "pad" && exifFrameEnabled ? presets.active : null;
-    convert.run(selectedImages, outputFolder, config, efConfig);
+    if (canProcess) convert.request(selectedImages, presets.active);
   }
 </script>
 
@@ -216,10 +150,10 @@
       <PresetList
         presets={presets.presets}
         editingName={frame.editingName}
-        onSelect={(name) => frame.select(name, presets.presets)}
+        onSelect={frame.select}
         onRename={frame.rename}
-        onCreate={() => frame.createNew(presets.presets)}
-        onDelete={handleDeletePreset}
+        onCreate={frame.createNew}
+        onDelete={frame.remove}
       />
     {:else}
       <FolderTree onSelectFolder={handleSelectFolder} />
@@ -228,50 +162,58 @@
 
   {#snippet center()}
     {#if mode === "frame"}
-      <FramePreview config={frame.draft} bgColor={config.bg_color} imagePath={focusedPath} />
+      <FramePreview
+        config={frame.draft}
+        bgColor={convert.config.bg_color}
+        imagePath={focusedPath}
+      />
     {:else}
-    <PhotoGrid
-      {images}
-      selectionMode={mode === "convert" ? "multi" : "single"}
-      {selectedPaths}
-      {focusedPath}
-      thumbnailFor={thumbnails.get}
-      onRequestThumbnail={thumbnails.request}
-      onVisibleRangeChange={thumbnails.setVisibleRange}
-      bind:scrollTop={gridScrollTop}
-      onToggleSelect={handleToggleSelect}
-      onFocus={handleFocus}
-      onPreview={handlePreview}
-      selectedCount={selectedPaths.size}
-      rightPanelCollapsed={layout.rightPanelCollapsed}
-      onToggleRightPanel={() =>
-        (layout.rightPanelCollapsed = !layout.rightPanelCollapsed)}
-      onClearSelection={handleClearSelection}
-      primaryAction={collapsedPrimaryAction}
-    />
+      <PhotoGrid
+        {images}
+        selectionMode={mode === "convert" ? "multi" : "single"}
+        {selectedPaths}
+        {focusedPath}
+        thumbnailFor={thumbnails.get}
+        onRequestThumbnail={thumbnails.request}
+        onVisibleRangeChange={thumbnails.setVisibleRange}
+        bind:scrollTop={gridScrollTop}
+        onToggleSelect={handleToggleSelect}
+        onFocus={handleFocus}
+        selectedCount={selectedPaths.size}
+        rightPanelCollapsed={layout.rightPanelCollapsed}
+        onToggleRightPanel={() =>
+          (layout.rightPanelCollapsed = !layout.rightPanelCollapsed)}
+        onClearSelection={() => selectedPaths.clear()}
+        primaryAction={collapsedPrimaryAction}
+      />
     {/if}
   {/snippet}
 
   {#snippet right()}
     {#if mode === "convert"}
+      <!-- convert.config は getter しか持たないので bind: は使えない。
+           ConvertPanel はプロパティを直接書き換える（$state のプロキシなので
+           ストアまで届く）。値そのものを差し替える exifFrameEnabled だけ
+           setter を持たせて bind: にしてある -->
       <ConvertPanel
-        bind:config
-        {outputFolder}
+        config={convert.config}
+        outputFolder={convert.outputFolder}
         selectedCount={selectedPaths.size}
         {canProcess}
-        bind:exifFrameEnabled
+        bind:exifFrameEnabled={convert.exifFrameEnabled}
         presetNames={presets.presets.map((p) => p.name)}
         bind:selectedPresetName={presets.selectedName}
-        onPickOutputFolder={handlePickOutputFolder}
+        onPickOutputFolder={() => convert.pickOutput(currentFolder)}
         onProcess={handleProcess}
         onEditFrame={() => handleModeChange("frame")}
       />
     {:else if mode === "metadata"}
-      <div class="placeholder">
-        <Card level={1} title="メタデータ">
-          <p>Task 17（段階 8）で実装する。</p>
-        </Card>
-      </div>
+      <MetadataPanel
+        image={editingImage}
+        draft={metadata}
+        thumbnailFor={thumbnails.get}
+        onRequestThumbnail={thumbnails.request}
+      />
     {:else if mode === "frame"}
       <!-- frame.draft は getter しか持たず、型も ExifFrameConfig | null なので
            bind:config は使えない。{@const} で絞ってから非 bind: で渡す。
@@ -281,16 +223,15 @@
       {#if draft}
         <FramePanel
           config={draft}
-          bind:bgColor={config.bg_color}
-          {fonts}
+          bind:bgColor={convert.config.bg_color}
           isNew={frame.isNew}
           isRenamed={frame.isRenamed}
           nameConflict={frame.nameConflict}
           canSave={frame.canSave}
           canDelete={frame.canDelete}
           sampleName={images.find((img) => img.path === focusedPath)?.name ?? null}
-          onSave={handleSaveFrame}
-          onDelete={() => handleDeletePreset(frame.editingName)}
+          onSave={frame.save}
+          onDelete={() => frame.remove(frame.editingName)}
           onPickSample={() => handleModeChange("convert")}
         />
       {/if}
@@ -312,40 +253,14 @@
   {/if}
 {/snippet}
 
-{#if previewImage}
-  <PhotoViewer
-    image={previewImage}
-    {images}
-    selectionMode={mode === "convert" ? "multi" : "single"}
-    {selectedPaths}
-    thumbnailFor={thumbnails.get}
-    onRequestThumbnail={thumbnails.request}
-    onToggleSelect={handleToggleSelect}
-    onClose={handleClosePreview}
-    onNavigate={(img) => {
-      previewImage = img;
-      handleFocus(img);
-    }}
-  />
-{/if}
-
 <ProgressOverlay progress={convert.progress} onCancel={convert.cancel} />
 
-{#if showDeleteConfirm}
-  <!-- 破壊的操作なので alertdialog にし、初期フォーカスはキャンセル側に置く -->
-  <Dialog
-    title="元ファイルを削除します"
-    danger
-    initialFocus="footer button"
-    onClose={() => (showDeleteConfirm = false)}
-  >
-    <p>変換に成功した {selectedImages.length} 枚の元ファイルを削除します。</p>
-    <p class="dialog-detail">削除したファイルはゴミ箱に入らず、元に戻せません。</p>
-    {#snippet actions()}
-      <Button variant="text" onclick={() => (showDeleteConfirm = false)}>キャンセル</Button>
-      <Button variant="filled" danger onclick={runProcess}>削除して変換</Button>
-    {/snippet}
-  </Dialog>
+{#if convert.confirming !== null}
+  <DeleteOriginalsDialog
+    count={convert.confirming}
+    onCancel={convert.dismissConfirm}
+    onConfirm={convert.confirm}
+  />
 {/if}
 
 {#if convert.result}
@@ -358,14 +273,3 @@
 {/if}
 
 <Toast />
-
-<style>
-  .placeholder {
-    padding: var(--space-4);
-  }
-
-  .dialog-detail {
-    color: var(--md-sys-color-on-surface-variant);
-    font: var(--md-sys-typescale-body-sm);
-  }
-</style>

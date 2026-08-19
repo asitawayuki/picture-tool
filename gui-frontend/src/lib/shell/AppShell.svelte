@@ -71,7 +71,9 @@
 <div class="shell" bind:this={shell} class:dragging={dragging !== null}>
   <NavigationRail {mode} {onModeChange} />
 
-  <div class="column" style="width: {layout.widths[leftKey]}px;">
+  <!-- data-region は Tab 順の検査（spec §7-3）が「いまどの領域にフォーカスが
+       あるか」を読むための目印。見た目には影響しない -->
+  <div class="column" data-region="left" style="width: {layout.widths[leftKey]}px;">
     {@render left()}
   </div>
 
@@ -97,7 +99,7 @@
     onkeydown={(e) => nudge(e, "left")}
   ></div>
 
-  <div class="center">
+  <div class="center" data-region="center">
     {@render center()}
   </div>
 
@@ -119,7 +121,7 @@
       onkeydown={(e) => nudge(e, "right")}
     ></div>
 
-    <div class="column right" style="width: {layout.widths[rightKey]}px;">
+    <div class="column right" data-region="right" style="width: {layout.widths[rightKey]}px;">
       {@render right()}
     </div>
   {/if}

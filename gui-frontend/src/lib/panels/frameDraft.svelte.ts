@@ -1,3 +1,4 @@
+import type { createPresetStore } from "./presets.svelte";
 import type { ExifFrameConfig } from "../types";
 
 /** バンドルプリセット名。ユーザーファイルが無くても常に存在するため削除させない */
@@ -40,7 +41,7 @@ function clone(preset: ExifFrameConfig): ExifFrameConfig {
  * 右（設定）の 3 カラムにまたがって共有されるため、`App.svelte` に置くと
  * spec §3-5（App は 4 状態とパネルの差し替えのみ）が崩れる。
  */
-export function createFrameDraft() {
+export function createFrameDraft(presets: ReturnType<typeof createPresetStore>) {
   let draft = $state<ExifFrameConfig | null>(null);
   /**
    * **編集中の下書きがディスク上のどのプリセットか。** 新規作成中は `""`。
@@ -48,7 +49,24 @@ export function createFrameDraft() {
    * （保存後にこの名前を削除するのが「改名」の実体）。
    */
   let editingName = $state("");
-  let knownNames = $state<string[]>([]);
+
+  /**
+   * 下書きを起こす。`onSelect={frame.select}` のように剥がして渡されるので、
+   * クロージャの関数にしてある（オブジェクトのメソッドにすると
+   * save / remove から `this` 経由でしか呼べなくなる）。
+   */
+  function select(name: string) {
+    const found = presets.presets.find((p) => p.name === name);
+    draft = found ? clone(found) : defaultFrameConfig();
+    // 見つからなければディスク上の実体が無い＝新規扱い
+    editingName = found ? found.name : "";
+  }
+
+  function snapshot(): ExifFrameConfig {
+    const snap = structuredClone($state.snapshot(draft!)) as ExifFrameConfig;
+    snap.name = snap.name.trim();
+    return snap;
+  }
 
   /** 一覧の項目をダブルクリックして名前を変えた状態 */
   function renamed(): boolean {
@@ -59,7 +77,7 @@ export function createFrameDraft() {
   function conflicting(): boolean {
     if (draft === null) return false;
     const name = draft.name.trim();
-    return name !== editingName && knownNames.includes(name);
+    return name !== editingName && presets.presets.some((p) => p.name === name);
   }
 
   return {
@@ -94,13 +112,7 @@ export function createFrameDraft() {
       return editingName !== "" && editingName !== BUNDLED_PRESET_NAME;
     },
 
-    select(name: string, presets: ExifFrameConfig[]) {
-      knownNames = presets.map((p) => p.name);
-      const found = presets.find((p) => p.name === name);
-      draft = found ? clone(found) : defaultFrameConfig();
-      // 見つからなければディスク上の実体が無い＝新規扱い
-      editingName = found ? found.name : "";
-    },
+    select,
 
     /** 一覧の項目をダブルクリックしての改名（spec §5-3）。
      *  ここでは下書きの名前を変えるだけで、旧名の削除は保存時に行う */
@@ -108,20 +120,37 @@ export function createFrameDraft() {
       if (draft) draft.name = name;
     },
 
-    createNew(presets: ExifFrameConfig[]) {
-      knownNames = presets.map((p) => p.name);
+    createNew() {
       draft = defaultFrameConfig();
       // 既存と衝突しない名前を作る
       let n = 1;
-      while (knownNames.includes(`preset-${n}`)) n++;
+      while (presets.presets.some((p) => p.name === `preset-${n}`)) n++;
       draft.name = `preset-${n}`;
       editingName = "";
     },
 
-    snapshot(): ExifFrameConfig {
-      const snap = structuredClone($state.snapshot(draft!)) as ExifFrameConfig;
-      snap.name = snap.name.trim();
-      return snap;
+    /**
+     * 下書きをディスクへ書く。改名なら「新しい名前で保存 → 旧名を削除」。
+     *
+     * 保存後に editingName を新しい名前へ合わせ直すのが要点で、これをしないと
+     * 改名の直後にもう一度保存したときに renamedFrom が消えた旧名を指し、
+     * 存在しないプリセットを削除しようとする。
+     */
+    async save(): Promise<void> {
+      const snap = snapshot();
+      const from = renamed() ? editingName : null;
+      const ok = from ? await presets.rename(from, snap) : await presets.save(snap);
+      if (ok) select(snap.name);
+    },
+
+    /**
+     * プリセットを削除する。編集中のものを消した場合は選び直す。
+     * 下書きがディスク上に無い実体を指したままだと、そのまま保存したときに
+     * 消したはずのプリセットが復活する。
+     */
+    async remove(name: string): Promise<void> {
+      await presets.remove(name);
+      if (editingName === name) select(presets.selectedName);
     },
   };
 }

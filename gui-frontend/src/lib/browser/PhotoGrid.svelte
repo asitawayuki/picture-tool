@@ -1,6 +1,7 @@
 <script lang="ts">
   import type { Snippet } from "svelte";
   import GridHeader from "./GridHeader.svelte";
+  import PhotoViewer from "./PhotoViewer.svelte";
   import Slider from "../ui/Slider.svelte";
   import {
     GRID_GAP,
@@ -27,7 +28,6 @@
     onVisibleRangeChange: (start: number, end: number) => void;
     onToggleSelect: (image: ImageEntry) => void;
     onFocus: (image: ImageEntry) => void;
-    onPreview: (image: ImageEntry) => void;
     selectedCount: number;
     rightPanelCollapsed: boolean;
     onToggleRightPanel: () => void;
@@ -51,7 +51,6 @@
     onVisibleRangeChange,
     onToggleSelect,
     onFocus,
-    onPreview,
     selectedCount,
     rightPanelCollapsed,
     onToggleRightPanel,
@@ -62,6 +61,17 @@
 
   /** タイルの目標幅。既定 200px は「サムネイルが小さい」への回答（spec §4-1） */
   let targetTileWidth = $state(200);
+
+  /**
+   * 全画面プレビューの対象。**グリッドが持つ**。
+   * プレビューを開けるのはグリッドからだけで、必要な props
+   * （一覧・選択・サムネイル）はすべてここに揃っている。
+   */
+  let previewImage = $state<ImageEntry | null>(null);
+
+  function openPreview(image: ImageEntry) {
+    previewImage = image;
+  }
 
   /** スクロールする箱。仮想化の余白は持たない */
   let scroller: HTMLDivElement | undefined = $state();
@@ -224,7 +234,7 @@
       case "Enter":
         // Enter は全画面プレビュー。現行と変わる点
         event.preventDefault();
-        if (current) onPreview(current);
+        if (current) openPreview(current);
         break;
     }
   }
@@ -323,7 +333,7 @@
           }}
           ondblclick={(e) => {
             e.preventDefault();
-            onPreview(image);
+            openPreview(image);
           }}
         >
           <div class="thumb">
@@ -342,6 +352,23 @@
     </div>
   </div>
 </div>
+
+{#if previewImage}
+  <PhotoViewer
+    image={previewImage}
+    {images}
+    {selectionMode}
+    {selectedPaths}
+    {thumbnailFor}
+    {onRequestThumbnail}
+    {onToggleSelect}
+    onClose={() => (previewImage = null)}
+    onNavigate={(img) => {
+      previewImage = img;
+      onFocus(img);
+    }}
+  />
+{/if}
 
 <style>
   .photo-grid {

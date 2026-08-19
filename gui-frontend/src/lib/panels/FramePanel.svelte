@@ -1,16 +1,18 @@
 <script lang="ts">
+  import { onMount } from "svelte";
   import Button from "../ui/Button.svelte";
   import Card from "../ui/Card.svelte";
   import SegmentedButton from "../ui/SegmentedButton.svelte";
   import Select from "../ui/Select.svelte";
   import Slider from "../ui/Slider.svelte";
   import TextField from "../ui/TextField.svelte";
+  import { listAvailableFonts } from "../api";
+  import { describeError, toast } from "../toasts.svelte";
   import type { DisplayItems, ExifPosition, ExifFrameConfig, FontInfo } from "../types";
 
   interface Props {
     config: ExifFrameConfig;
     bgColor: "white" | "black";
-    fonts: FontInfo[];
     isNew: boolean;
     /** 一覧でダブルクリックして名前を変えた状態。保存で旧名が消える */
     isRenamed: boolean;
@@ -29,7 +31,6 @@
   let {
     config = $bindable(),
     bgColor = $bindable(),
-    fonts,
     isNew,
     isRenamed,
     nameConflict,
@@ -40,6 +41,19 @@
     onDelete,
     onPickSample,
   }: Props = $props();
+
+  /**
+   * 選べるフォント。使うのはこのパネルだけなので App では持たない（spec §3-5）。
+   * このパネルはフレームモードへ入るたびに mount されるので、
+   * 起動後に `assets/fonts/` へ足したフォントもモードを開き直せば出る。
+   */
+  let fonts = $state<FontInfo[]>([]);
+
+  onMount(() => {
+    listAvailableFonts()
+      .then((f) => (fonts = f))
+      .catch((e) => toast.error(`フォント一覧の取得に失敗しました: ${describeError(e)}`));
+  });
 
   const POSITIONS: { value: ExifPosition; label: string }[] = [
     { value: "auto", label: "自動" },

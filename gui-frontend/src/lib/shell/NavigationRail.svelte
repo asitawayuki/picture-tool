@@ -9,7 +9,8 @@
   let { mode, onModeChange }: Props = $props();
 </script>
 
-<nav class="rail" aria-label="モード">
+<!-- data-region は Tab 順の検査（spec §7-3）の目印。AppShell の 3 カラムと対になる -->
+<nav class="rail" data-region="rail" aria-label="モード">
   {#each MODES as destination (destination.value)}
     {@const selected = mode === destination.value}
     <button
