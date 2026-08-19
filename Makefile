@@ -1,4 +1,4 @@
-.PHONY: build build-cli build-gui build-frontend dev test test-core lint fmt typecheck check clean install release
+.PHONY: build build-cli build-gui build-frontend dev test test-core lint fmt typecheck test-frontend check clean install release
 
 # ローカルに固定インストールした Tauri CLI（gui-frontend の devDependency）
 TAURI := $(CURDIR)/gui-frontend/node_modules/.bin/tauri
@@ -43,8 +43,13 @@ fmt:
 typecheck:
 	cd gui-frontend && bun run typecheck
 
+# フロントエンドの単体テスト（純粋ロジックのみ。runes / DOM は Playwright 側）。
+# 走査範囲は bunfig.toml の [test] root = "src" で src/ に限定してある
+test-frontend:
+	cd gui-frontend && bun test
+
 # CI と同等の検証を一括実行
-check: lint test typecheck
+check: lint test typecheck test-frontend
 
 # フロントエンド依存インストール
 install:

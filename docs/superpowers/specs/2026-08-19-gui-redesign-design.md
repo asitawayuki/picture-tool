@@ -125,6 +125,47 @@ source color は現行の `--accent-hover`（`#6366F1`）を採る。
 `material-color-utilities` から生成し、生成結果を本 spec に追記して確定させる。
 手で書いた推測値は tonal palette の階調を壊すため。
 
+#### 生成結果（段階 1 で確定）
+
+source color `#6366F1` / `Variant.TONAL_SPOT` / `contrastLevel: 0` /
+neutral・neutralVariant の chroma を 0 にしたカスタム `DynamicScheme`。
+生成は `gui-frontend/scripts/generate-color-tokens.ts`、検査は
+`gui-frontend/src/styles/contrast.test.ts`。
+
+| ロール | ライト | ダーク |
+|---|---|---|
+| `primary` | `#494bd6` | `#c0c1ff` |
+| `on-primary` | `#ffffff` | `#1000a9` |
+| `primary-container` | `#e1e0ff` | `#2f2ebe` |
+| `on-primary-container` | `#2f2ebe` | `#e1e0ff` |
+| `surface` | `#f9f9f9` | `#131313` |
+| `surface-container-lowest` | `#ffffff` | `#0e0e0e` |
+| `surface-container-low` | `#f3f3f3` | `#1b1b1b` |
+| `surface-container` | `#eeeeee` | `#1f1f1f` |
+| `surface-container-high` | `#e8e8e8` | `#2a2a2a` |
+| `surface-container-highest` | `#e2e2e2` | `#353535` |
+| `on-surface` | `#1b1b1b` | `#e2e2e2` |
+| `on-surface-variant` | `#474747` | `#c6c6c6` |
+| `outline` | `#777777` | `#919191` |
+| `outline-variant` | `#c6c6c6` | `#474747` |
+| `error` | `#ba1a1a` | `#ffb4ab` |
+| `on-error` | `#ffffff` | `#690005` |
+| `error-container` | `#ffdad6` | `#93000a` |
+| `on-error-container` | `#93000a` | `#ffdad6` |
+| `inverse-surface` | `#303030` | `#e2e2e2` |
+| `inverse-on-surface` | `#f1f1f1` | `#303030` |
+| `scrim` | `#000000` | `#000000` |
+
+コントラスト実測（§7-1 の対象ペア、基準ごとの最小値）:
+
+| 基準 | ライトの最小 | ダークの最小 |
+|---|---|---|
+| 4.5:1（本文） | `6.44:1`（`on-primary` / `primary`） | `7.18:1`（`on-surface-variant` / `surface-container-highest`） |
+| 3:1（非テキスト） | `4.25:1`（`outline` / `surface`） | `5.90:1`（`outline` / `surface`） |
+
+すべて基準を満たす。`surface` 系はライト・ダークとも R=G=B（無彩色）である。
+
+
 ### 1-3. 形状
 
 ```

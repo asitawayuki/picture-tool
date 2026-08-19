@@ -1,0 +1,6 @@
+# bun のテスト既定パターンは *.test.* と *.spec.* の両方。
+# 走査範囲を src/ に限定しないと e2e/*.spec.ts が bun のランナーに
+# 読み込まれ、@playwright/test の test() がランナー外で呼ばれて落ちる。
+# Playwright 側は playwright.config.ts の testDir: "./e2e" で拾う。
+[test]
+root = "src"

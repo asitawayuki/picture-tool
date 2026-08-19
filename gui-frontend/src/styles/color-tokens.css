@@ -1,0 +1,53 @@
+/* 生成物。編集しないこと。
+ * 再生成: cd gui-frontend && bun run gen:colors
+ * 生成元: scripts/generate-color-tokens.ts（source color #6366F1）
+ *
+ * ここは値の置き場でしかない。--md-sys-color-* への割り当ては tokens.css が行う。
+ */
+:root {
+  /* ライト */
+  --_light-primary: #494bd6;
+  --_light-on-primary: #ffffff;
+  --_light-primary-container: #e1e0ff;
+  --_light-on-primary-container: #2f2ebe;
+  --_light-surface: #f9f9f9;
+  --_light-surface-container-lowest: #ffffff;
+  --_light-surface-container-low: #f3f3f3;
+  --_light-surface-container: #eeeeee;
+  --_light-surface-container-high: #e8e8e8;
+  --_light-surface-container-highest: #e2e2e2;
+  --_light-on-surface: #1b1b1b;
+  --_light-on-surface-variant: #474747;
+  --_light-outline: #777777;
+  --_light-outline-variant: #c6c6c6;
+  --_light-error: #ba1a1a;
+  --_light-on-error: #ffffff;
+  --_light-error-container: #ffdad6;
+  --_light-on-error-container: #93000a;
+  --_light-inverse-surface: #303030;
+  --_light-inverse-on-surface: #f1f1f1;
+  --_light-scrim: #000000;
+
+  /* ダーク */
+  --_dark-primary: #c0c1ff;
+  --_dark-on-primary: #1000a9;
+  --_dark-primary-container: #2f2ebe;
+  --_dark-on-primary-container: #e1e0ff;
+  --_dark-surface: #131313;
+  --_dark-surface-container-lowest: #0e0e0e;
+  --_dark-surface-container-low: #1b1b1b;
+  --_dark-surface-container: #1f1f1f;
+  --_dark-surface-container-high: #2a2a2a;
+  --_dark-surface-container-highest: #353535;
+  --_dark-on-surface: #e2e2e2;
+  --_dark-on-surface-variant: #c6c6c6;
+  --_dark-outline: #919191;
+  --_dark-outline-variant: #474747;
+  --_dark-error: #ffb4ab;
+  --_dark-on-error: #690005;
+  --_dark-error-container: #93000a;
+  --_dark-on-error-container: #ffdad6;
+  --_dark-inverse-surface: #e2e2e2;
+  --_dark-inverse-on-surface: #303030;
+  --_dark-scrim: #000000;
+}
