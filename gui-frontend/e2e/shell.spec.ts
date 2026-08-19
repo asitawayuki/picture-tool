@@ -89,4 +89,59 @@ test.describe("アプリシェル", () => {
     await rail.getByRole("button", { name: "フレーム" }).click();
     await expect(handle()).toHaveAttribute("aria-valuenow", "220"); // presets
   });
+
+  /**
+   * spec §3-1「右パネルの折りたたみ」。幅 0 で畳む実装ではないので、
+   * 畳んだときにリサイザーごと消え、開くボタンと主導線はパネルの外（グリッド
+   * ヘッダー）に残る ── この 3 点が同時に成り立つことが折りたたみの要件。
+   */
+  test("右パネルを畳んでも開くボタンと主アクションが残る（spec §3-1）", async ({ page }) => {
+    await page.goto("/");
+    await page.getByRole("button", { name: "photos", exact: false }).first().click();
+
+    // 前提条件: 畳む前は右パネルの中に主ボタンがある
+    await expect(page.getByRole("button", { name: "0 枚を変換" })).toHaveCount(1);
+    await expect(page.getByRole("separator", { name: "右パネルの幅" })).toBeVisible();
+
+    await page.getByRole("button", { name: "右パネルを畳む" }).click();
+
+    // 幅 0 で畳む実装ではないので、リサイザーごと消える
+    await expect(page.getByRole("separator", { name: "右パネルの幅" })).toHaveCount(0);
+    // 開くボタンはグリッドヘッダー（パネルの外）にあるので残る
+    await expect(page.getByRole("button", { name: "右パネルを開く" })).toBeVisible();
+    // 主導線もヘッダーへ移る
+    await expect(page.getByRole("button", { name: "0 枚を変換" })).toHaveCount(1);
+
+    await page.getByRole("button", { name: "右パネルを開く" }).click();
+    await expect(page.getByRole("separator", { name: "右パネルの幅" })).toBeVisible();
+  });
+
+  test("折りたたみ状態はリロード後も保たれ、幅とは別キーである", async ({ page }) => {
+    await page.goto("/");
+    await page.getByRole("button", { name: "右パネルを畳む" }).click();
+    await page.reload();
+    await expect(page.getByRole("button", { name: "右パネルを開く" })).toBeVisible();
+
+    // 幅のキーは壊れていない（開いたら既定幅で戻る）
+    await page.getByRole("button", { name: "右パネルを開く" }).click();
+    await expect(page.getByRole("separator", { name: "右パネルの幅" })).toHaveAttribute(
+      "aria-valuenow",
+      "320"
+    );
+  });
+
+  test("選択枚数と全解除がグリッドヘッダーに出る（spec §5-1）", async ({ page }) => {
+    await page.goto("/");
+    await page.getByRole("button", { name: "photos", exact: false }).first().click();
+
+    // 前提条件: 選択が 0 のときは出ない
+    await expect(page.getByText(/枚選択中/)).toHaveCount(0);
+
+    await page.getByRole("button", { name: /photo-0000/ }).click();
+    await page.getByRole("button", { name: /photo-0001/ }).click();
+    await expect(page.getByText("2 枚選択中")).toBeVisible();
+
+    await page.getByRole("button", { name: "全解除" }).click();
+    await expect(page.getByText(/枚選択中/)).toHaveCount(0);
+  });
 });

@@ -1,4 +1,6 @@
 <script lang="ts">
+  import type { Snippet } from "svelte";
+  import GridHeader from "./browser/GridHeader.svelte";
   import type { ImageEntry } from "./types";
 
   interface Props {
@@ -7,13 +9,33 @@
     /** サムネイルは解像度ごとに別物なので path と maxDimension の両方で引く */
     thumbnailFor: (path: string, maxDimension: number) => string | undefined;
     currentPage: number;
+    selectedCount: number;
+    rightPanelCollapsed: boolean;
     onToggleSelect: (image: ImageEntry) => void;
     onRequestThumbnail: (path: string, maxDimension: number) => void;
     onPreview: (image: ImageEntry) => void;
     onPageChange: (page: number) => void;
+    onToggleRightPanel: () => void;
+    onClearSelection: () => void;
+    /** 右パネルを畳んでいる間だけヘッダーに出す主アクション（spec §3-1） */
+    primaryAction?: Snippet;
   }
 
-  let { images, selectedPaths, thumbnailFor, currentPage, onToggleSelect, onRequestThumbnail, onPreview, onPageChange }: Props = $props();
+  let {
+    images,
+    selectedPaths,
+    thumbnailFor,
+    currentPage,
+    selectedCount,
+    rightPanelCollapsed,
+    onToggleSelect,
+    onRequestThumbnail,
+    onPreview,
+    onPageChange,
+    onToggleRightPanel,
+    onClearSelection,
+    primaryAction,
+  }: Props = $props();
 
   const PAGE_SIZE = 50;
   let columnCount = $state(4);
@@ -82,9 +104,16 @@
 </script>
 
 <div class="thumbnail-grid">
-  <div class="grid-header">
-    <span class="count">{images.length} 枚</span>
-    <div class="toolbar-right">
+  <GridHeader
+    totalCount={images.length}
+    {selectedCount}
+    selectionMode="multi"
+    {rightPanelCollapsed}
+    {onToggleRightPanel}
+    {onClearSelection}
+    {primaryAction}
+  >
+    {#snippet controls()}
       <div class="size-control">
         <label class="size-label" for="grid-columns">列</label>
         <input
@@ -109,8 +138,8 @@
             disabled={currentPage >= totalPages - 1}>→</button>
         </div>
       {/if}
-    </div>
-  </div>
+    {/snippet}
+  </GridHeader>
 
   <div class="grid" bind:this={gridElement} style="grid-template-columns: repeat({columnCount}, 1fr);">
     {#each pagedImages as image (image.path)}
@@ -146,16 +175,6 @@
     flex-direction: column;
     background: var(--bg-primary);
     overflow: hidden;
-  }
-
-  .grid-header {
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    padding: 8px 12px;
-    color: var(--text-secondary);
-    font-size: 11px;
-    border-bottom: 1px solid var(--border-color);
   }
 
   .pagination {
@@ -256,12 +275,6 @@
     text-overflow: ellipsis;
     white-space: nowrap;
     max-width: 100%;
-  }
-
-  .toolbar-right {
-    display: flex;
-    align-items: center;
-    gap: 12px;
   }
 
   .size-control {

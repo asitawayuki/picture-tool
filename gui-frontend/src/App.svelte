@@ -184,10 +184,16 @@
       {selectedPaths}
       thumbnailFor={thumbnails.get}
       {currentPage}
+      selectedCount={selectedPaths.size}
+      rightPanelCollapsed={layout.rightPanelCollapsed}
       onToggleSelect={handleToggleSelect}
       onRequestThumbnail={thumbnails.request}
       onPreview={handlePreview}
       onPageChange={(page) => (currentPage = page)}
+      onToggleRightPanel={() =>
+        (layout.rightPanelCollapsed = !layout.rightPanelCollapsed)}
+      onClearSelection={handleClearSelection}
+      primaryAction={collapsedPrimaryAction}
     />
   {/snippet}
 
@@ -223,6 +229,20 @@
     {/if}
   {/snippet}
 </AppShell>
+
+<!-- 右パネルを畳んでいる間、主導線はグリッドヘッダーへ移る（spec §3-1）。
+     畳むボタンがパネルの中にあると、畳んだ瞬間に開くボタンごと消える -->
+{#snippet collapsedPrimaryAction()}
+  {#if mode === "convert"}
+    <Button variant="filled" disabled={!canProcess} onclick={handleProcess}>
+      {selectedPaths.size} 枚を変換
+    </Button>
+  {:else if mode === "metadata"}
+    <!-- メタデータの保存は次工程で配線する（spec §5-2）。
+         畳んでいる間に主導線が消えないよう、場所だけ先に確保しておく -->
+    <Button variant="filled" disabled>保存</Button>
+  {/if}
+{/snippet}
 
 {#if previewImage}
   <ImagePreview

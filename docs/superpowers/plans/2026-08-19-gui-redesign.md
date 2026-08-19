@@ -9782,6 +9782,19 @@ Step 7 の実機確認（変換の一連の操作）は、Task 7 / 9 と同じ�
 **実機で見ていないので言えないこと**: 実際の画像が変換されること、
 crop / pad / quality の出力そのもの。これは core の責務で本刷新では触っていない。
 
+### Task 11 — 計画どおり。`.pagination` の style だけ指示が二重だった
+
+Step 2 は「`<style>` から `.grid-header` / `.pagination` / `.toolbar-right` の規則を消す」
+と書いた直後に「`.pagination` の規則は `ThumbnailGrid` の `<style>` に残す」と書いている。
+**後者を採った。** ページ送りは `controls` snippet の中身で、snippet は
+`ThumbnailGrid` 側で宣言されているので**その scope hash が付く**。
+`GridHeader` 側へ移すと当たらなくなる。消したのは `.grid-header` と
+`.toolbar-right` の 2 つだけ。
+
+`primaryAction` の snippet は `App.svelte` のテンプレート末尾（`</AppShell>` の後）に
+置いてあるが、トップレベルの snippet はテンプレート全体から参照できるので、
+`{#snippet center()}` の中で `ThumbnailGrid` に渡せる。
+
 ### Task 14 — フィルムストリップの要素数
 
 ### Task 15 — スクロール測定と LRU 上限
