@@ -141,7 +141,7 @@
 
 {#snippet treeNode(node: TreeNode, depth: number)}
   {@const isFavorite = favorites.includes(node.entry.path)}
-  <div class="tree-row" class:selected={selectedPath === node.entry.path}>
+  <div class="tree-row state-layer" class:selected={selectedPath === node.entry.path}>
     <button
       class="tree-item"
       style="padding-left: {12 + depth * 16}px"
@@ -190,21 +190,21 @@
     height: 100%;
     display: flex;
     flex-direction: column;
-    background: var(--bg-secondary);
+    background: var(--md-sys-color-surface-container-low);
     overflow: hidden;
   }
 
   .section-header {
-    padding: 8px 12px;
-    color: var(--text-secondary);
-    font-size: 11px;
+    padding: var(--space-2) var(--space-3);
+    color: var(--md-sys-color-on-surface-variant);
+    font: var(--md-sys-typescale-body-sm);
     text-transform: uppercase;
     letter-spacing: 0.5px;
-    border-bottom: 1px solid var(--border-color);
+    border-bottom: 1px solid var(--md-sys-color-outline-variant);
   }
 
   .favorites {
-    border-bottom: 1px solid var(--border-color);
+    border-bottom: 1px solid var(--md-sys-color-outline-variant);
     max-height: 40vh;
     overflow-y: auto;
   }
@@ -212,37 +212,38 @@
   .tree-content {
     flex: 1;
     overflow-y: auto;
-    padding: 4px 0;
+    padding: var(--space-1) 0;
   }
 
+  /* hover / pressed は .state-layer（tokens.css）が ::after で供給する。
+     ::after は border-radius: inherit なので、状態レイヤーは選択中の pill と
+     同じ形になる必要がある。したがって .tree-item ではなく行そのものに付ける。 */
   .tree-row {
     display: flex;
     align-items: center;
-  }
-
-  .tree-row:hover {
-    background: var(--bg-hover);
+    border-radius: var(--md-sys-shape-corner-full);
   }
 
   .tree-row.selected {
-    background: var(--accent-bg);
+    background: var(--md-sys-color-primary-container);
+    color: var(--md-sys-color-on-primary-container);
   }
 
   .tree-row.selected .tree-item {
-    color: var(--accent);
+    color: var(--md-sys-color-on-primary-container);
   }
 
   .tree-item {
     display: flex;
     align-items: center;
-    gap: 6px;
+    gap: var(--space-2);
     flex: 1;
     min-width: 0;
-    padding: 4px 12px;
+    padding: var(--space-1) var(--space-3);
     border: none;
     background: none;
-    color: var(--text-primary);
-    font-size: 13px;
+    color: var(--md-sys-color-on-surface);
+    font: var(--md-sys-typescale-body-md);
     cursor: pointer;
     text-align: left;
   }
@@ -251,10 +252,10 @@
     flex-shrink: 0;
     background: none;
     border: none;
-    color: var(--text-muted);
-    font-size: 13px;
+    color: var(--md-sys-color-on-surface-variant);
+    font: var(--md-sys-typescale-body-md);
     line-height: 1;
-    padding: 4px 8px;
+    padding: var(--space-1) var(--space-2);
     cursor: pointer;
     /* 常時表示だと視覚的に騒がしいので、ホバー・フォーカス・登録済みのみ見せる */
     opacity: 0;
@@ -266,15 +267,15 @@
     opacity: 1;
   }
 
+  /* spec §1-1 は warning ロールを定義しないので、登録済みの★は primary で示す */
   .fav-toggle.active {
-    color: var(--warning);
+    color: var(--md-sys-color-primary);
   }
 
   .tree-error {
-    margin: 0 12px 4px;
-    font-size: 11px;
-    line-height: 1.4;
-    color: var(--danger);
+    margin: 0 var(--space-3) var(--space-1);
+    font: var(--md-sys-typescale-body-sm);
+    color: var(--md-sys-color-error);
     overflow-wrap: anywhere;
   }
 
@@ -288,5 +289,4 @@
     text-overflow: ellipsis;
     white-space: nowrap;
   }
-
 </style>

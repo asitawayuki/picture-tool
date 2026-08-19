@@ -46,11 +46,17 @@
 <svelte:window onkeydown={handleKeydown} />
 
 <div class="scrim">
-  <!-- 余白クリックで閉じるための背景。ダイアログ本体にクリックハンドラーを
-       付けるとキーボード操作を持たない対話要素になるため分離する。 -->
-  {#if dismissible}
-    <div class="backdrop" role="presentation" onclick={onClose}></div>
-  {/if}
+  <!-- 背景。ダイアログ本体にクリックハンドラーを付けるとキーボード操作を
+       持たない対話要素になるため分離する。
+       **塗りは dismissible に関わらず常に出す。** 下地を暗くするのは
+       「今はこのダイアログしか操作できない」ことを示す表示であって、
+       閉じられるかどうかとは別の話。ここを {#if} で消すと、いちばん
+       下地を隠したい進捗ダイアログだけが素通しになる。 -->
+  <div
+    class="backdrop"
+    role="presentation"
+    onclick={dismissible ? onClose : undefined}
+  ></div>
 
   <div
     class="dialog"

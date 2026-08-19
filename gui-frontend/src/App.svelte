@@ -10,7 +10,8 @@
   import ProgressOverlay from "./lib/ProgressOverlay.svelte";
   import ImagePreview from "./lib/ImagePreview.svelte";
   import ExifFrameSettings from "./lib/ExifFrameSettings.svelte";
-  import ConfirmDialog from "./lib/ConfirmDialog.svelte";
+  import Dialog from "./lib/ui/Dialog.svelte";
+import Button from "./lib/ui/Button.svelte";
   import ResultDialog from "./lib/ResultDialog.svelte";
   import Toast from "./lib/Toast.svelte";
   import { toast, describeError } from "./lib/toasts.svelte";
@@ -352,15 +353,20 @@
 {/if}
 
 {#if showDeleteConfirm}
-  <ConfirmDialog
+  <!-- 破壊的操作なので alertdialog にし、初期フォーカスはキャンセル側に置く -->
+  <Dialog
     title="元ファイルを削除します"
-    message={`変換に成功した ${selectedImages.length} 枚の元ファイルを削除します。`}
-    detail="削除したファイルはゴミ箱に入らず、元に戻せません。"
-    confirmLabel="削除して変換"
     danger
-    onConfirm={runProcess}
-    onCancel={() => (showDeleteConfirm = false)}
-  />
+    initialFocus="footer button"
+    onClose={() => (showDeleteConfirm = false)}
+  >
+    <p>変換に成功した {selectedImages.length} 枚の元ファイルを削除します。</p>
+    <p class="dialog-detail">削除したファイルはゴミ箱に入らず、元に戻せません。</p>
+    {#snippet actions()}
+      <Button variant="text" onclick={() => (showDeleteConfirm = false)}>キャンセル</Button>
+      <Button variant="filled" danger onclick={runProcess}>削除して変換</Button>
+    {/snippet}
+  </Dialog>
 {/if}
 
 {#if batchResponse}
@@ -384,7 +390,7 @@
   .left-panel {
     width: 220px;
     min-width: 180px;
-    border-right: 1px solid var(--border-color);
+    border-right: 1px solid var(--md-sys-color-outline-variant);
     overflow: hidden;
   }
 
@@ -396,10 +402,15 @@
   .right-panel {
     width: 240px;
     min-width: 200px;
-    border-left: 1px solid var(--border-color);
-    background: var(--bg-secondary);
+    border-left: 1px solid var(--md-sys-color-outline-variant);
+    background: var(--md-sys-color-surface-container-low);
     display: flex;
     flex-direction: column;
     overflow: hidden;
+  }
+
+  .dialog-detail {
+    color: var(--md-sys-color-on-surface-variant);
+    font: var(--md-sys-typescale-body-sm);
   }
 </style>

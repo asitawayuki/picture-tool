@@ -17,58 +17,49 @@
 <style>
   .toast-stack {
     position: fixed;
-    right: 16px;
-    bottom: 16px;
-    z-index: 400;
+    right: var(--space-4);
+    bottom: var(--space-4);
+    z-index: 600;
     display: flex;
     flex-direction: column;
-    gap: 8px;
-    max-width: min(420px, calc(100vw - 32px));
+    gap: var(--space-2);
+    max-width: min(420px, calc(100vw - var(--space-6) * 2));
     pointer-events: none;
   }
 
+  /* トーストは M3 の snackbar。面の上に置く反転色でコントラストを稼ぐ */
   .toast {
     display: flex;
     align-items: flex-start;
-    gap: 8px;
-    padding: 10px 12px;
-    border-radius: var(--radius);
-    border: 1px solid var(--border-color);
-    background: var(--bg-secondary);
-    color: var(--text-primary);
-    font-size: 13px;
-    line-height: 1.5;
-    box-shadow: 0 4px 16px rgba(0, 0, 0, 0.4);
+    gap: var(--space-2);
+    padding: var(--space-3) var(--space-4);
+    border-radius: var(--md-sys-shape-corner-xs);
+    background: var(--md-sys-color-inverse-surface);
+    color: var(--md-sys-color-inverse-on-surface);
+    font: var(--md-sys-typescale-body-md);
+    box-shadow: var(--md-sys-elevation-shadow-3);
     pointer-events: auto;
   }
 
+  /* 種別は左端の帯で示す。反転面の上では error / warning の塗りが読めないため。
+     warning と success が同じ primary なのは意図した劣化である ──
+     spec §1-1 は使うロールを限定していて warning / success を定義しない。
+     この 2 つはアイコン（⚠ / ✓）で区別する。退行ではない */
   .toast.error {
-    border-color: var(--danger);
+    border-left: 4px solid var(--md-sys-color-error);
   }
 
   .toast.warning {
-    border-color: var(--warning);
+    border-left: 4px solid var(--md-sys-color-primary);
   }
 
   .toast.success {
-    border-color: var(--success);
+    border-left: 4px solid var(--md-sys-color-primary);
   }
 
   .icon {
     flex-shrink: 0;
     line-height: 1.5;
-  }
-
-  .toast.error .icon {
-    color: var(--danger);
-  }
-
-  .toast.warning .icon {
-    color: var(--warning);
-  }
-
-  .toast.success .icon {
-    color: var(--success);
   }
 
   .message {
@@ -81,14 +72,15 @@
     flex-shrink: 0;
     background: none;
     border: none;
-    color: var(--text-secondary);
+    color: inherit;
+    opacity: 0.7;
     cursor: pointer;
-    font-size: 12px;
-    padding: 0 2px;
+    font: var(--md-sys-typescale-body-sm);
+    padding: 0 var(--space-1);
     line-height: 1.5;
   }
 
   .dismiss:hover {
-    color: var(--text-primary);
+    opacity: 1;
   }
 </style>

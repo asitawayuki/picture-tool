@@ -9618,6 +9618,50 @@ pressed `0.10`、キーボード Tab の `:focus-visible` で `0.10` ＋ outline
 `prefers-reduced-motion` 規則（`*` に `animation-duration: 0.01ms !important`）に
 そのまま当たるので、個別の打ち消しは書いていない。
 
+### Task 6 — scrim の塗りと閉じる操作を分けた（Dialog を直した）
+
+**計画どおりに書いたら、いちばん下地を隠したい進捗ダイアログだけが素通しになった。**
+Task 5 の `Dialog` は scrim を `{#if dismissible}` で囲んでいて、塗りと
+「余白クリックで閉じる」を同じ 1 要素が持っていた。`ProgressOverlay` は
+`dismissible={false}` なので、変換中に背後のアプリが暗くならない
+（現行の `ProgressOverlay` は `rgba(0,0,0,0.7)` で暗くしていたので退行）。
+
+`Dialog.svelte` を直した。背景 div は常に描き、`onclick` だけを
+`dismissible ? onClose : undefined` にする。下地を暗くするのは
+「今はこのダイアログしか操作できない」という表示であって、
+閉じられるかどうかとは別の話である。
+
+### Task 6 — Card は外側の余白を持たないので積むと角丸が噛み合う
+
+`ResultDialog` の課題セクションを `Card` を縦に並べる形にしたところ、
+Card 同士が隙間なく接して 1 枚の面に見えた（`Card` は `padding` だけを持ち、
+`margin` を持たない。これは部品として正しい）。`.sections` という
+`display: flex; gap: var(--space-3)` の箱で囲んで解決した。
+**`Card` を 2 枚以上積むところは、親が間隔を持つこと。**
+
+### Task 6 — App.svelte の旧変数も落とす必要がある
+
+計画 Step 1 は `App.svelte` について「`ConfirmDialog` の呼び出しの差し替え」と
+`.dialog-detail` の追加しか書いていないが、Step 7 の grep の期待は
+`App.svelte` が「消えている」側に入っている。`App.svelte` 自身の `<style>` が
+`--border-color` と `--bg-secondary` を持っているので、ここも
+`outline-variant` / `surface-container-low` に置き換えた。
+
+### Task 6 — `state-layer` は `.tree-item` ではなく `.tree-row` に付けた
+
+計画 Step 6 は `.tree-item` に付けろと書いているが、`.state-layer::after` は
+`border-radius: inherit` である。選択中の pill（`corner-full`）は行
+（`.tree-row`）に付くので、`.tree-item` に状態レイヤーを置くと
+**pill の上に角の立った矩形が重なる**。行そのものに付ければ形が一致し、
+`.tree-row:hover .fav-toggle` の既存規則もそのまま生きる。
+
+`.fav-toggle.active` の `--warning` は `primary` に振り替えた。spec §1-1 は
+warning ロールを定義しない（`Toast` の warning と同じ帰結）。
+
+**フォルダーツリーの行そのものは vite dev では目視できない。** ドライブ一覧の
+取得が `invoke` の reject で失敗して木が空になるため。ここで確認できたのは
+セクション見出しと面色だけで、hover / 選択中の pill は実機（Task 9 以降）で見る。
+
 ### Task 9 — `localStorage` の実機確認
 
 ### Task 14 — フィルムストリップの要素数
