@@ -1,8 +1,5 @@
 <script lang="ts">
   import { onMount } from "svelte";
-  import { listen } from "@tauri-apps/api/event";
-  import { SvelteMap } from "svelte/reactivity";
-  import type { UnlistenFn } from "@tauri-apps/api/event";
   import FolderTree from "./lib/FolderTree.svelte";
   import ThumbnailGrid from "./lib/ThumbnailGrid.svelte";
   import SelectionList from "./lib/SelectionList.svelte";
@@ -11,12 +8,15 @@
   import ImagePreview from "./lib/ImagePreview.svelte";
   import ExifFrameSettings from "./lib/ExifFrameSettings.svelte";
   import Dialog from "./lib/ui/Dialog.svelte";
-import Button from "./lib/ui/Button.svelte";
+  import Button from "./lib/ui/Button.svelte";
   import ResultDialog from "./lib/ResultDialog.svelte";
   import Toast from "./lib/Toast.svelte";
   import { toast, describeError } from "./lib/toasts.svelte";
-  import { listImages, processImages, cancelProcessing, getThumbnail, listPresets, savePreset, deletePreset, pickOutputFolder } from "./lib/api";
-  import type { ImageEntry, ProcessingConfig, ProcessBatchResponse, ProgressPayload, ExifFrameConfig } from "./lib/types";
+  import { listImages, pickOutputFolder } from "./lib/api";
+  import { createThumbnailQueue } from "./lib/browser/thumbnailQueue.svelte";
+  import { createPresetStore } from "./lib/panels/presets.svelte";
+  import { createConvertRun } from "./lib/panels/convertRun.svelte";
+  import type { ImageEntry, ProcessingConfig } from "./lib/types";
 
   // --- 状態 ---
   let images = $state<ImageEntry[]>([]);
@@ -30,84 +30,14 @@ import Button from "./lib/ui/Button.svelte";
     delete_originals: false,
     max_width: null,
   });
-  let processing = $state(false);
-  let progress = $state<ProgressPayload | null>(null);
 
-  // サムネイルは解像度ごとに別物なので `path:maxDimension` をキーにする。
-  // path だけで持つと列数を変えても再取得されず、低解像度が引き伸ばされる。
-  let thumbnailCache = new SvelteMap<string, string>();
-
-  function thumbnailKey(path: string, maxDimension: number): string {
-    return `${path}:${maxDimension}`;
-  }
-
-  function thumbnailFor(path: string, maxDimension: number): string | undefined {
-    return thumbnailCache.get(thumbnailKey(path, maxDimension));
-  }
+  const thumbnails = createThumbnailQueue();
+  const presets = createPresetStore();
+  const convert = createConvertRun();
 
   // --- Exifフレーム状態 ---
-  // プリセット一覧は App が唯一の保持者。ExifFrameSettings は props で受け取る。
   let exifFrameEnabled = $state(false);
-  let selectedPresetName = $state("default");
-  let exifFramePresets = $state<ExifFrameConfig[]>([]);
   let showExifFrameSettings = $state(false);
-
-  async function reloadPresets() {
-    try {
-      exifFramePresets = await listPresets();
-      if (!exifFramePresets.some((p) => p.name === selectedPresetName)) {
-        selectedPresetName = exifFramePresets[0]?.name ?? "default";
-      }
-    } catch (e) {
-      toast.error(`プリセットの読み込みに失敗しました: ${describeError(e)}`);
-    }
-  }
-
-  let activeExifFrameConfig = $derived(
-    exifFramePresets.find((p) => p.name === selectedPresetName) ?? null
-  );
-
-  // --- サムネイルロード（並列制限キュー） ---
-  let activeRequests = 0;
-  const MAX_CONCURRENT = 3;
-  const pendingQueue: { path: string; maxDimension: number }[] = [];
-  // 同一キーの失敗を繰り返し再要求しないための記録
-  const failedThumbnails = new Set<string>();
-  let thumbnailErrorReported = false;
-
-  function processQueue() {
-    while (activeRequests < MAX_CONCURRENT && pendingQueue.length > 0) {
-      const { path, maxDimension } = pendingQueue.shift()!;
-      const key = thumbnailKey(path, maxDimension);
-      if (thumbnailCache.has(key)) continue;
-      activeRequests++;
-      getThumbnail(path, maxDimension)
-        .then((base64) => {
-          thumbnailCache.set(key, base64);
-        })
-        .catch((e) => {
-          failedThumbnails.add(key);
-          // 1枚ごとにトーストを出すと壊れたフォルダーで埋め尽くされるため最初の1件だけ通知する
-          if (!thumbnailErrorReported) {
-            thumbnailErrorReported = true;
-            toast.error(`サムネイルを生成できない画像があります: ${describeError(e)}`);
-          }
-        })
-        .finally(() => {
-          activeRequests--;
-          processQueue();
-        });
-    }
-  }
-
-  function handleRequestThumbnail(path: string, maxDimension: number) {
-    const key = thumbnailKey(path, maxDimension);
-    if (thumbnailCache.has(key) || failedThumbnails.has(key)) return;
-    if (!pendingQueue.some((item) => item.path === path && item.maxDimension === maxDimension)) {
-      pendingQueue.push({ path, maxDimension });
-    }
-    processQueue();
-  }
 
   const PAGE_SIZE = 50;
   let currentPage = $state(0);
@@ -136,34 +66,14 @@ import Button from "./lib/ui/Button.svelte";
   // --- 派生状態 ---
   let selectedPaths = $derived(new Set(selectedImages.map((img) => img.path)));
   let canProcess = $derived(
-    selectedImages.length > 0 && !processing && outputFolder !== ""
+    selectedImages.length > 0 && !convert.processing && outputFolder !== ""
   );
 
   // --- イベントリスナー ---
   onMount(() => {
-    let unlisten: UnlistenFn | null = null;
-    let cancelled = false;
-
-    listen<ProgressPayload>("processing-progress", (event) => {
-      progress = event.payload;
-    })
-      .then((fn) => {
-        if (cancelled) {
-          fn();
-        } else {
-          unlisten = fn;
-        }
-      })
-      .catch((e) => {
-        toast.error(`進捗の購読に失敗しました: ${describeError(e)}`);
-      });
-
-    reloadPresets();
-
-    return () => {
-      cancelled = true;
-      unlisten?.();
-    };
+    const unsubscribe = convert.subscribeProgress();
+    presets.reload();
+    return unsubscribe;
   });
 
   // --- ハンドラー ---
@@ -214,10 +124,6 @@ import Button from "./lib/ui/Button.svelte";
 
   // --- 変換実行 ---
   let showDeleteConfirm = $state(false);
-  let batchResponse = $state<ProcessBatchResponse | null>(null);
-  let batchRequested = $state<ImageEntry[]>([]);
-  let batchCancelled = $state(false);
-  let cancelRequested = false;
 
   function handleProcess() {
     if (!canProcess) return;
@@ -229,59 +135,11 @@ import Button from "./lib/ui/Button.svelte";
     runProcess();
   }
 
-  async function runProcess() {
+  function runProcess() {
     showDeleteConfirm = false;
-    if (!canProcess) return;
-
-    const requested = selectedImages;
-    processing = true;
-    cancelRequested = false;
-    progress = { current: 0, total: requested.length, file_name: "" };
-
-    try {
-      const files = requested.map((img) => img.path);
-      const efConfig = config.mode === "pad" && exifFrameEnabled ? activeExifFrameConfig : null;
-      const response = await processImages(files, outputFolder, config, efConfig);
-      batchRequested = requested;
-      batchResponse = response;
-      batchCancelled = cancelRequested;
-    } catch (e) {
-      toast.error(`変換に失敗しました: ${describeError(e)}`);
-    } finally {
-      processing = false;
-      progress = null;
-    }
-  }
-
-  async function handleCancel() {
-    try {
-      cancelRequested = true;
-      await cancelProcessing();
-    } catch (e) {
-      toast.error(`キャンセルに失敗しました: ${describeError(e)}`);
-    }
-  }
-
-  async function handleSavePreset(preset: ExifFrameConfig) {
-    try {
-      await savePreset(preset);
-      selectedPresetName = preset.name;
-      await reloadPresets();
-      showExifFrameSettings = false;
-      toast.success(`プリセット「${preset.name}」を保存しました`);
-    } catch (e) {
-      toast.error(`プリセットの保存に失敗しました: ${describeError(e)}`);
-    }
-  }
-
-  async function handleDeletePreset(name: string) {
-    try {
-      await deletePreset(name);
-      await reloadPresets();
-      toast.success(`プリセット「${name}」を削除しました`);
-    } catch (e) {
-      toast.error(`プリセットの削除に失敗しました: ${describeError(e)}`);
-    }
+    const efConfig =
+      config.mode === "pad" && exifFrameEnabled ? presets.active : null;
+    convert.run(selectedImages, outputFolder, config, efConfig);
   }
 </script>
 
@@ -294,10 +152,10 @@ import Button from "./lib/ui/Button.svelte";
     <ThumbnailGrid
       {images}
       {selectedPaths}
-      {thumbnailFor}
+      thumbnailFor={thumbnails.get}
       {currentPage}
       onToggleSelect={handleToggleSelect}
-      onRequestThumbnail={handleRequestThumbnail}
+      onRequestThumbnail={thumbnails.request}
       onPreview={handlePreview}
       onPageChange={(page) => (currentPage = page)}
     />
@@ -306,9 +164,9 @@ import Button from "./lib/ui/Button.svelte";
   <div class="right-panel">
     <SelectionList
       {selectedImages}
-      {thumbnailFor}
+      thumbnailFor={thumbnails.get}
       onRemove={handleRemove}
-      onRequestThumbnail={handleRequestThumbnail}
+      onRequestThumbnail={thumbnails.request}
       onPreview={handlePreview}
     />
     <SettingsPanel
@@ -318,10 +176,10 @@ import Button from "./lib/ui/Button.svelte";
       onPickOutputFolder={handlePickOutputFolder}
       onProcess={handleProcess}
       {exifFrameEnabled}
-      {selectedPresetName}
-      presets={exifFramePresets}
+      selectedPresetName={presets.selectedName}
+      presets={presets.presets}
       onExifFrameEnabledChange={(enabled) => (exifFrameEnabled = enabled)}
-      onPresetChange={(name) => (selectedPresetName = name)}
+      onPresetChange={(name) => (presets.selectedName = name)}
       onOpenExifSettings={() => (showExifFrameSettings = true)}
     />
   </div>
@@ -338,17 +196,19 @@ import Button from "./lib/ui/Button.svelte";
   />
 {/if}
 
-<ProgressOverlay {progress} onCancel={handleCancel} />
+<ProgressOverlay progress={convert.progress} onCancel={convert.cancel} />
 
 {#if showExifFrameSettings}
   <ExifFrameSettings
-    presets={exifFramePresets}
-    {selectedPresetName}
+    presets={presets.presets}
+    selectedPresetName={presets.selectedName}
     previewImagePath={selectedImages[0]?.path ?? null}
     bgColor={config.bg_color}
     onClose={() => (showExifFrameSettings = false)}
-    onSave={handleSavePreset}
-    onDelete={handleDeletePreset}
+    onSave={async (p) => {
+      if (await presets.save(p)) showExifFrameSettings = false;
+    }}
+    onDelete={presets.remove}
   />
 {/if}
 
@@ -369,12 +229,12 @@ import Button from "./lib/ui/Button.svelte";
   </Dialog>
 {/if}
 
-{#if batchResponse}
+{#if convert.result}
   <ResultDialog
-    requested={batchRequested}
-    response={batchResponse}
-    cancelled={batchCancelled}
-    onClose={() => (batchResponse = null)}
+    requested={convert.result.requested}
+    response={convert.result.response}
+    cancelled={convert.result.cancelled}
+    onClose={convert.dismissResult}
   />
 {/if}
 
