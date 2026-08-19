@@ -49,6 +49,30 @@ export function createPresetStore() {
         return false;
       }
     },
+    /**
+     * プリセットの改名。**新しい名前で保存してから旧名を消す。**
+     * 逆順にすると、保存に失敗したときにプリセットが消えるだけになる。
+     * `from === preset.name` のときは単なる保存として振る舞う。
+     *
+     * `remove` を続けて呼ぶ形にはしない。`remove` は削除の toast を出すので、
+     * 改名という 1 つの操作に対して削除の通知が出てしまう。
+     */
+    async rename(from: string, preset: ExifFrameConfig): Promise<boolean> {
+      try {
+        await savePreset(preset);
+        if (from !== preset.name) await deletePreset(from);
+        selectedName = preset.name;
+        await reload();
+        toast.success(`プリセット「${from}」を「${preset.name}」に変更しました`);
+        return true;
+      } catch (e) {
+        toast.error(`プリセットの改名に失敗しました: ${describeError(e)}`);
+        // 保存だけ通って削除で落ちた場合、ディスク上は 2 件になっている。
+        // 実際の状態を見せるために読み直す
+        await reload();
+        return false;
+      }
+    },
     async remove(name: string): Promise<void> {
       try {
         await deletePreset(name);

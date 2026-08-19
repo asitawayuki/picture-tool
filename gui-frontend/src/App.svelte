@@ -9,18 +9,21 @@
   import ConvertPanel from "./lib/panels/ConvertPanel.svelte";
   import ProgressOverlay from "./lib/ProgressOverlay.svelte";
   import PhotoViewer from "./lib/browser/PhotoViewer.svelte";
-  import ExifFrameSettings from "./lib/ExifFrameSettings.svelte";
+  import PresetList from "./lib/panels/PresetList.svelte";
+  import FramePreview from "./lib/panels/FramePreview.svelte";
+  import FramePanel from "./lib/panels/FramePanel.svelte";
   import Card from "./lib/ui/Card.svelte";
   import Dialog from "./lib/ui/Dialog.svelte";
   import Button from "./lib/ui/Button.svelte";
   import ResultDialog from "./lib/ResultDialog.svelte";
   import Toast from "./lib/Toast.svelte";
   import { toast, describeError } from "./lib/toasts.svelte";
-  import { listImages, pickOutputFolder } from "./lib/api";
+  import { listAvailableFonts, listImages, pickOutputFolder } from "./lib/api";
   import { createThumbnailQueue } from "./lib/browser/thumbnailQueue.svelte";
   import { createPresetStore } from "./lib/panels/presets.svelte";
   import { createConvertRun } from "./lib/panels/convertRun.svelte";
-  import type { ImageEntry, ProcessingConfig } from "./lib/types";
+  import { createFrameDraft } from "./lib/panels/frameDraft.svelte";
+  import type { FontInfo, ImageEntry, ProcessingConfig } from "./lib/types";
 
   // --- 状態 ---
   let mode = $state<AppMode>("convert");
@@ -54,10 +57,11 @@
   const thumbnails = createThumbnailQueue();
   const presets = createPresetStore();
   const convert = createConvertRun();
+  const frame = createFrameDraft();
 
   // --- Exifフレーム状態 ---
   let exifFrameEnabled = $state(false);
-  let showExifFrameSettings = $state(false);
+  let fonts = $state<FontInfo[]>([]);
 
   let previewImage = $state<ImageEntry | null>(null);
 
@@ -86,6 +90,9 @@
   onMount(() => {
     const unsubscribe = convert.subscribeProgress();
     presets.reload();
+    listAvailableFonts()
+      .then((f) => (fonts = f))
+      .catch((e) => toast.error(`フォント一覧の取得に失敗しました: ${describeError(e)}`));
     // キャッシュ上限を実測で決める（Task 15 / spec §7-2）ための窓口。
     // import.meta.env.DEV で囲んであるので本番バンドルには残らない
     if (import.meta.env.DEV) {
@@ -140,6 +147,29 @@
   function handleModeChange(next: AppMode) {
     mode = next;
     if (next === "metadata" && editingPath === null) editingPath = focusedPath;
+    // 下書きはモードを跨いで保つ。null のときだけ、いま選ばれているプリセットから起こす
+    if (next === "frame" && frame.draft === null) {
+      frame.select(presets.selectedName, presets.presets);
+    }
+  }
+
+  // --- フレームのプリセット操作 ---
+  async function handleSaveFrame() {
+    const snap = frame.snapshot();
+    // 改名なら「新しい名前で保存 → 旧名を削除」。それ以外は普通の保存
+    const from = frame.renamedFrom;
+    const ok = from ? await presets.rename(from, snap) : await presets.save(snap);
+    // editingName を保存後の名前へ合わせ直す。これをしないと、改名の直後に
+    // もう一度保存したときに renamedFrom が消えた旧名を指し、
+    // 存在しないプリセットを削除しようとする
+    if (ok) frame.select(snap.name, presets.presets);
+  }
+
+  async function handleDeletePreset(name: string) {
+    await presets.remove(name);
+    // 消したのが編集中のものなら、下書きがディスク上に無い実体を指したままになる。
+    // そのまま保存すると消したはずのプリセットが復活するので選び直す
+    if (frame.editingName === name) frame.select(presets.selectedName, presets.presets);
   }
 
   function handleClearSelection() {
@@ -183,17 +213,23 @@
 <AppShell {mode} onModeChange={handleModeChange} {layout}>
   {#snippet left()}
     {#if mode === "frame"}
-      <div class="placeholder">
-        <Card level={1} title="プリセット一覧">
-          <p>Task 16（段階 7）で実装する。</p>
-        </Card>
-      </div>
+      <PresetList
+        presets={presets.presets}
+        editingName={frame.editingName}
+        onSelect={(name) => frame.select(name, presets.presets)}
+        onRename={frame.rename}
+        onCreate={() => frame.createNew(presets.presets)}
+        onDelete={handleDeletePreset}
+      />
     {:else}
       <FolderTree onSelectFolder={handleSelectFolder} />
     {/if}
   {/snippet}
 
   {#snippet center()}
+    {#if mode === "frame"}
+      <FramePreview config={frame.draft} bgColor={config.bg_color} imagePath={focusedPath} />
+    {:else}
     <PhotoGrid
       {images}
       selectionMode={mode === "convert" ? "multi" : "single"}
@@ -213,6 +249,7 @@
       onClearSelection={handleClearSelection}
       primaryAction={collapsedPrimaryAction}
     />
+    {/if}
   {/snippet}
 
   {#snippet right()}
@@ -227,7 +264,7 @@
         bind:selectedPresetName={presets.selectedName}
         onPickOutputFolder={handlePickOutputFolder}
         onProcess={handleProcess}
-        onEditFrame={() => (mode = "frame")}
+        onEditFrame={() => handleModeChange("frame")}
       />
     {:else if mode === "metadata"}
       <div class="placeholder">
@@ -235,15 +272,28 @@
           <p>Task 17（段階 8）で実装する。</p>
         </Card>
       </div>
-    {:else}
-      <div class="placeholder">
-        <Card level={1} title="フレーム設定">
-          <p>Task 16（段階 7）で実装する。</p>
-          <Button variant="outlined" onclick={() => (showExifFrameSettings = true)}>
-            現行の Exif フレーム設定を開く
-          </Button>
-        </Card>
-      </div>
+    {:else if mode === "frame"}
+      <!-- frame.draft は getter しか持たず、型も ExifFrameConfig | null なので
+           bind:config は使えない。{@const} で絞ってから非 bind: で渡す。
+           FramePanel 側は $bindable() で受けてプロパティを直接書き換える
+           （$state のプロキシなので親まで届く） -->
+      {@const draft = frame.draft}
+      {#if draft}
+        <FramePanel
+          config={draft}
+          bind:bgColor={config.bg_color}
+          {fonts}
+          isNew={frame.isNew}
+          isRenamed={frame.isRenamed}
+          nameConflict={frame.nameConflict}
+          canSave={frame.canSave}
+          canDelete={frame.canDelete}
+          sampleName={images.find((img) => img.path === focusedPath)?.name ?? null}
+          onSave={handleSaveFrame}
+          onDelete={() => handleDeletePreset(frame.editingName)}
+          onPickSample={() => handleModeChange("convert")}
+        />
+      {/if}
     {/if}
   {/snippet}
 </AppShell>
@@ -280,20 +330,6 @@
 {/if}
 
 <ProgressOverlay progress={convert.progress} onCancel={convert.cancel} />
-
-{#if showExifFrameSettings}
-  <ExifFrameSettings
-    presets={presets.presets}
-    selectedPresetName={presets.selectedName}
-    previewImagePath={selectedImages[0]?.path ?? null}
-    bgColor={config.bg_color}
-    onClose={() => (showExifFrameSettings = false)}
-    onSave={async (p) => {
-      if (await presets.save(p)) showExifFrameSettings = false;
-    }}
-    onDelete={presets.remove}
-  />
-{/if}
 
 {#if showDeleteConfirm}
   <!-- 破壊的操作なので alertdialog にし、初期フォーカスはキャンセル側に置く -->

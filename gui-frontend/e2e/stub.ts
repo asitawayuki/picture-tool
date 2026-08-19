@@ -3,6 +3,14 @@ import type { Page } from "@playwright/test";
 export interface StubOptions {
   /** list_images が返す枚数 */
   imageCount?: number;
+  /**
+   * `render_exif_frame_preview` が返す警告。
+   *
+   * ここに載るのは**アセット由来**の警告（カスタム `model_map` の不備など）で、
+   * spec §5-3 では「返ってくるので従来どおり toast する」側である。
+   * フレーム描画由来の警告は Rust 側で捨てられるため webview には届かない。
+   */
+  frameWarnings?: string[];
 }
 
 /**
@@ -13,7 +21,8 @@ export interface StubOptions {
  * この 2 つを用意すれば webview の中の挙動をそのまま再現できる。
  */
 export async function installTauriStub(page: Page, options: StubOptions = {}) {
-  await page.addInitScript((imageCount: number) => {
+  await page.addInitScript((opts: { imageCount: number; frameWarnings: string[] }) => {
+    const { imageCount, frameWarnings } = opts;
     /** サムネイルは 24 種類だけ作って使い回す。
      *  全部同じにするとデコードが 1 回で済んでしまい、スクロール計測の
      *  負荷が実際より軽く出る。全部別にすると生成自体が計測を汚す。 */
@@ -121,10 +130,16 @@ export async function installTauriStub(page: Page, options: StubOptions = {}) {
         };
       },
       cancel_processing: () => null,
-      render_exif_frame_preview: () => ({
-        data_url: `data:image/jpeg;base64,${jpegFor(0, 400)}`,
-        warnings: [],
-      }),
+      // 生成の回数を残す。「同じ警告が二度出ない」の検査は、二度目の生成が
+      // 実際に起きたことを前提条件として見ないと、生成されていないだけで成立する
+      render_exif_frame_preview: (a) => {
+        const log = ((window as any).__framePreviewRequests ??= []);
+        log.push({ path: a.path, bgColor: a.bgColor, config: a.config });
+        return {
+          data_url: `data:image/jpeg;base64,${jpegFor(0, 400)}`,
+          warnings: frameWarnings,
+        };
+      },
       // プリセットは読み書きの往復を検査したい（Task 16 の改名）ので、
       // 配列を実際に書き換える。引数名は api.ts に合わせること
       // （save_preset は { config }、delete_preset は { name }）
@@ -159,7 +174,7 @@ export async function installTauriStub(page: Page, options: StubOptions = {}) {
         return handler(args ?? {});
       },
     };
-  }, options.imageCount ?? 24);
+  }, { imageCount: options.imageCount ?? 24, frameWarnings: options.frameWarnings ?? [] });
 }
 
 /**
