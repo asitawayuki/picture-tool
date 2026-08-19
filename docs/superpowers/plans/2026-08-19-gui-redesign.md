@@ -9831,6 +9831,66 @@ GUI ウィンドウを操作できないため `e2e/thumbnails.spec.ts` で代�
 確認済み。**ここが載らないとバイト上限が一生発火せず、画面上は正常に見える**ので、
 この 1 件だけは他のどのテストからも検知できない。
 
+### Task 13 — 計画のコードで通った。直したのは検証側の 3 件
+
+`gridMetrics.ts` / `PhotoGrid.svelte` は計画のコードをそのまま実装して通った。
+`App.svelte` は 319 → 332 行。ページネーション（`PAGE_SIZE` / `currentPage` /
+`handleNavigatePreview`）を消した分より、`PhotoGrid` の props と
+`handleFocus` / `handleModeChange` の追加の方が多い。150 行への圧縮は
+パネルが出揃う Task 16 / 17 待ち。手を入れたのは以下:
+
+- **`computeVisibleRange` の `firstRow` を最終行で抑えた**（計画に無い 1 行）。
+  計画の式は `max(0, floor(scrollTop / rowHeight) - OVERSCAN)` だけで上を抑えていない。
+  **サイズスライダーで列を増やすと総高が縮み、要素側が clamp されて scroll
+  イベントが返るまでの 1 フレーム、古い `scrollTop` で描くことになる。**
+  抑えないと `paddingTop` が総高を大きく超えて画面が飛ぶ。
+  計画の「最終行を超えてスクロールしても…」の期待（`lastRow` / `endIndex` /
+  `paddingBottom`）はこの経路を通っても全部成立してしまうので、
+  **`paddingTop` を見る検査を足した**（抑えを外すと落ちる）
+- **タイル幅の期待値を spec §3-1 の表の固定値にした。** 計画のテストは列数だけを
+  固定値で見て、タイル幅は式を書き写して照合していた。それでは
+  `(内側 − gap×(列数−1)) / 列数` という式そのものを間違えていても一致する。
+  spec の表には「約 253px」等が載っているので、そちらから取った
+- **`e2e/thumbnails.spec.ts` も直した**（計画 Step 6 は `convert` / `shell` しか
+  挙げていない）。タイルの `img` は `alt=""` の装飾になり、名前を持つのは
+  `role="option"` のタイル側なので `getByRole("img", { name: … })` が引けない。
+  併せて「列」スライダーが「サイズ」（目標タイル幅）に変わったので、
+  「列を減らす」→「タイルを大きくする」に読み替えた
+
+**`getByLabel("サイズ")` は変換パネルの「最大サイズ」にも当たる**（部分一致）。
+`{ exact: true }` が要る。Task 15 Step 7 の `page.getByLabel("サイズ").fill(size)` も
+同じなので、そこでも exact を付けること。
+
+**`role="option"` の div には `a11y_click_events_have_key_events` が出る。**
+listbox / option は composite widget で、キーボードは親の `onkeydown` が
+一括で受けるのが正しい形（option ごとに handler を重ねると同じキーが二重に走る）。
+svelte が `role="option"` を対話的と見なさない誤検出なので、Task 9 の
+`separator` と同じく理由つき `<!-- svelte-ignore -->` で抑止した。
+
+### Task 13 — e2e の viewport が黙って 1280 だった
+
+`playwright.config.ts` は最上位の `use` に `viewport: { width: 1440, height: 800 }` を
+「既定ウィンドウ寸法に合わせる」と書いていたが、**project の
+`use: { ...devices["Desktop Chrome"] }` が viewport 1280×720 を持っており、
+project の `use` が最上位を上書きするので実際は 1280 で走っていた**（Task 3 から）。
+spec §3-1 の列数の実測表は 1440 のものなので、device の**後ろ**に viewport を
+置く形へ直した。Task 15 の計測も同じ幅で行う。
+
+（1280 でも 640 → 内側 616 → 3 列で、たまたま既定の列数は変わらない。
+落ちない種類のずれなので、実際に描かせて画面を見るまで気付けなかった。）
+
+### Task 13 — 実機の代わりに描画結果を見た
+
+Step 9 の実機確認は Task 7 / 9 / 10 / 12 と同じ理由でできない。
+スクロールと仮想化とキー割り当ては `e2e/grid.spec.ts` が見ている。
+それに加えて **3,000 枚を読み込んだ状態のスクリーンショットを 2 枚撮り**、
+spec §3-1 の表どおりであることを目視した: 既定 1440 で **3 列**、
+右パネルを畳んで **5 列**。タイルは現行の約 173px に対して約 253px。
+
+高速スクロール時に「いま見えている行から先に埋まる」（LIFO の効果）は
+撮った静止画では言えない。規則そのものは `requestQueue.test.ts` が見ており、
+繋いだ状態での体感は Task 15 の計測と実機（段階 9）に回す。
+
 ### Task 14 — フィルムストリップの要素数
 
 ### Task 15 — スクロール測定と LRU 上限

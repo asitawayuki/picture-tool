@@ -21,13 +21,13 @@ test.describe("サムネイル取得", () => {
   });
 
   test("サムネイルが実データで描画される", async ({ page }) => {
-    const first = page.getByRole("img", { name: "photo-0000.jpg" });
+    const first = page.getByRole("option", { name: "photo-0000.jpg" }).locator("img");
     await expect(first).toBeVisible();
     await expect(first).toHaveAttribute("src", /^data:image\/jpeg;base64,.+/);
   });
 
-  test("列を減らすと大きい解像度で取り直す", async ({ page }) => {
-    await expect(page.getByRole("img", { name: "photo-0000.jpg" })).toBeVisible();
+  test("タイルを大きくすると大きい解像度で取り直す", async ({ page }) => {
+    await expect(page.getByRole("option", { name: "photo-0000.jpg" }).locator("img")).toBeVisible();
 
     const sizesBefore = await page.evaluate(() =>
       ((window as any).__thumbnailRequests as { maxDimension: number }[]).map(
@@ -38,8 +38,9 @@ test.describe("サムネイル取得", () => {
     expect(sizesBefore.length).toBeGreaterThan(0);
     const maxBefore = Math.max(...sizesBefore);
 
-    // 列を減らす＝1 枚あたりが広くなる。低解像度を引き伸ばしたままにしない
-    await page.getByLabel("列").fill("2");
+    // タイルの目標幅を上げる＝1 枚あたりが広くなる（列は減る）。
+    // 低解像度を引き伸ばしたままにしない
+    await page.getByLabel("サイズ", { exact: true }).fill("512");
 
     await expect
       .poll(async () =>
@@ -61,7 +62,7 @@ test.describe("サムネイル取得", () => {
   test("取得した分が LRU の台帳に載る", async ({ page }) => {
     // 台帳に載らないとバイト上限が一生発火せず、eviction が無い現行と同じになる。
     // 画面上は正常に見えるので、ここを見ないと気付けない
-    await expect(page.getByRole("img", { name: "photo-0000.jpg" })).toBeVisible();
+    await expect(page.getByRole("option", { name: "photo-0000.jpg" }).locator("img")).toBeVisible();
 
     await expect
       .poll(async () =>
@@ -79,7 +80,7 @@ test.describe("サムネイル取得", () => {
   test("フォルダーを変えてもサムネイルが出る", async ({ page }) => {
     // resetForFolder はキューを空にして priming を張り直す。
     // 張り直しを間違えると 2 つ目以降のフォルダーが永久に埋まらない
-    await expect(page.getByRole("img", { name: "photo-0000.jpg" })).toBeVisible();
+    await expect(page.getByRole("option", { name: "photo-0000.jpg" }).locator("img")).toBeVisible();
 
     await page.getByRole("button", { name: "archive", exact: false }).first().click();
 
@@ -94,7 +95,7 @@ test.describe("サムネイル取得", () => {
       )
       .toBeGreaterThan(0);
 
-    await expect(page.getByRole("img", { name: "photo-0000.jpg" }).first()).toHaveAttribute(
+    await expect(page.getByRole("option", { name: "photo-0000.jpg" }).locator("img")).toHaveAttribute(
       "src",
       /^data:image\/jpeg;base64,.+/
     );

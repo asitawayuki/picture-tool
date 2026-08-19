@@ -5,7 +5,7 @@
   import { createLayout } from "./lib/shell/layout.svelte";
   import type { AppMode } from "./lib/shell/modes";
   import FolderTree from "./lib/browser/FolderTree.svelte";
-  import ThumbnailGrid from "./lib/ThumbnailGrid.svelte";
+  import PhotoGrid from "./lib/browser/PhotoGrid.svelte";
   import ConvertPanel from "./lib/panels/ConvertPanel.svelte";
   import ProgressOverlay from "./lib/ProgressOverlay.svelte";
   import ImagePreview from "./lib/ImagePreview.svelte";
@@ -59,10 +59,14 @@
   let exifFrameEnabled = $state(false);
   let showExifFrameSettings = $state(false);
 
-  const PAGE_SIZE = 50;
-  let currentPage = $state(0);
-
   let previewImage = $state<ImageEntry | null>(null);
+
+  /**
+   * グリッドのスクロール位置。**App が持つ**（spec §3-2）。
+   * フレームモードでは PhotoGrid が unmount されるので、
+   * グリッド内部の state に置くと戻ったときに先頭へ飛ぶ。
+   */
+  let gridScrollTop = $state(0);
 
   function handlePreview(image: ImageEntry) {
     previewImage = image;
@@ -70,17 +74,6 @@
 
   function handleClosePreview() {
     previewImage = null;
-  }
-
-  function handleNavigatePreview(image: ImageEntry) {
-    const idx = images.findIndex((img) => img.path === image.path);
-    if (idx >= 0) {
-      const targetPage = Math.floor(idx / PAGE_SIZE);
-      if (targetPage !== currentPage) {
-        currentPage = targetPage;
-      }
-    }
-    previewImage = image;
   }
 
   // --- 派生状態 ---
@@ -107,7 +100,7 @@
 
   async function handleSelectFolder(path: string) {
     currentFolder = path;
-    currentPage = 0;
+    gridScrollTop = 0;
     // フォルダーを変えたら最後に触った写真は無効
     focusedPath = null;
     // 選択は常に現在のフォルダー内に閉じる。SelectionList を廃止したので
@@ -132,7 +125,21 @@
   function handleToggleSelect(image: ImageEntry) {
     if (selectedPaths.has(image.path)) selectedPaths.delete(image.path);
     else selectedPaths.add(image.path);
+    handleFocus(image);
+  }
+
+  function handleFocus(image: ImageEntry) {
     focusedPath = image.path;
+    // 変換モードのクリックは focusedPath と selectedPaths にしか触らない。
+    // ここで editingPath を動かすと、変換モードで写真をチェックするたびに
+    // 未保存ガードが誤発火する
+    if (mode === "metadata") editingPath = image.path;
+  }
+
+  // メタデータモードへ入ったとき、編集対象が空なら最後に触った 1 枚を採る（spec §3-2）
+  function handleModeChange(next: AppMode) {
+    mode = next;
+    if (next === "metadata" && editingPath === null) editingPath = focusedPath;
   }
 
   function handleClearSelection() {
@@ -173,7 +180,7 @@
   }
 </script>
 
-<AppShell {mode} onModeChange={(next) => (mode = next)} {layout}>
+<AppShell {mode} onModeChange={handleModeChange} {layout}>
   {#snippet left()}
     {#if mode === "frame"}
       <div class="placeholder">
@@ -187,17 +194,20 @@
   {/snippet}
 
   {#snippet center()}
-    <ThumbnailGrid
+    <PhotoGrid
       {images}
+      selectionMode={mode === "convert" ? "multi" : "single"}
       {selectedPaths}
+      {focusedPath}
       thumbnailFor={thumbnails.get}
-      {currentPage}
+      onRequestThumbnail={thumbnails.request}
+      onVisibleRangeChange={thumbnails.setVisibleRange}
+      bind:scrollTop={gridScrollTop}
+      onToggleSelect={handleToggleSelect}
+      onFocus={handleFocus}
+      onPreview={handlePreview}
       selectedCount={selectedPaths.size}
       rightPanelCollapsed={layout.rightPanelCollapsed}
-      onToggleSelect={handleToggleSelect}
-      onRequestThumbnail={thumbnails.request}
-      onPreview={handlePreview}
-      onPageChange={(page) => (currentPage = page)}
       onToggleRightPanel={() =>
         (layout.rightPanelCollapsed = !layout.rightPanelCollapsed)}
       onClearSelection={handleClearSelection}
@@ -259,7 +269,10 @@
     {selectedPaths}
     onToggleSelect={handleToggleSelect}
     onClose={handleClosePreview}
-    onNavigate={handleNavigatePreview}
+    onNavigate={(img) => {
+      previewImage = img;
+      handleFocus(img);
+    }}
   />
 {/if}
 

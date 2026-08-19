@@ -137,8 +137,8 @@ test.describe("アプリシェル", () => {
     // 前提条件: 選択が 0 のときは出ない
     await expect(page.getByText(/枚選択中/)).toHaveCount(0);
 
-    await page.getByRole("button", { name: /photo-0000/ }).click();
-    await page.getByRole("button", { name: /photo-0001/ }).click();
+    await page.getByRole("option", { name: /photo-0000/ }).click();
+    await page.getByRole("option", { name: /photo-0001/ }).click();
     await expect(page.getByText("2 枚選択中")).toBeVisible();
 
     await page.getByRole("button", { name: "全解除" }).click();

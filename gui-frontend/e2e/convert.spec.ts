@@ -16,12 +16,12 @@ test.describe("変換パネル", () => {
 
   test("主ボタンが選択枚数を持つ", async ({ page }) => {
     await expect(page.getByRole("button", { name: "0 枚を変換" })).toBeDisabled();
-    await page.getByRole("button", { name: /photo-0000/ }).click();
+    await page.getByRole("option", { name: /photo-0000/ }).click();
     await expect(page.getByRole("button", { name: "1 枚を変換" })).toBeVisible();
   });
 
   test("フォルダーを変えると選択がクリアされる（spec §3-2）", async ({ page }) => {
-    await page.getByRole("button", { name: /photo-0000/ }).click();
+    await page.getByRole("option", { name: /photo-0000/ }).click();
     // 前提条件: いま実際に 1 枚選ばれていること。0 枚のままだと
     // 「クリアされた」は自明に成立してしまう
     await expect(page.getByRole("button", { name: "1 枚を変換" })).toBeVisible();
@@ -98,8 +98,8 @@ test.describe("変換パネル", () => {
     await maxWidth.fill("1002");
     await maxWidth.blur();
 
-    await page.getByRole("button", { name: /photo-0000/ }).click();
-    await page.getByRole("button", { name: /photo-0001/ }).click();
+    await page.getByRole("option", { name: /photo-0000/ }).click();
+    await page.getByRole("option", { name: /photo-0001/ }).click();
     await page.getByRole("button", { name: "フォルダーを選択..." }).click();
     await expect(page.getByText("/output")).toBeVisible();
 
@@ -132,7 +132,7 @@ test.describe("変換パネル", () => {
     // 「渡らない」が配線の誤りと区別できなくなる
     await expect(page.getByLabel("プリセット")).toHaveValue("default");
 
-    await page.getByRole("button", { name: /photo-0000/ }).click();
+    await page.getByRole("option", { name: /photo-0000/ }).click();
     await page.getByRole("button", { name: "フォルダーを選択..." }).click();
     await page.getByRole("button", { name: "1 枚を変換" }).click();
     await expect(page.getByRole("dialog", { name: "変換結果" })).toBeVisible();
@@ -142,7 +142,7 @@ test.describe("変換パネル", () => {
   });
 
   test("元ファイル削除は確認ダイアログを挟む", async ({ page }) => {
-    await page.getByRole("button", { name: /photo-0000/ }).click();
+    await page.getByRole("option", { name: /photo-0000/ }).click();
     await page.getByRole("button", { name: "フォルダーを選択..." }).click();
     await toggleSwitch(page, "元ファイルを削除");
     await page.getByRole("button", { name: "1 枚を変換" }).click();
