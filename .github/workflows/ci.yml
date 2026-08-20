@@ -52,6 +52,12 @@ jobs:
         working-directory: gui-frontend
         run: bun run typecheck
 
+      # 純粋ロジックの単体テスト。走査範囲は bunfig.toml で src/ に限定してある。
+      # Playwright（e2e）はブラウザバイナリを入れていないので CI では走らせない
+      - name: Test frontend
+        working-directory: gui-frontend
+        run: bun test
+
       # tauri-build は frontendDist (../gui-frontend/dist) の存在を要求するため、
       # gui クレートに触れる cargo コマンドより前に必ずビルドしておく
       - name: Build frontend

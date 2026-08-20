@@ -7,14 +7,22 @@
  *
  * node 自身にフォーカスできるよう `tabindex="-1"` を付けておくこと。
  */
-const FOCUSABLE = [
-  "a[href]",
-  "button:not([disabled])",
-  "input:not([disabled])",
-  "select:not([disabled])",
-  "textarea:not([disabled])",
-  '[tabindex]:not([tabindex="-1"])',
-].join(",");
+/**
+ * **`tabindex="-1"` の要素は列挙しない。** Tab 順に入らないのだから
+ * 先頭／末尾の判定に混ぜる理由が無く、混ぜると端がずれる
+ * （`Rating` の★のように `aria-hidden` かつ `tabindex="-1"` の要素がある）。
+ *
+ * 実用上はコストの方が大きい。`focusable()` は **Tab のたびに**
+ * 全一致要素へ `getClientRects()` を掛けるので、`PhotoViewer` の
+ * フィルムストリップ（写真の枚数だけ `button` が並ぶ）が毎回そこに入ると、
+ * Tab 1 回ごとに枚数分の強制レイアウトが走る。除くと現在位置の 1 枚だけになる。
+ *
+ * `node` 自身の `tabindex="-1"` も外れるが、`focusTrap` は `node` を
+ * `items` ではなく `active === node` で別に見ているので影響しない。
+ */
+const FOCUSABLE = ["a[href]", "button", "input", "select", "textarea", "[tabindex]"]
+  .map((sel) => `${sel}:not([disabled]):not([tabindex="-1"])`)
+  .join(",");
 
 export function focusTrap(node: HTMLElement, initialSelector?: string) {
   const previouslyFocused = document.activeElement as HTMLElement | null;

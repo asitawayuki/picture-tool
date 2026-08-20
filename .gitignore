@@ -21,5 +21,10 @@ gui/gen/
 # Playwright MCP の一時出力
 .playwright-mcp/
 
+# Playwright の出力
+gui-frontend/e2e/__screenshots__/
+gui-frontend/test-results/
+gui-frontend/playwright-report/
+
 # レビューの下書きなど一時ファイル
 docs/tmp/

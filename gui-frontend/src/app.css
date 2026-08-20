@@ -1,24 +1,5 @@
-:root {
-  --bg-primary: #0f0f1a;
-  --bg-secondary: #1a1a2e;
-  --bg-hover: #252540;
-  --border-color: #333;
-  --text-primary: #e0e0e0;
-  /* 補助テキストの色。--bg-primary (#0f0f1a) に対して
-     secondary ≈ 7.2:1、muted ≈ 5.5:1 で WCAG AA (4.5:1) を満たす。
-     以前は #888 / #666 で、特に muted は 3.2:1 と基準を下回っていた。 */
-  --text-secondary: #a1a1b0;
-  --text-muted: #8b8b9c;
-  --accent: #818cf8;
-  --accent-hover: #6366f1;
-  --accent-bg: rgba(99, 102, 241, 0.15);
-  --danger: #ef4444;
-  --success: #22c55e;
-  --warning: #f59e0b;
-  --radius: 6px;
-  --radius-sm: 4px;
-}
-
+/* リセットと最小限の地の設定だけを持つ。
+   色・形・余白・文字のトークンは styles/tokens.css にある。 */
 * {
   margin: 0;
   padding: 0;
@@ -26,9 +7,9 @@
 }
 
 body {
-  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-  background: var(--bg-primary);
-  color: var(--text-primary);
+  font: var(--md-sys-typescale-body-md);
+  background: var(--md-sys-color-surface);
+  color: var(--md-sys-color-on-surface);
   overflow: hidden;
   height: 100vh;
 }
@@ -40,7 +21,8 @@ body {
 }
 
 ::-webkit-scrollbar {
-  width: 6px;
+  width: 8px;
+  height: 8px;
 }
 
 ::-webkit-scrollbar-track {
@@ -48,10 +30,10 @@ body {
 }
 
 ::-webkit-scrollbar-thumb {
-  background: var(--border-color);
-  border-radius: 3px;
+  background: var(--md-sys-color-outline-variant);
+  border-radius: var(--md-sys-shape-corner-full);
 }
 
 ::-webkit-scrollbar-thumb:hover {
-  background: var(--text-muted);
+  background: var(--md-sys-color-outline);
 }
