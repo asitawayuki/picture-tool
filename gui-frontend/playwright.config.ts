@@ -9,13 +9,20 @@ import { defineConfig, devices } from "@playwright/test";
  *
  * CI では走らせない。CI にブラウザバイナリを入れていないため。
  *
- * **ポートは e2e 専用の 5174 にして、必ず自分でサーバーを立てる。**
+ * **ポートは e2e 専用（既定 5174）にして、必ず自分でサーバーを立てる。**
  * `vite.config.ts` は `port: 5173` / `strictPort: true` で、そこは
  * `make dev`（Tauri の dev サーバー）が使う。5173 を `reuseExistingServer: true`
  * で共有すると、`make dev` を上げたまま e2e を走らせたときに
  * **別のチェックアウト（worktree）の画面を検証してしまう**。
  * 落ちない代わりに嘘の緑が出る種類の事故なので、port ごと分ける。
+ *
+ * 5174 が別のプロジェクトに使われている環境では `E2E_PORT` で退避させる
+ * （`E2E_PORT=5199 bun run e2e`）。**`reuseExistingServer` は false のまま**なので、
+ * どのポートを選んでも「自分で立てたサーバーを見る」性質は変わらない。
  */
+const PORT = Number(process.env.E2E_PORT ?? 5174);
+const ORIGIN = `http://localhost:${PORT}`;
+
 export default defineConfig({
   testDir: "./e2e",
   // 同じ vite dev サーバーを共有するので直列に走らせる
@@ -23,7 +30,7 @@ export default defineConfig({
   workers: 1,
   timeout: 30_000,
   use: {
-    baseURL: "http://localhost:5174",
+    baseURL: ORIGIN,
   },
   projects: [
     {
@@ -41,8 +48,8 @@ export default defineConfig({
   ],
   webServer: {
     // vite の CLI 引数は vite.config.ts の server.port を上書きする
-    command: "bunx vite dev --port 5174 --strictPort",
-    url: "http://localhost:5174",
+    command: `bunx vite dev --port ${PORT} --strictPort`,
+    url: ORIGIN,
     reuseExistingServer: false,
     timeout: 60_000,
   },

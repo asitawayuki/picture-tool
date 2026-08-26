@@ -128,7 +128,25 @@ navigation rail による 3 モード構成（変換 / 情報 / フレーム）�
 フロントの検証は 2 系統:
 - `bun test` — runes を含まない純粋ロジック（幅のクランプ・グリッド寸法・LRU・キュー）
 - `bun run e2e` — Playwright。`vite dev` に当てる。見た目の検証は
-  `e2e/stub.ts` が `window.__TAURI_INTERNALS__` を差し替える
+  `e2e/stub.ts` が `window.__TAURI_INTERNALS__` を差し替える。
+  5174 が塞がっている環境では `E2E_PORT=5199 bun run e2e`
+
+### Rust ⇄ TypeScript の境界の形
+
+`gui-frontend/src/lib/types.ts` は Rust の DTO を**手で写したもの**で、片側だけ改名しても
+コンパイラは何も言わない（webview は JSON しか見ない）。これを検知するのが
+`gui-frontend/src/lib/dto.contract.ts` ── **自動生成物なので手で編集しない**。
+
+- 生成元は `gui/src/types.rs` の `mod contract`。Rust が serde で実際に吐く形を
+  TypeScript のリテラルとして書き出し、手書きの `types.ts` に代入している
+- Rust 側を変えると `cargo test` が「生成物と食い違う」で落ちる。
+  `UPDATE_DTO_CONTRACT=1 cargo test -p picture-tool-gui contract` で生成し直すと、
+  今度は `types.ts` を直すまで `bun run typecheck` が落ちる
+- `e2e/stub.ts` の応答も**この契約から形を取る**。スタブに形を書き写すと写しが
+  3 つ目に増え、スタブだけが古い形のまま緑を出し続ける
+
+検知できないもの: TS 側の型が Rust より広い場合（安全側）と、`invoke` の引数名
+（`maxDimension` → `max_dimension`）。後者は未対応。
 
 ### バックエンド（`gui/src/`）の前提
 
