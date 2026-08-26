@@ -1,9 +1,13 @@
+mod options;
+
 use anyhow::{Context, Result};
 use clap::Parser;
+use options::{apply_custom_text, max_width_warning, resolve_exif_frame, select_preset, summarize};
 use picture_tool_core::{self as core, BackgroundColor, ConversionMode, ProcessingConfig};
 use std::fs;
 use std::io::{IsTerminal, Write};
 use std::path::{Path, PathBuf};
+use std::process::ExitCode;
 use std::time::Instant;
 
 #[derive(Parser, Debug)]
@@ -70,7 +74,7 @@ fn display_name(path: &Path) -> String {
         .into_owned()
 }
 
-fn main() -> Result<()> {
+fn main() -> Result<ExitCode> {
     let args = Args::parse();
 
     let config = ProcessingConfig {
@@ -86,50 +90,32 @@ fn main() -> Result<()> {
 
     // 上限を指定したのに効いていない、を黙って通さない。core は eprintln! しないので
     // 起動時に1回だけここで出す（画像ごとに出すと同じ文言が枚数分並ぶ / spec §3, §5）。
-    if let Some(max_width) = args.max_width {
-        if config.mode == ConversionMode::Quality {
-            eprintln!("Warning: --max-width is only supported with --mode crop or pad. Ignoring.");
-        } else {
-            // 4 の倍数へ切り捨てる。切り上げると指定値を超えてしまう。
-            let effective = max_width / 4 * 4;
-            if effective != max_width {
-                eprintln!(
-                    "Warning: --max-width {} is rounded down to {} \
-                     (the output canvas width is always a multiple of 4).",
-                    max_width, effective
-                );
-            }
-        }
+    if let Some(warning) = max_width_warning(config.mode, args.max_width) {
+        eprintln!("Warning: {}", warning);
     }
 
-    let exif_frame_requested = if args.exif_frame && config.mode != ConversionMode::Pad {
-        eprintln!("Warning: --exif-frame is only supported with --mode pad. Ignoring.");
-        false
-    } else {
-        args.exif_frame
-    };
+    let (exif_frame_requested, warning) = resolve_exif_frame(args.exif_frame, config.mode);
+    if let Some(warning) = warning {
+        eprintln!("Warning: {}", warning);
+    }
 
     let (exif_frame_config, exif_assets) = if exif_frame_requested {
         let dirs = core::exif_frame::AssetDirs::default();
-        let config = if let Some(ref path) = args.preset_file {
+        // --preset-file は --preset より優先する（中身をそのまま使う）
+        let mut config = if let Some(ref path) = args.preset_file {
             let json = std::fs::read_to_string(path)
                 .with_context(|| format!("Failed to read preset file: {}", path.display()))?;
             serde_json::from_str::<core::exif_frame::ExifFrameConfig>(&json)?
         } else {
             let all = core::exif_frame::preset::list_all_presets(dirs.user_presets_dir.as_deref());
-            all.into_iter()
-                .find(|p| p.name == args.preset)
-                .unwrap_or_else(|| {
-                    eprintln!("Preset '{}' not found, using default", args.preset);
-                    core::exif_frame::ExifFrameConfig::default()
-                })
+            let (config, warning) = select_preset(all, &args.preset);
+            if let Some(warning) = warning {
+                eprintln!("Warning: {}", warning);
+            }
+            config
         };
 
-        let mut config = config;
-        if !args.custom_text.is_empty() {
-            config.custom_text = args.custom_text.clone();
-            config.items.custom_text = true;
-        }
+        apply_custom_text(&mut config, &args.custom_text);
 
         // アセットはバッチ全体で1回だけ構築する（画像ごとに model_map を
         // 読み直さないため）。構築時の警告は core が握りつぶさず返してくるので
@@ -173,7 +159,7 @@ fn main() -> Result<()> {
 
     if total_count == 0 {
         println!("No image files found.");
-        return Ok(());
+        return Ok(ExitCode::SUCCESS);
     }
 
     println!("Found {} images\n", total_count);
@@ -208,15 +194,12 @@ fn main() -> Result<()> {
         eprintln!("\r\x1b[K");
     }
 
-    let mut success_count = 0usize;
-    let mut failed_count = 0usize;
-    let mut over_limit_count = 0usize;
+    let summary = summarize(&results);
 
     for (i, result) in results.iter().enumerate() {
         let path = &image_files[i];
         match result {
             Ok(r) => {
-                success_count += 1;
                 let quality_info = r
                     .final_quality
                     .map_or(String::new(), |q| format!(", quality: {}%", q));
@@ -233,12 +216,8 @@ fn main() -> Result<()> {
                 for warning in &r.warnings {
                     eprintln!("  Warning: {}", warning);
                 }
-                if r.size_limit_exceeded {
-                    over_limit_count += 1;
-                }
             }
             Err(e) => {
-                failed_count += 1;
                 eprintln!(
                     "[{}/{}] {} ✗ Error: {}",
                     i + 1,
@@ -254,15 +233,18 @@ fn main() -> Result<()> {
 
     println!(
         "\nCompleted: {} successful, {} failed",
-        success_count, failed_count
+        summary.succeeded, summary.failed
     );
-    if over_limit_count > 0 {
+    if summary.over_limit > 0 {
         eprintln!(
             "Warning: {} file(s) exceed the {} MB limit even at minimum quality",
-            over_limit_count, args.max_size
+            summary.over_limit, args.max_size
         );
     }
     println!("Total time: {:.1}s", duration.as_secs_f64());
 
-    Ok(())
+    // 1 枚でも変換できなければ非 0 で終える。全滅しても 0 を返していたため、
+    // 呼び出し側のスクリプトが失敗を検出できなかった。
+    // 上限超過は「変換はできている」ので失敗に数えない。
+    Ok(summary.exit_code())
 }

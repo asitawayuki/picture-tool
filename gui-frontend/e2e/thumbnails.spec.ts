@@ -101,3 +101,42 @@ test.describe("サムネイル取得", () => {
     );
   });
 });
+
+/**
+ * 壊れた画像の通知。
+ *
+ * 1 枚ごとに toast を出すと壊れたフォルダーで画面が埋まるので抑止するが、
+ * その抑止の単位は**フォルダー**である。セッション単位で抑止すると、一度どこかで
+ * 壊れた画像に当たったあとは、別のフォルダーへ移っても黙ったままになる
+ * （利用者から見ると「サムネイルが出ないのに何も言われない」）。
+ */
+test.describe("サムネイル取得の失敗", () => {
+  test.beforeEach(async ({ page }) => {
+    await installTauriStub(page, { imageCount: 4, failThumbnails: true });
+    await clearStorageOnce(page);
+    await page.goto("/");
+  });
+
+  test("同じフォルダーの失敗は 1 回しか通知しない", async ({ page }) => {
+    const errors = page.getByRole("region", { name: "通知" }).getByRole("alert");
+    await page.getByRole("button", { name: "photos", exact: false }).first().click();
+
+    // 前提: 4 枚とも取りに行って全部落ちている（1 件しか要求していないなら
+    // 「1 回だけ通知」は抑止が効いた証拠にならない）
+    await expect(errors).toHaveCount(1);
+    const requested = await page.evaluate(
+      () => (window as unknown as { __thumbnailRequests: unknown[] }).__thumbnailRequests.length
+    );
+    expect(requested).toBe(4);
+  });
+
+  test("フォルダーを変えると改めて通知する", async ({ page }) => {
+    const errors = page.getByRole("region", { name: "通知" }).getByRole("alert");
+    await page.getByRole("button", { name: "photos", exact: false }).first().click();
+    await expect(errors).toHaveCount(1);
+
+    await page.getByRole("button", { name: "archive", exact: false }).first().click();
+    // error の toast は 8 秒残るので、2 件目が出れば数が増える
+    await expect(errors).toHaveCount(2);
+  });
+});

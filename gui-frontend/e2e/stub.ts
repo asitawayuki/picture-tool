@@ -1,4 +1,28 @@
 import type { Page } from "@playwright/test";
+import * as dto from "../src/lib/dto.contract";
+
+/**
+ * スタブが返す応答の**形**。`dto.contract.ts`（Rust が実際に serde で吐くもの）から取る。
+ *
+ * ここに形を書き写すと、境界の写しが 3 つ目に増える（Rust / `types.ts` / このスタブ）。
+ * そうなるとスタブだけが古い形のまま緑を出し続ける ── e2e がスタブに当たる設計である
+ * 以上、それは検査の網に開いた穴になる。**形は契約から、値だけをここで差し替える。**
+ */
+const TEMPLATE = {
+  folder: dto.fileEntry,
+  image: dto.imageEntry,
+  exif: dto.exifInfoFilled,
+  // 帯の寸法だけは実際の既定値に戻す。契約側は f32 の丸め誤差を避けるために
+  // 2 進で割り切れる値を使っており、画面には「25%」と出て実物と違って見える
+  preset: {
+    ...dto.exifFrameConfigWithBundledFont,
+    font: { ...dto.exifFrameConfigWithBundledFont.font, primary_size: 0.025, secondary_size: 0.018 },
+  },
+  result: dto.processResultCompressed,
+  preview: dto.previewImage,
+  font: dto.fontInfoBundled,
+};
+type Template = typeof TEMPLATE;
 
 export interface StubOptions {
   /** list_images が返す枚数 */
@@ -11,6 +35,14 @@ export interface StubOptions {
    * フレーム描画由来の警告は Rust 側で捨てられるため webview には届かない。
    */
   frameWarnings?: string[];
+  /**
+   * `get_thumbnail` を必ず失敗させる。
+   *
+   * スタブが「成功しか返せない」と、エラー経路は `vite dev` に素で当てる
+   * （`invoke` が全部 reject する）ときしか通らない ── つまり
+   * **画面が動いている状態での失敗**が一度も検査されない。
+   */
+  failThumbnails?: boolean;
 }
 
 /**
@@ -21,8 +53,14 @@ export interface StubOptions {
  * この 2 つを用意すれば webview の中の挙動をそのまま再現できる。
  */
 export async function installTauriStub(page: Page, options: StubOptions = {}) {
-  await page.addInitScript((opts: { imageCount: number; frameWarnings: string[] }) => {
-    const { imageCount, frameWarnings } = opts;
+  await page.addInitScript(
+    (opts: {
+      imageCount: number;
+      frameWarnings: string[];
+      failThumbnails: boolean;
+      template: Template;
+    }) => {
+    const { imageCount, frameWarnings, failThumbnails, template } = opts;
     /** サムネイルは 24 種類だけ作って使い回す。
      *  全部同じにするとデコードが 1 回で済んでしまい、スクロール計測の
      *  負荷が実際より軽く出る。全部別にすると生成自体が計測を汚す。 */
@@ -63,27 +101,13 @@ export async function installTauriStub(page: Page, options: StubOptions = {}) {
     function imagesFor(folder: string) {
       const dir = folder.replace(/\/+$/, "") || "/photos";
       return Array.from({ length: imageCount }, (_, i) => ({
+        ...template.image,
         name: `photo-${String(i).padStart(4, "0")}.jpg`,
         path: `${dir}/${i}.jpg`,
-        width: 4000,
-        height: 3000,
-        size_bytes: 4_500_000,
       }));
     }
 
-    const presets = [
-      {
-        name: "default",
-        position: "auto",
-        items: {
-          maker_logo: true, lens_brand_logo: true, camera_model: true,
-          lens_model: true, focal_length: true, f_number: true,
-          shutter_speed: true, iso: true, date_taken: false, custom_text: false,
-        },
-        font: { font_path: null, primary_size: 0.025, secondary_size: 0.018 },
-        custom_text: "",
-      },
-    ];
+    const presets = [template.preset];
 
     const callbacks = new Map<number, (payload: unknown) => void>();
     let nextCallbackId = 1;
@@ -91,8 +115,8 @@ export async function installTauriStub(page: Page, options: StubOptions = {}) {
     const handlers: Record<string, (args: any) => unknown> = {
       list_drives: () => ["/"],
       list_directory: () => [
-        { name: "photos", path: "/photos", is_dir: true, is_image: false },
-        { name: "archive", path: "/archive", is_dir: true, is_image: false },
+        { ...template.folder, name: "photos", path: "/photos" },
+        { ...template.folder, name: "archive", path: "/archive" },
       ],
       list_images: (a) => imagesFor(a.path ?? "/photos"),
       // 取得の記録を残す。サムネイルは「出ている」だけでは検査にならず、
@@ -100,14 +124,11 @@ export async function installTauriStub(page: Page, options: StubOptions = {}) {
       get_thumbnail: (a) => {
         const log = ((window as any).__thumbnailRequests ??= []);
         log.push({ path: a.path, maxDimension: a.maxDimension });
+        if (failThumbnails) throw new Error("Failed to open image");
         return jpegFor(indexOfPath(a.path), a.maxDimension);
       },
       get_full_image: (a) => jpegFor(indexOfPath(a.path), 800),
-      get_exif_info: () => ({
-        camera_make: "SONY", camera_model: "ILCE-7M4", lens_model: "FE 35mm F1.4 GM",
-        focal_length: "35mm", f_number: "f/1.4", shutter_speed: "1/250s",
-        iso: 400, date_taken: "2026-08-19 10:00:00", orientation: 1,
-      }),
+      get_exif_info: () => template.exif,
       pick_output_folder: () => "/output",
       load_favorites: () => ["/photos"],
       save_favorites: () => null,
@@ -118,11 +139,11 @@ export async function installTauriStub(page: Page, options: StubOptions = {}) {
         (window as any).__lastProcessArgs = a;
         return {
           results: (a.files as string[]).map((input_path) => ({
+            ...template.result,
             input_path,
             output_path: `${a.outputFolder}/${input_path.split("/").pop()}`,
             final_size_mb: 3.2,
             final_quality: 88,
-            size_limit_exceeded: false,
             warnings: [],
           })),
           failures: [],
@@ -136,6 +157,7 @@ export async function installTauriStub(page: Page, options: StubOptions = {}) {
         const log = ((window as any).__framePreviewRequests ??= []);
         log.push({ path: a.path, bgColor: a.bgColor, config: a.config });
         return {
+          ...template.preview,
           data_url: `data:image/jpeg;base64,${jpegFor(0, 400)}`,
           warnings: frameWarnings,
         };
@@ -155,9 +177,7 @@ export async function installTauriStub(page: Page, options: StubOptions = {}) {
         if (i >= 0) presets.splice(i, 1);
         return null;
       },
-      list_available_fonts: () => [
-        { display_name: "同梱フォント", path: null, is_bundled: true },
-      ],
+      list_available_fonts: () => [template.font],
       "plugin:event|listen": () => nextCallbackId++,
       "plugin:event|unlisten": () => null,
     };
@@ -174,7 +194,14 @@ export async function installTauriStub(page: Page, options: StubOptions = {}) {
         return handler(args ?? {});
       },
     };
-  }, { imageCount: options.imageCount ?? 24, frameWarnings: options.frameWarnings ?? [] });
+    },
+    {
+      imageCount: options.imageCount ?? 24,
+      frameWarnings: options.frameWarnings ?? [],
+      failThumbnails: options.failThumbnails ?? false,
+      template: TEMPLATE,
+    }
+  );
 }
 
 /**
