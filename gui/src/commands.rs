@@ -4,7 +4,7 @@ use crate::types::*;
 use picture_tool_core as core;
 use picture_tool_core::exif_frame::{self, AssetDirs, ExifFrameConfig, FontInfo};
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use tauri::{Emitter, Manager};
@@ -614,29 +614,50 @@ pub async fn list_available_fonts() -> Result<Vec<FontInfo>, String> {
     }];
 
     if let Some(user_dir) = AssetDirs::default().user_fonts_dir {
-        for entry in fs::read_dir(&user_dir).into_iter().flatten().flatten() {
-            let path = entry.path();
-            if path.extension().is_some_and(|e| e == "ttf" || e == "otf") {
-                fonts.push(FontInfo {
-                    display_name: format!(
-                        "User: {}",
-                        path.file_stem().unwrap_or_default().to_string_lossy()
-                    ),
-                    path: Some(path.to_string_lossy().to_string()),
-                    is_bundled: false,
-                });
-            }
-        }
+        fonts.extend(scan_user_fonts(&user_dir));
     }
 
     Ok(fonts)
+}
+
+/// ユーザーフォントディレクトリを走査して一覧を作る。
+///
+/// **受け入れる集合を `security::readable_font` と一致させること。** GUI からフォントを
+/// 選ぶ経路はこの一覧しか無いので、ここに出ないフォントは事実上使えない。逆にここに
+/// 出るのに `readable_font` が弾くと「選べるのに保存できない」になる。拡張子の大小を
+/// 区別しないのと、ディレクトリを除くのはそのため（`security` 側は `is_file` を見ている）。
+///
+/// 並び順は表示名で固定する。`read_dir` の順序は保証が無く、起動のたびに
+/// ドロップダウンの並びが変わる。
+fn scan_user_fonts(dir: &Path) -> Vec<FontInfo> {
+    let mut fonts: Vec<FontInfo> = fs::read_dir(dir)
+        .into_iter()
+        .flatten()
+        .flatten()
+        .map(|entry| entry.path())
+        .filter(|path| path.is_file())
+        .filter(|path| {
+            path.extension()
+                .and_then(|e| e.to_str())
+                .is_some_and(|e| e.eq_ignore_ascii_case("ttf") || e.eq_ignore_ascii_case("otf"))
+        })
+        .map(|path| FontInfo {
+            display_name: format!(
+                "User: {}",
+                path.file_stem().unwrap_or_default().to_string_lossy()
+            ),
+            path: Some(path.to_string_lossy().to_string()),
+            is_bundled: false,
+        })
+        .collect();
+    fonts.sort_by(|a, b| a.display_name.cmp(&b.display_name));
+    fonts
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use std::fs;
-    use std::path::Path;
     use tempfile::TempDir;
 
     fn as_str(path: &Path) -> String {
@@ -719,6 +740,67 @@ mod tests {
         assert_eq!(failures.len(), 1);
         assert_eq!(failures[0].input_path, "/photos/broken.jpg");
         assert!(failures[0].error.contains("Failed to open image"));
+    }
+
+    // --- フォント一覧: security::readable_font が受ける集合と一致させる ---
+
+    #[test]
+    fn user_fonts_are_listed_regardless_of_extension_case() {
+        // `readable_font` は拡張子を大小無視で受ける。一覧が区別すると
+        // 「置いたのに選べない」になる（GUI からフォントを選ぶ経路はこの一覧だけ）
+        let dir = TempDir::new().unwrap();
+        for name in ["a.ttf", "b.TTF", "c.otf", "d.OtF"] {
+            fs::write(dir.path().join(name), b"font").unwrap();
+        }
+
+        let names: Vec<String> = scan_user_fonts(dir.path())
+            .into_iter()
+            .map(|f| f.display_name)
+            .collect();
+
+        assert_eq!(
+            names,
+            vec!["User: a", "User: b", "User: c", "User: d"],
+            "4 つとも出て、表示名で並ぶ"
+        );
+    }
+
+    #[test]
+    fn files_that_are_not_fonts_are_not_listed() {
+        let dir = TempDir::new().unwrap();
+        fs::write(dir.path().join("readme.txt"), b"x").unwrap();
+        fs::write(dir.path().join("noext"), b"x").unwrap();
+        fs::write(dir.path().join("real.ttf"), b"font").unwrap();
+
+        let listed = scan_user_fonts(dir.path());
+        assert_eq!(listed.len(), 1);
+        assert_eq!(listed[0].display_name, "User: real");
+    }
+
+    #[test]
+    fn a_directory_named_like_a_font_is_not_listed() {
+        // `readable_font` は is_file を見るので、一覧に出すと選んだ瞬間に弾かれる
+        let dir = TempDir::new().unwrap();
+        fs::create_dir(dir.path().join("trap.ttf")).unwrap();
+
+        assert!(scan_user_fonts(dir.path()).is_empty());
+    }
+
+    #[test]
+    fn a_missing_font_folder_lists_nothing_instead_of_failing() {
+        let dir = TempDir::new().unwrap();
+        assert!(scan_user_fonts(&dir.path().join("does-not-exist")).is_empty());
+    }
+
+    #[test]
+    fn a_listed_font_carries_the_path_that_can_be_selected() {
+        let dir = TempDir::new().unwrap();
+        let font = dir.path().join("MyFont.ttf");
+        fs::write(&font, b"font").unwrap();
+
+        let listed = scan_user_fonts(dir.path());
+        assert_eq!(listed[0].path.as_deref(), Some(as_str(&font).as_str()));
+        assert!(!listed[0].is_bundled);
     }
 
     #[test]

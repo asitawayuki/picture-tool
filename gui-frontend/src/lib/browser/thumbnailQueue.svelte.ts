@@ -58,7 +58,8 @@ export function createThumbnailQueue(): ThumbnailQueue {
         .catch((e) => {
           failed.add(request.key);
           // 1 枚ごとにトーストを出すと壊れたフォルダーで埋め尽くされるため
-          // 最初の 1 件だけ通知する
+          // **フォルダーごとに**最初の 1 件だけ通知する。セッション単位で抑止すると、
+          // 一度どこかで壊れた画像に当たったあとは別のフォルダーでも黙ってしまう
           if (!errorReported) {
             errorReported = true;
             toast.error(`サムネイルを生成できない画像があります: ${describeError(e)}`);
@@ -95,6 +96,8 @@ export function createThumbnailQueue(): ThumbnailQueue {
 
     resetForFolder(primeCount) {
       queue.reset(primeCount);
+      // 抑止はこのフォルダーの分で終わり。次のフォルダーでは改めて 1 件通知する
+      errorReported = false;
       // キャッシュは残す。同じフォルダーへ戻ったときに再取得しないため。
       // 溢れれば LRU が古いフォルダー分から順に落とす
     },

@@ -35,6 +35,14 @@ export interface StubOptions {
    * フレーム描画由来の警告は Rust 側で捨てられるため webview には届かない。
    */
   frameWarnings?: string[];
+  /**
+   * `get_thumbnail` を必ず失敗させる。
+   *
+   * スタブが「成功しか返せない」と、エラー経路は `vite dev` に素で当てる
+   * （`invoke` が全部 reject する）ときしか通らない ── つまり
+   * **画面が動いている状態での失敗**が一度も検査されない。
+   */
+  failThumbnails?: boolean;
 }
 
 /**
@@ -46,8 +54,13 @@ export interface StubOptions {
  */
 export async function installTauriStub(page: Page, options: StubOptions = {}) {
   await page.addInitScript(
-    (opts: { imageCount: number; frameWarnings: string[]; template: Template }) => {
-    const { imageCount, frameWarnings, template } = opts;
+    (opts: {
+      imageCount: number;
+      frameWarnings: string[];
+      failThumbnails: boolean;
+      template: Template;
+    }) => {
+    const { imageCount, frameWarnings, failThumbnails, template } = opts;
     /** サムネイルは 24 種類だけ作って使い回す。
      *  全部同じにするとデコードが 1 回で済んでしまい、スクロール計測の
      *  負荷が実際より軽く出る。全部別にすると生成自体が計測を汚す。 */
@@ -111,6 +124,7 @@ export async function installTauriStub(page: Page, options: StubOptions = {}) {
       get_thumbnail: (a) => {
         const log = ((window as any).__thumbnailRequests ??= []);
         log.push({ path: a.path, maxDimension: a.maxDimension });
+        if (failThumbnails) throw new Error("Failed to open image");
         return jpegFor(indexOfPath(a.path), a.maxDimension);
       },
       get_full_image: (a) => jpegFor(indexOfPath(a.path), 800),
@@ -184,6 +198,7 @@ export async function installTauriStub(page: Page, options: StubOptions = {}) {
     {
       imageCount: options.imageCount ?? 24,
       frameWarnings: options.frameWarnings ?? [],
+      failThumbnails: options.failThumbnails ?? false,
       template: TEMPLATE,
     }
   );
