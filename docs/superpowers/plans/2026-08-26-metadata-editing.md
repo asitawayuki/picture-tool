@@ -238,6 +238,15 @@ fn baseline_fields_is_empty(bytes: &[u8]) -> bool {
 
 /// kamadak-exif で全フィールドを列挙する。**little_exif とは独立の実装**なので、
 /// 「little_exif で書いて little_exif で読めた」の同語反復にならない。
+///
+/// `In(1)/JPEGInterchangeFormat`（IFD1 のサムネイル JPEG 本体への相対オフセット）だけは
+/// 比較から除外する。IFD0 にタグが 1 つ増えれば Exif セグメント全体が伸び、その分だけ
+/// 後方の IFD1 サムネイルは物理的に後ろへ移動するので、**このタグの値が変わるのは
+/// little_exif の欠陥ではなく定義上正しい挙動**（実測: 1030 → 1056 も、サムネイル本体の
+/// SHA256 が完全一致した状態でのシフトだった）。消失・切り詰めの検知はこの等値比較ではなく
+/// `thumbnail_bytes()` によるサムネイル本体のバイト列比較で行う。対になる
+/// `JPEGInterchangeFormatLength`（サムネイルの長さ）はここでは除外せず比較に残す
+/// （長さが変われば切り詰められたということなので、それは検知したい）。
 fn exif_fields(bytes: &[u8]) -> Vec<(String, String)> {
     let mut cursor = std::io::Cursor::new(bytes);
     let reader = exif::Reader::new()
@@ -245,6 +254,7 @@ fn exif_fields(bytes: &[u8]) -> Vec<(String, String)> {
         .expect("EXIF が読めない");
     let mut fields: Vec<(String, String)> = reader
         .fields()
+        .filter(|f| !(f.ifd_num == exif::In::THUMBNAIL && f.tag == exif::Tag::JPEGInterchangeFormat))
         .map(|f| {
             (
                 format!("{:?}/{}", f.ifd_num, f.tag),
@@ -254,6 +264,52 @@ fn exif_fields(bytes: &[u8]) -> Vec<(String, String)> {
         .collect();
     fields.sort();
     fields
+}
+
+/// IFD1 のサムネイル JPEG 本体を切り出す。サムネイルを持たない画像（Task 2 で作るフィクスチャ
+/// を含む）では `None` を返す。
+///
+/// オフセット・長さはハードコードせず、渡された `bytes` 自身から kamadak-exif で都度読み直す
+/// （書き込み後の実際の値を見ることで、little_exif がオフセットを正しく追従させているか
+/// 自体を検査対象にするため）。オフセットは Exif セグメント内の `Exif\0\0` マーカー直後、
+/// すなわち TIFF ヘッダの先頭からの相対値。
+fn thumbnail_bytes(bytes: &[u8]) -> Option<Vec<u8>> {
+    let mut cursor = std::io::Cursor::new(bytes);
+    let reader = exif::Reader::new().read_from_container(&mut cursor).ok()?;
+
+    let offset_field = reader.get_field(exif::Tag::JPEGInterchangeFormat, exif::In::THUMBNAIL)?;
+    let length_field =
+        reader.get_field(exif::Tag::JPEGInterchangeFormatLength, exif::In::THUMBNAIL)?;
+    let offset = offset_field
+        .value
+        .get_uint(0)
+        .expect("JPEGInterchangeFormat が整数として読めない") as usize;
+    let length = length_field
+        .value
+        .get_uint(0)
+        .expect("JPEGInterchangeFormatLength が整数として読めない") as usize;
+
+    const TIFF_HEADER_MARKER: &[u8] = b"Exif\0\0";
+    let exif_pos = bytes
+        .windows(TIFF_HEADER_MARKER.len())
+        .position(|w| w == TIFF_HEADER_MARKER)
+        .expect("Exif セグメントの `Exif\\0\\0` マーカーが見つからない");
+    let tiff_start = exif_pos + TIFF_HEADER_MARKER.len();
+
+    let start = tiff_start + offset;
+    let end = start + length;
+    assert!(
+        end <= bytes.len(),
+        "サムネイルの範囲がファイル長を超えている（start={start}, end={end}, file_len={}）",
+        bytes.len()
+    );
+    let thumb = &bytes[start..end];
+    // オフセット計算そのものが正しいことの検査。ずれていればここで SOI/EOI が見えないはず。
+    assert!(
+        thumb.starts_with(&[0xFF, 0xD8]) && thumb.ends_with(&[0xFF, 0xD9]),
+        "切り出したサムネイルが JPEG として壊れている（offset={offset}, length={length}）"
+    );
+    Some(thumb.to_vec())
 }
 
 #[test]
@@ -278,7 +334,9 @@ fn a_real_photo_survives_two_write_cycles() {
 
     let baseline_fields = exif_fields(&original);
     let baseline_scan = &original[scan_start(&original)..];
+    let baseline_thumbnail = thumbnail_bytes(&original);
     println!("Exif フィールド数: {}", baseline_fields.len());
+    println!("サムネイル本体: {}", baseline_thumbnail.is_some());
 
     // --- 1 回目 ---
     let mut buffer = original.clone();
@@ -327,6 +385,18 @@ fn a_real_photo_survives_two_write_cycles() {
         baseline_fields.len(),
         after_fields.len()
     );
+
+    // --- サムネイル本体のバイト列一致（オフセット等値比較より強い検査） ---
+    // `exif_fields` の比較からは JPEGInterchangeFormat（オフセット）を除外したので、代わりに
+    // ここでサムネイル本体そのものが書き込み前後で 1 バイトも変わっていないことを確認する。
+    // `None == None`（サムネイルを持たない画像）は許容するが、`Some` から `None`
+    // （サムネイル消失）は assert_eq! の不一致として必ず検知される。
+    let after_thumbnail = thumbnail_bytes(&second);
+    assert_eq!(
+        baseline_thumbnail, after_thumbnail,
+        "サムネイル本体が書き込み前後で変わった（消失または内容の変化）"
+    );
+    println!("サムネイル本体一致: {}", baseline_thumbnail.is_some());
 }
 ```
 
@@ -5051,14 +5121,14 @@ git commit -m "docs: メタデータ編集: spec の GUI 節を刷新に寄せ�
 
 | 項目 | 結果 |
 |---|---|
-| 使った画像（出所 / 機種 / サイズ） | |
-| Lightroom 書き出しか | |
-| MakerNote / GPS の有無 | |
-| 1 回目の書き込み | |
-| 2 回目の書き込み（issue #93） | |
-| ピクセル不変 | |
-| 消えたタグ | |
-| **MakerNote 付きでも検証できたか**（できなければ残リスクのまま） | |
+| 使った画像（出所 / 機種 / サイズ） | Lightroom 書き出し / SONY ILCE-7CM2 / 約11.8MB（12,343,419 bytes） |
+| Lightroom 書き出しか | Yes |
+| MakerNote / GPS の有無 | どちらも無し（`MakerNote: false / GPS: false`） |
+| 1 回目の書き込み | 成功（`write_to_vec` が Err にならず、ピクセル不変 assert も通過） |
+| 2 回目の書き込み（issue #93） | 成功（`failed to fill whole buffer` は未発生。issue #93 は本画像では再現しなかった） |
+| ピクセル不変 | 両サイクルとも SOS 以降のバイト列が完全一致 |
+| 消えたタグ | 無し。ただし `In(1)/JPEGInterchangeFormat`（サムネイル本体への相対オフセット）は 1030 → 1056 へ自然にシフトした（IFD0 に XPTitle が増えた分、後方の IFD1 サムネイルが物理的に後ろへ移動したため）。サムネイル本体のバイト列一致（`thumbnail_bytes()` による比較）で無事を確認済み。テストはこのオフセットタグ 1 つだけを等値比較から除外し、代わりにサムネイル本体のバイト列一致を assert するよう強化した |
+| **MakerNote 付きでも検証できたか**（できなければ残リスクのまま） | **未実施。残リスクのまま**（利用者判断 U1。手元の写真がすべて Lightroom 書き出しで、MakerNote 付きの実写真が手に入らなかったため）。MakerNote 付き JPEG を掴んだ場合の安全策は Task 9 の `build()` が既存 Exif を解析できないとき Err で止める設計（S3）で担保する |
 
 ### Task 17 の実測（必須）
 
@@ -5079,6 +5149,36 @@ git commit -m "docs: メタデータ編集: spec の GUI 節を刷新に寄せ�
 ### spec と食い違った点
 
 （実装して初めて分かったことを書く。spec 側も直したなら、どちらをどう直したか）
+
+**Task 1: 実写真の IFD1 サムネイルオフセットは書き込みで必ず動く。計画当初のタグ等値比較は
+これを見落としていた。** `core/tests/metadata_spike.rs` の初版（本計画の Step 2 のコード）は
+「追加した XPTitle 以外に既存タグが 1 つも変わらないこと」を kamadak-exif のフィールド一覧の
+単純な等値比較で検査していたが、実写真（Lightroom 書き出し / SONY ILCE-7CM2）で走らせると
+`In(1)/JPEGInterchangeFormat`（IFD1 のサムネイル JPEG 本体への相対バイトオフセット）が
+1030 → 1056 に変化したとして FAIL した。
+
+独立診断の結果、これはデータ破損ではないと確定した: IFD0 に XPTitle のエントリが 1 つ増えれば
+Exif セグメント全体がその分だけ伸び、後方に置かれた IFD1 のサムネイル本体は物理的に後ろへ
+移動する。`little_exif` はサムネイル本体を正しく後方へ移動させたうえでオフセット値もそれに
+追従して更新していた（サムネイル本体の SHA256 は書き込み前後で完全一致、171×256 として
+デコード可能）。つまりこのタグの値が変わるのは**定義上正しい挙動**であり、単純な等値比較の
+方が検査として厳密すぎた。
+
+対処として、テストを緩めるのではなく強くする方向で直した:
+- `exif_fields()` の比較から `In(1)/JPEGInterchangeFormat`（0x0201）**だけ**を除外する。
+  対になる `JPEGInterchangeFormatLength`（0x0202、サムネイルの長さ）は比較に残したまま
+  （切り詰めが起きればこれで検知できる）
+- 代わりに `thumbnail_bytes()` を追加し、**サムネイル本体の JPEG バイト列が書き込み前後で
+  完全一致すること**を `assert_eq!` で検査する（オフセットの等値比較より強い検査）。
+  オフセット・長さはハードコードせず、渡されたバイト列から kamadak-exif で都度読み直し、
+  `Exif\0\0` マーカー直後（TIFF ヘッダ先頭）からの相対値として切り出す。切り出した範囲が
+  `FF D8` で始まり `FF D9` で終わることも assert する。サムネイルを持たない画像では `None`
+  を返し、`None == None` は許容するが「元が `Some` で後が `None`」（サムネイル消失）は
+  `assert_eq!` の不一致として必ず検知される
+
+修正後、`PICTURE_TOOL_SPIKE_JPEG=... cargo test -p picture-tool-core --test metadata_spike --
+--ignored --nocapture` は PASS。spec 本文の変更は不要（クレート選定を見直す事態には
+該当しないと裁定）。
 
 ---
 
