@@ -75,7 +75,7 @@ spec の「検証済みの事実と、未検証のリスク」は、実測が**�
 |---|---|
 | ブランチ | `feature/metadata-editing`。**`main` で作業しない**（作成済み） |
 | ピクセル不変 | JPEG をデコード・再エンコードしない。SOS 以降のバイト列が書き込み前後で完全一致すること。**努力目標ではなく必須条件**。満たせなくなったらクレート選定ごと設計を見直す |
-| 既存 XMP 保持 | 本ツールが扱う 4 プロパティ（`xmp:Rating` / `MicrosoftPhoto:Rating` / `dc:title` / `dc:description`）**だけ**を差し替える。他名前空間は 1 バイトも変えない |
+| 既存 XMP 保持 | 本ツールが扱う 4 プロパティ（`xmp:Rating` / `MicrosoftPhoto:Rating` / `dc:title` / `dc:description`）**だけ**を差し替える。他名前空間の**プロパティと値は 1 つも変えない**。触る必要が無いタグはバイト列のまま写す。ただし本ツールの属性を落とした `rdf:Description` の start タグだけは、組み直しにより属性の区切りが単一スペースへ正規化される（値は不変。検査は Task 7 の `foreign_content` による意味論比較で行う） |
 | `Some(0)` を書かない | `RatingPercent` は 0 が「未評価」を意味するため、★0 という状態は表現できない。未評価はタグ削除で表す。他アプリが書いた `xmp:Rating = 0` は読み取り時のみ受け入れる |
 | 対象は JPEG のみ | RAW・PNG・WebP は対象外。`security` の検証で拡張子ごと弾く |
 | 信頼境界 | webview から来たパスは必ず `gui/src/security.rs` を経由させる。webview にプラグイン権限を与えない（`gui/capabilities/default.json` は `core:default` のまま） |
@@ -429,6 +429,13 @@ PICTURE_TOOL_SPIKE_JPEG=/path/to/DSC00123.JPG \
 Expected: `camera-direct.jpg` が 40〜120KB 程度で生成され、MakerNote / Make / Model /
 LensModel / DateTimeOriginal が列挙に出ること。
 
+**あわせて「編集項目が 1 つも入っていない」ことを確認する。**
+`ImageDescription` / `XPTitle` / `XPComment` / `UserComment` / `Rating` /
+`RatingPercent` が列挙に出ないこと。出る場合は別の 1 枚で作り直す ── Task 8 の
+`reading_a_file_without_any_editable_metadata_yields_none` がこの前提に立っている。
+（空白詰めの `ImageDescription` を書くカメラがあるが、読み取り側は trim するので
+値が空白だけなら「タグ無し」として扱われる。）
+
 - [ ] **Step 3: 個人情報を確認し、コミットしてよいか利用者に確認する**
 
 **これはリポジトリに永久に残る。** Step 2 の列挙から次を確認する:
@@ -503,9 +510,13 @@ git commit -m "test(core): メタデータ編集: 実カメラ由来の EXIF を
   - `pub(crate) fn stars_to_percent(stars: u8) -> u16`
   - `pub(crate) fn percent_to_stars(percent: u16) -> Option<u8>`
 
-- [ ] **Step 1: 失敗するテストを書く**
+- [ ] **Step 1: モジュールを登録し、失敗するテストを書く**
 
-`core/src/metadata/mod.rs` を新規作成し、末尾に:
+**先に `core/src/lib.rs` へ `pub mod metadata;` を足す。** 後回しにすると
+`core/src/metadata/mod.rs` はコンパイル対象にならず、Step 2 の
+`cargo test` が「0 tests / PASS」で通ってしまう ── red が偽物になる。
+
+そのうえで `core/src/metadata/mod.rs` を新規作成し、末尾に:
 
 ```rust
 #[cfg(test)]
@@ -621,13 +632,7 @@ pub(crate) fn percent_to_stars(percent: u16) -> Option<u8> {
 }
 ```
 
-`core/src/lib.rs` の先頭（`pub mod exif_frame;` の隣）に:
-
-```rust
-pub mod metadata;
-```
-
-同じく `core/src/lib.rs` の `ExifInfo` に `PartialEq` を足す
+`core/src/lib.rs` の `ExifInfo` に `PartialEq` を足す
 （Task 9 の「書き込み前後で既存 EXIF が壊れていないか」の比較に要る）:
 
 ```rust
@@ -672,8 +677,10 @@ git commit -m "feat(core): メタデータ編集: 編集対象の型とレーテ
   **`Metadata` を引数に取る**（パスやバイト列ではない）のは、`mod.rs` が
   読み取りと書き込みで同じ `Metadata` を使い回すため。ファイルを 2 回開かない。
 
-- [ ] **Step 1: 失敗するテストを書く**
+- [ ] **Step 1: モジュールを登録し、失敗するテストを書く**
 
+先に `core/src/metadata/mod.rs` へ `mod exif;` を足す（Task 3 と同じ理由。
+足さないと Step 2 の red が偽物になる）。そのうえで
 `core/src/metadata/exif.rs` の末尾に:
 
 ```rust
@@ -729,6 +736,15 @@ mod tests {
     fn user_comment_rejects_an_unknown_identifier() {
         let bytes = b"\0\0\0\0\0\0\0\0hello".to_vec();
         assert_eq!(decode_user_comment(&bytes, &Endian::Little), None);
+    }
+
+    /// **読み取りは前後の空白を落とす。**
+    /// XMP 側は整形の改行を必ず含むので、EXIF だけ残すと同じ値が食い違いに見える。
+    /// 空白詰めの ImageDescription を書くカメラもここで救われる
+    #[test]
+    fn reading_trims_surrounding_whitespace_and_nul_padding() {
+        assert_eq!(from_ucs2le_nul(&[0x20, 0x00, 0x2F, 0x6E, 0x20, 0x00, 0x00, 0x00]).as_deref(), Some("港"));
+        assert_eq!(from_ucs2le_nul(&[0x20, 0x00, 0x00, 0x00]), None, "空白だけならタグ無し扱い");
     }
 
     /// 前提条件つきの否定形。空の `Metadata` で「全部 None」になること
@@ -803,8 +819,7 @@ pub(super) fn read(meta: &Metadata) -> ExifSide {
             ExifTag::ImageDescription(text) => Some(text.clone()),
             _ => None,
         })
-        .map(|text| text.trim_end_matches('\0').to_string())
-        .filter(|text| !text.is_empty());
+        .and_then(|text| cleaned(&text));
 
     let comment_user = meta
         .get_tag_by_hex(USER_COMMENT, Some(ExifTagGroup::EXIF))
@@ -831,6 +846,18 @@ pub(super) fn read(meta: &Metadata) -> ExifSide {
     }
 }
 
+/// 読めた文字列を正規形に寄せる。
+///
+/// **前後の空白は落とす。** XMP は要素テキストが整形の改行・インデントを含みうるので
+/// XMP 側は必ず trim することになり、EXIF 側だけ残すと同じ値が「食い違い」に見える。
+/// 書き込み側も `EditableMetadata::normalized` で trim するので、
+/// 保存 → 読み戻しの検証（Task 9）が一致する。
+/// 空白詰めの `ImageDescription` を書くカメラも救われる。
+fn cleaned(text: &str) -> Option<String> {
+    let trimmed = text.trim_matches(|c: char| c == '\0' || c.is_whitespace());
+    (!trimmed.is_empty()).then(|| trimmed.to_string())
+}
+
 /// UCS-2LE（実質 UTF-16LE）＋ NUL 終端を読む
 pub(super) fn from_ucs2le_nul(bytes: &[u8]) -> Option<String> {
     let units: Vec<u16> = bytes
@@ -838,8 +865,7 @@ pub(super) fn from_ucs2le_nul(bytes: &[u8]) -> Option<String> {
         .map(|pair| u16::from_le_bytes([pair[0], pair[1]]))
         .collect();
     let end = units.iter().position(|&u| u == 0).unwrap_or(units.len());
-    let text = String::from_utf16(&units[..end]).ok()?;
-    (!text.is_empty()).then_some(text)
+    cleaned(&String::from_utf16(&units[..end]).ok()?)
 }
 
 /// `UserComment` の本文を取り出す。先頭 8 バイトの識別子で本文の解釈が変わる
@@ -863,17 +889,14 @@ pub(super) fn decode_user_comment(bytes: &[u8], endian: &Endian) -> Option<Strin
         // 識別子が無い / 未知。読めなかったものとして扱う
         return None;
     };
-    let text = text.trim_end_matches('\0').to_string();
-    (!text.is_empty()).then_some(text)
+    cleaned(&text)
 }
 ```
-
-`core/src/metadata/mod.rs` に `mod exif;` を足す。
 
 - [ ] **Step 4: 通ることを確認する**
 
 Run: `cargo test -p picture-tool-core metadata::exif`
-Expected: PASS（7 テスト）
+Expected: PASS（9 テスト）
 
 - [ ] **Step 5: コミット**
 
@@ -1107,12 +1130,12 @@ pub(super) fn apply(meta: &mut Metadata, values: &EditableMetadata) {
 Run: `cargo test -p picture-tool-core metadata::exif`
 Expected: PASS（16 テスト）
 
-- [ ] **Step 5: lint**
+- [ ] **Step 5: コミット**
 
-Run: `make lint`
-Expected: 警告なし
-
-- [ ] **Step 6: コミット**
+**ここでは `make lint` を走らせない。** `-D warnings` の clippy は lib ターゲットを
+`cfg(test)` 抜きで通すため、テストからしか呼ばれていない `exif::{read, apply}` /
+`stars_to_percent` が `dead_code` で落ちる。実利用者（`read_metadata` /
+`write_metadata`）が揃う **Task 9 Step 6** でまとめて掛ける。
 
 ```bash
 git add core/src/metadata/exif.rs
@@ -1145,9 +1168,10 @@ git commit -m "feat(core): メタデータ編集: EXIF 側へ書き込む。日�
   pub(super) fn read(packet: &str) -> anyhow::Result<XmpSide>;
   ```
 
-- [ ] **Step 1: 失敗するテストを書く**
+- [ ] **Step 1: モジュールを登録し、失敗するテストを書く**
 
-`core/src/metadata/xmp.rs` の末尾に:
+先に `core/src/metadata/mod.rs` へ `mod xmp;` を足す（Task 3 と同じ理由）。
+そのうえで `core/src/metadata/xmp.rs` の末尾に:
 
 ```rust
 #[cfg(test)]
@@ -1447,8 +1471,6 @@ fn read_first_text(
 }
 ```
 
-`core/src/metadata/mod.rs` に `mod xmp;` を足す。
-
 > **借用エラーが出たらここを疑う。** `NsReader::read_resolved_event` が返す
 > `ResolveResult` は**リーダー自身を借りている**。`ns` が生きているあいだは
 > `&mut reader`（`read_first_text` / `read_to_end`）も `&reader`
@@ -1563,6 +1585,16 @@ fn patching_leaves_every_other_namespace_untouched() {
     .unwrap();
 
     assert_eq!(foreign_content(&patched), before);
+}
+
+/// 落とす属性が無い `rdf:Description` は、**タグごとバイト列で保たれる**こと。
+/// 組み直すと属性の区切りが単一スペースに正規化される
+#[test]
+fn a_description_without_owned_attributes_is_copied_byte_for_byte() {
+    let patched = patch(ELEMENT_FORM, &EditableMetadata { rating: Some(1), ..Default::default() }).unwrap();
+    let original_tag = &ELEMENT_FORM[ELEMENT_FORM.find("<rdf:Description").unwrap()
+        ..ELEMENT_FORM.find("crs:Exposure2012=\"+0.35\">").unwrap() + "crs:Exposure2012=\"+0.35\">".len()];
+    assert!(patched.contains(original_tag), "改行込みの属性の並びが変わった:\n{}", patched);
 }
 
 #[test]
@@ -1725,8 +1757,14 @@ pub(super) fn patch(packet: &str, values: &EditableMetadata) -> Result<String> {
                     continue;
                 }
                 if matches(&ns, start.local_name().as_ref(), NS_RDF, "Description") {
-                    let cleaned = strip_owned_attributes(&reader, &start)?;
-                    writer.write_event(Event::Start(cleaned))?;
+                    // **落とす属性が無いなら元の start タグをそのまま流す。**
+                    // 組み直すと quick-xml の push_attribute が区切りを単一スペースに
+                    // 揃えるため、Lightroom が複数行に分けて書いた crs: の属性群は
+                    // 値は保たれても整形が変わる。触らなくてよいものは触らない
+                    match strip_owned_attributes(&reader, &start)? {
+                        Some(cleaned) => writer.write_event(Event::Start(cleaned))?,
+                        None => writer.write_event(Event::Start(start.clone()))?,
+                    }
                     if !injected {
                         write_properties(&mut writer, values)?;
                         injected = true;
@@ -1741,13 +1779,13 @@ pub(super) fn patch(packet: &str, values: &EditableMetadata) -> Result<String> {
                     continue;
                 }
                 if matches(&ns, start.local_name().as_ref(), NS_RDF, "Description") {
-                    let cleaned = strip_owned_attributes(&reader, &start)?;
+                    let tag = strip_owned_attributes(&reader, &start)?.unwrap_or_else(|| start.clone());
                     if injected {
-                        writer.write_event(Event::Empty(cleaned))?;
+                        writer.write_event(Event::Empty(tag))?;
                     } else {
                         // 空要素のままでは子を持てないので Start + 子 + End に開く
-                        let end = cleaned.to_end().into_owned();
-                        writer.write_event(Event::Start(cleaned))?;
+                        let end = tag.to_end().into_owned();
+                        writer.write_event(Event::Start(tag))?;
                         write_properties(&mut writer, values)?;
                         writer.write_event(Event::End(end))?;
                         injected = true;
@@ -1770,21 +1808,35 @@ pub(super) fn patch(packet: &str, values: &EditableMetadata) -> Result<String> {
 }
 
 /// `rdf:Description` の属性から、本ツールの 4 プロパティだけを落とす。
-/// 要素形式だけ差し替えて属性形式を残すと、読み手によって新旧どちらも出うる
+/// 要素形式だけ差し替えて属性形式を残すと、読み手によって新旧どちらも出うる。
+///
+/// **落とすものが無ければ `None` を返す。** 呼び出し側は元の start タグをそのまま
+/// 書き戻す ── 組み直すと属性の区切りが単一スペースへ正規化されるため、
+/// 触る必要が無いときは触らない。
 fn strip_owned_attributes(
     reader: &NsReader<&[u8]>,
     start: &BytesStart<'_>,
-) -> Result<BytesStart<'static>> {
-    let name = String::from_utf8(start.name().as_ref().to_vec())?;
-    let mut cleaned = BytesStart::new(name);
+) -> Result<Option<BytesStart<'static>>> {
+    let mut kept = Vec::new();
+    let mut dropped = false;
     for attribute in start.attributes() {
         let attribute = attribute?;
         let (ns, local) = reader.resolve_attribute(attribute.key);
-        if !is_owned_name(&ns, local.as_ref()) {
-            cleaned.push_attribute(attribute);
+        if is_owned_name(&ns, local.as_ref()) {
+            dropped = true;
+        } else {
+            kept.push(attribute);
         }
     }
-    Ok(cleaned)
+    if !dropped {
+        return Ok(None);
+    }
+    let name = String::from_utf8(start.name().as_ref().to_vec())?;
+    let mut cleaned = BytesStart::new(name);
+    for attribute in kept {
+        cleaned.push_attribute(attribute);
+    }
+    Ok(Some(cleaned))
 }
 
 fn write_properties<W: std::io::Write>(
@@ -1862,14 +1914,23 @@ pub(super) fn install(jpeg: &mut Jpeg, packet: &str) -> Result<()> {
             !(segment.marker() == markers::APP1 && segment.contents().starts_with(XMP_ID))
         });
 
-    // **push ではなく insert。** push すると EOI の後ろに置かれ、再パース時に消える
+    // **push ではなく insert。** push すると EOI の後ろに置かれ、再パース時に消える。
+    // 置き場所は Exif の APP1 の直後 ── XMP 仕様が推奨する位置であり、
+    // 読み手を選ばない。Exif が無ければ SOS の直前に落とす（規格上はどちらも合法）
     let scan = jpeg
         .segments()
         .iter()
         .position(|segment| segment.marker() == markers::SOS)
         .ok_or_else(|| anyhow!("SOS セグメントが見つかりません"))?;
+    let at = jpeg
+        .segments()
+        .iter()
+        .position(|segment| {
+            segment.marker() == markers::APP1 && segment.contents().starts_with(b"Exif\0\0")
+        })
+        .map_or(scan, |exif| exif + 1);
     jpeg.segments_mut().insert(
-        scan,
+        at,
         JpegSegment::new_with_contents(markers::APP1, Bytes::from(contents)),
     );
     Ok(())
@@ -1886,9 +1947,10 @@ Expected: PASS（14 テスト）
 削除して作り直す実装は採用しない」と書いた要件そのものであり、
 迂回してはならない。
 
-- [ ] **Step 5: lint とコミット**
+- [ ] **Step 5: コミット**
 
-Run: `make lint`
+Task 5 と同じ理由でここでも `make lint` は走らせない
+（`xmp::{patch, new_packet, install}` の実利用者は Task 9 で揃う）。
 
 ```bash
 git add core/src/metadata/xmp.rs
@@ -1994,9 +2056,19 @@ pub fn read_metadata(path: &Path) -> Result<MetadataRead> {
     let raw = std::fs::read(path)
         .with_context(|| format!("ファイルを読めません: {}", path.display()))?;
 
-    // EXIF が無い画像でも読み取り自体は成立させる（全項目 None になるだけ）
-    let exif_meta =
-        Metadata::new_from_vec(&raw, FileExtension::JPEG).unwrap_or_else(|_| Metadata::new());
+    let mut warnings = Vec::new();
+
+    // Exif が無い画像でも読み取り自体は成立させる（全項目 None になるだけ）。
+    // ただし**解析に失敗したことは黙らない** ── そのまま保存すると Exif を
+    // 作り直すことになるので、利用者に伝わっている必要がある
+    // （書き込み側の `build` は同じ状況で Err にする）
+    let exif_meta = match Metadata::new_from_vec(&raw, FileExtension::JPEG) {
+        Ok(meta) => meta,
+        Err(error) => {
+            warnings.push(format!("Exif を解析できませんでした: {}", error));
+            Metadata::new()
+        }
+    };
     let exif_side = exif::read(&exif_meta);
 
     let jpeg = Jpeg::from_bytes(Bytes::from(raw))
@@ -2005,8 +2077,6 @@ pub fn read_metadata(path: &Path) -> Result<MetadataRead> {
         Some(packet) => xmp::read(&packet)?,
         None => xmp::XmpSide::default(),
     };
-
-    let mut warnings = Vec::new();
 
     let title = pick(
         "タイトル",
@@ -2125,15 +2195,30 @@ mod tests {
 `core/src/metadata/mod.rs` の `mod tests` に追記:
 
 ```rust
+/// **末尾改行つきのコメントが保存できること。**
+/// 読み取り側が trim するので、書き込み側も trim しないと読み戻し検証が必ず落ちる
 #[test]
-fn normalizing_folds_empty_strings_and_zero_stars_into_none() {
+fn a_comment_with_a_trailing_newline_survives_a_save() {
+    let (_dir, path) = scratch("camera-direct.jpg");
+    write_metadata(&path, &EditableMetadata {
+        comment: Some("順光。もう少し寄れた\n".into()),
+        ..Default::default()
+    })
+    .unwrap();
+    let read = read_metadata(&path).unwrap();
+    assert_eq!(read.metadata.comment.as_deref(), Some("順光。もう少し寄れた"));
+    assert!(read.warnings.is_empty(), "trim の非対称で食い違い警告が出てはいけない: {:?}", read.warnings);
+}
+
+#[test]
+fn normalizing_trims_and_folds_empty_strings_and_zero_stars_into_none() {
     let normalized = EditableMetadata {
-        title: Some(String::new()),
-        comment: Some("残る".into()),
+        title: Some("   ".into()),
+        comment: Some(" 残る\n".into()),
         rating: Some(0),
     }
     .normalized();
-    assert_eq!(normalized.title, None);
+    assert_eq!(normalized.title, None, "空白だけの欄はタグごと消す");
     assert_eq!(normalized.comment.as_deref(), Some("残る"));
     assert_eq!(normalized.rating, None);
 }
@@ -2368,14 +2453,24 @@ fn verify(temp: &Path, original: &Path, expected: &EditableMetadata) -> Result<(
 mod atomic;
 
 impl EditableMetadata {
-    /// 保存の前に「空文字」と「★0」を `None` に寄せる。
+    /// 保存の前に「前後の空白」「空文字」「★0」を落とす。
     ///
-    /// 書き込みはどちらもタグ削除として扱い、読み戻すと `None` が返る。
-    /// 正規化しないと Task 9 の読み戻し検証が必ず落ちる。
+    /// **trim が要るのは、XMP の要素テキストが整形の改行・インデントを含むため。**
+    /// 読み取り側は必ず trim することになる（`exif::cleaned` と XMP の
+    /// `read_first_text`）ので、書き込み側も trim しておかないと
+    /// 「コメント欄の末尾で改行して保存 → 読み戻しが一致せず必ず失敗する」になる。
+    /// コメント欄は複数行入力なので、末尾改行は例外ではなく常用入力である。
+    ///
+    /// 空文字と★0 を `None` に寄せるのは、どちらも書き込みがタグ削除として扱い、
+    /// 読み戻すと `None` が返るため。
     pub fn normalized(&self) -> EditableMetadata {
+        fn tidy(text: &Option<String>) -> Option<String> {
+            let trimmed = text.as_deref().unwrap_or("").trim();
+            (!trimmed.is_empty()).then(|| trimmed.to_string())
+        }
         EditableMetadata {
-            title: self.title.clone().filter(|t| !t.is_empty()),
-            comment: self.comment.clone().filter(|c| !c.is_empty()),
+            title: tidy(&self.title),
+            comment: tidy(&self.comment),
             rating: self.rating.filter(|stars| (1..=5).contains(stars)),
         }
     }
@@ -2409,25 +2504,44 @@ fn write_inner(path: &Path, values: &EditableMetadata) -> Result<()> {
 /// XMP パケットは **`little_exif` を通す前の原本から**取り出す。順序を逆にすると、
 /// EXIF の書き込みが XMP セグメントに何をするかに依存してしまう。
 fn build(original: &[u8], values: &EditableMetadata) -> Result<Vec<u8>> {
-    let packet = {
-        let jpeg = Jpeg::from_bytes(Bytes::from(original.to_vec()))
-            .context("JPEG として読めません")?;
-        match xmp::extract(&jpeg) {
-            Some(existing) => xmp::patch(&existing, values)?,
-            None => xmp::new_packet(values),
-        }
+    let jpeg = Jpeg::from_bytes(Bytes::from(original.to_vec()))
+        .context("JPEG として読めません")?;
+    let packet = match xmp::extract(&jpeg) {
+        Some(existing) => xmp::patch(&existing, values)?,
+        None => xmp::new_packet(values),
     };
 
-    let mut buffer = original.to_vec();
-    let mut meta =
-        Metadata::new_from_vec(&buffer, FileExtension::JPEG).unwrap_or_else(|_| Metadata::new());
+    // **既存 Exif の解析に失敗したら、そこで止める。**
+    // 空の Metadata から書き直すと little_exif は既存の Exif APP1 を丸ごと落とし、
+    // MakerNote も GPS もサムネイルも消えた「本ツールの 3 タグだけの Exif」になる。
+    // しかも `read_exif_info` は解析失敗時も `Ok(ExifInfo::default())` を返すので、
+    // 前後とも default で一致し、Task 9 の検証を素通りする ── これは spec が
+    // 「クレート選定ごと見直す」と決めた issue #93 の症状そのものの経路である。
+    let mut meta = match Metadata::new_from_vec(&original.to_vec(), FileExtension::JPEG) {
+        Ok(meta) => meta,
+        Err(error) if has_exif_segment(&jpeg) => {
+            return Err(anyhow::anyhow!(
+                "既存の Exif を解析できないため書き込みを中止しました（元ファイルは変更していません）: {}",
+                error
+            ))
+        }
+        // Exif をそもそも持たない画像。新しく作ってよい
+        Err(_) => Metadata::new(),
+    };
     exif::apply(&mut meta, values);
+    let mut buffer = original.to_vec();
     meta.write_to_vec(&mut buffer, FileExtension::JPEG)
         .context("Exif を書き込めません")?;
 
-    let mut jpeg = Jpeg::from_bytes(Bytes::from(buffer)).context("書き込み後の JPEG を読めません")?;
-    xmp::install(&mut jpeg, &packet)?;
-    Ok(jpeg.encoder().bytes().to_vec())
+    let mut written = Jpeg::from_bytes(Bytes::from(buffer)).context("書き込み後の JPEG を読めません")?;
+    xmp::install(&mut written, &packet)?;
+    Ok(written.encoder().bytes().to_vec())
+}
+
+/// Exif の APP1 を持っているか。「Exif が無い」と「Exif を解析できない」を分ける
+fn has_exif_segment(jpeg: &Jpeg) -> bool {
+    jpeg.segments_by_marker(img_parts::jpeg::markers::APP1)
+        .any(|segment| segment.contents().starts_with(b"Exif\0\0"))
 }
 ```
 
@@ -2534,23 +2648,46 @@ fn writing_twice_keeps_the_file_readable() {
     assert_eq!(read.metadata.title.as_deref(), Some("5 回目"));
 }
 
-/// **既存 XMP の保持** — 本ツールの 4 プロパティ以外が 1 バイトも変わらないこと
+/// XMP パケットの XML だけを取り出す。`xmp::extract` は private なので自前で切る
+fn xmp_packet(path: &Path) -> String {
+    const ID: &[u8] = b"http://ns.adobe.com/xap/1.0/\0";
+    let bytes = std::fs::read(path).unwrap();
+    let start = bytes
+        .windows(ID.len())
+        .position(|window| window == ID)
+        .expect("XMP パケットが無い")
+        + ID.len();
+    let tail = &bytes[start..];
+    let end = tail
+        .windows(13)
+        .position(|window| window == b"<?xpacket end")
+        .unwrap_or(tail.len());
+    String::from_utf8(tail[..end].to_vec()).expect("XMP は UTF-8")
+}
+
+/// `名前空間接頭辞:属性名="値"` を 1 つ丸ごと切り出す。
+/// **固定長で切らない** ── `from_utf8_lossy` した任意位置は char 境界を割って panic する
+fn first_attribute(packet: &str, prefix: &str) -> String {
+    let at = packet.find(prefix).expect("接頭辞が見つからない");
+    let rest = &packet[at..];
+    let open = rest.find('"').expect("属性値の開き引用符が無い");
+    let close = rest[open + 1..].find('"').expect("属性値の閉じ引用符が無い");
+    rest[..open + 1 + close + 1].to_string()
+}
+
+/// **既存 XMP の保持** — 本ツールの 4 プロパティ以外の値が 1 つも変わらないこと
 #[test]
 fn writing_metadata_preserves_foreign_xmp_namespaces() {
     let (_dir, path) = scratch("lightroom-xmp.jpg");
-    let before = std::fs::read_to_string(&path).unwrap_or_default();
-    let before_bytes = std::fs::read(&path).unwrap();
-    let _ = before; // バイナリなので文字列比較には使わない
+    let before = xmp_packet(&path);
 
-    // 前提条件: 他名前空間（crs:）が本当に入っていること
-    let haystack = String::from_utf8_lossy(&before_bytes).into_owned();
+    // 前提条件: 他名前空間（crs:）が本当に入っていること。
+    // ここが空だと「壊れていない」は自明に通ってしまう
     assert!(
-        haystack.contains("camera-raw-settings"),
+        before.contains("camera-raw-settings"),
         "フィクスチャの XMP に crs: が無い。Task 2 の Step 4 を見直すこと"
     );
-    // 差し替えないはずの断片を 1 つ控える
-    let start = haystack.find("crs:").unwrap();
-    let sample = &haystack[start..start + 40];
+    let sample = first_attribute(&before, "crs:");
 
     write_metadata(&path, &EditableMetadata {
         title: Some("差し替えた題".into()),
@@ -2559,8 +2696,9 @@ fn writing_metadata_preserves_foreign_xmp_namespaces() {
     })
     .unwrap();
 
-    let after = String::from_utf8_lossy(&std::fs::read(&path).unwrap()).into_owned();
-    assert!(after.contains(sample), "crs: の断片が失われた: {:?}", sample);
+    let after = xmp_packet(&path);
+    assert!(after.contains(&sample), "crs: の値が失われた: {:?}", sample);
+    assert!(after.contains("camera-raw-settings"), "crs: の名前空間宣言が消えた");
     assert_eq!(read_metadata(&path).unwrap().metadata.rating, Some(1));
 }
 
@@ -2569,7 +2707,8 @@ fn writing_metadata_preserves_foreign_xmp_namespaces() {
 fn a_failed_write_leaves_the_original_untouched() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("truncated.jpg");
-    // JPEG のヘッダだけあって SOS が無い＝ scan_offset が失敗する
+    // SOS まで届かずに終わる JPEG。`Jpeg::from_bytes` が Truncated で落ちる
+    // （`scan_offset` まで到達しない）ので、一時ファイルすら作られない
     std::fs::write(&path, [0xFF, 0xD8, 0xFF, 0xE0, 0x00, 0x04, 0x11, 0x22]).unwrap();
     let before = std::fs::read(&path).unwrap();
 
@@ -2791,7 +2930,7 @@ git commit -m "feat(gui): メタデータ編集: 書き込んでよい JPEG の�
   |---|---|---|
   | `read_image_metadata` | `path: String` | `MetadataRead` |
   | `write_image_metadata` | `path: String`, `metadata: EditableMetadata` | `MetadataRead`（保存直後の実際の中身） |
-  | `grant_metadata_editing` | `folder: String` | `bool`（承認されたか） |
+  | `grant_metadata_editing` | `folder: String` | `Option<String>`（承認されたルートの**実体パス**。拒否なら `null`） |
 
 - [ ] **Step 1: コマンドを実装する**
 
@@ -2835,12 +2974,13 @@ pub async fn write_image_metadata(
 /// 乗っ取られた状態では素通りする（`confirm_delete_originals` と同型）。
 /// `folder` は webview から来るが、承認されるのは `existing_dir` が解決した実体パスで、
 /// その実体パスをダイアログの文面に出すので、利用者は「見覚えのない場所」に気づける。
+/// 戻り値も**解決後の実体パス**にして、フロントの表示と境界の判定を一致させる。
 #[tauri::command]
 pub async fn grant_metadata_editing(
     app_handle: tauri::AppHandle,
     state: tauri::State<'_, ProcessingState>,
     folder: String,
-) -> Result<bool, String> {
+) -> Result<Option<String>, String> {
     let dir = security::existing_dir(&folder)?;
 
     let mut builder = app_handle
@@ -2861,10 +3001,14 @@ pub async fn grant_metadata_editing(
     }
 
     if !builder.blocking_show() {
-        return Ok(false);
+        return Ok(None);
     }
+    // **返すのは解決後の実体パス。** 呼び出し側が送った生の文字列を保持すると、
+    // シンボリックリンク越しなどで境界とフロントの表示がずれ、
+    // 「承認済みと出ているのに保存が弾かれる」になる
+    let granted = dir.to_string_lossy().to_string();
     state.writable_roots.grant(dir);
-    Ok(true)
+    Ok(Some(granted))
 }
 ```
 
@@ -2939,12 +3083,44 @@ Run: `UPDATE_DTO_CONTRACT=1 cargo test -p picture-tool-gui contract`
 
 Run: `make typecheck`
 Expected: FAIL（`types.ts` に `EditableMetadata` / `MetadataRead` が無い）。
-**これも正しい挙動** ── Task 13 で `types.ts` を直すまで赤のままにしておく。
+**これが契約の効き目** ── Rust を変えると TS 側が必ず赤くなる。
 
-- [ ] **Step 7: コミット**
+- [ ] **Step 7: `types.ts` に境界の写しを足す**
+
+赤のままコミットしない。**契約の red→green は Step 4〜6 で見届けたので、
+ここで緑に戻してからコミットする**（部分適用や切り戻しの起点にならない
+コミットを残さない）。
+
+`gui-frontend/src/lib/types.ts`:
+
+```ts
+/**
+ * 人が編集するメタデータ。
+ *
+ * `null` は「タグが無い」、`""` は「空文字のタグがある」を意味し、Rust 側は**区別する**。
+ * 空欄で保存したら `null` を送る（＝タグを削除する）。
+ */
+export interface EditableMetadata {
+  title: string | null;
+  comment: string | null;
+  /** 1〜5。null は未評価。**0 は存在しない**（RatingPercent に表現できないため） */
+  rating: number | null;
+}
+
+/** 読み取り結果。warnings には箇所ごとの値の食い違いが載る */
+export interface MetadataRead {
+  metadata: EditableMetadata;
+  warnings: string[];
+}
+```
+
+Run: `make typecheck`
+Expected: PASS
+
+- [ ] **Step 8: コミット**
 
 ```bash
-git add gui/src/commands.rs gui/src/main.rs gui/src/types.rs gui-frontend/src/lib/dto.contract.ts
+git add gui/src/commands.rs gui/src/main.rs gui/src/types.rs gui-frontend/src/lib/dto.contract.ts gui-frontend/src/lib/types.ts
 git commit -m "feat(gui): メタデータ編集: 読み書きと書き込み承認の Tauri コマンドを足す"
 ```
 
@@ -2958,7 +3134,7 @@ git commit -m "feat(gui): メタデータ編集: 読み書きと書き込み承�
 **Files:**
 - Create: `gui-frontend/src/lib/panels/metadataValues.ts` + `.test.ts`
 - Create: `gui-frontend/src/lib/panels/grants.ts` + `.test.ts`
-- Modify: `gui-frontend/src/lib/types.ts`, `gui-frontend/src/lib/api.ts`
+- Modify: `gui-frontend/src/lib/api.ts`
 - Modify: `gui-frontend/src/lib/panels/metadataDraft.svelte.ts`
 
 **Interfaces:**
@@ -3078,30 +3254,8 @@ Expected: FAIL（モジュールが無い）
 
 - [ ] **Step 3: 実装する**
 
-`gui-frontend/src/lib/types.ts` に追記（Rust の DTO の写し。**契約が突き合わせる**）:
-
-```ts
-/**
- * 人が編集するメタデータ。
- *
- * `null` は「タグが無い」、`""` は「空文字のタグがある」を意味し、Rust 側は**区別する**。
- * 空欄で保存したら `null` を送る（＝タグを削除する）。
- */
-export interface EditableMetadata {
-  title: string | null;
-  comment: string | null;
-  /** 1〜5。null は未評価。**0 は存在しない**（RatingPercent に表現できないため） */
-  rating: number | null;
-}
-
-/** 読み取り結果。warnings には箇所ごとの値の食い違いが載る */
-export interface MetadataRead {
-  metadata: EditableMetadata;
-  warnings: string[];
-}
-```
-
-`gui-frontend/src/lib/api.ts` に追記:
+`gui-frontend/src/lib/api.ts` に追記（`EditableMetadata` / `MetadataRead` は
+Task 12 Step 7 で `types.ts` に足してある）:
 
 ```ts
 export async function readImageMetadata(path: string): Promise<MetadataRead> {
@@ -3122,7 +3276,7 @@ export async function writeImageMetadata(
  * 確認ダイアログは Rust 側が OS ネイティブで出す。webview 内の確認は
  * 乗っ取られた状態では素通りするため、不可逆な操作の根拠にならない（S6-H8）。
  */
-export async function grantMetadataEditing(folder: string): Promise<boolean> {
+export async function grantMetadataEditing(folder: string): Promise<string | null> {
   return invoke("grant_metadata_editing", { folder });
 }
 ```
@@ -3213,12 +3367,12 @@ export function parentFolder(path: string): string {
 - [ ] **Step 4: 通ることを確認する**
 
 Run: `make test-frontend && make typecheck`
-Expected: PASS（Task 12 Step 6 で落としていた typecheck もここで緑になる）
+Expected: PASS
 
 - [ ] **Step 5: コミット**
 
 ```bash
-git add gui-frontend/src/lib/types.ts gui-frontend/src/lib/api.ts gui-frontend/src/lib/panels/metadataValues.ts gui-frontend/src/lib/panels/metadataValues.test.ts gui-frontend/src/lib/panels/grants.ts gui-frontend/src/lib/panels/grants.test.ts gui-frontend/src/lib/panels/metadataDraft.svelte.ts
+git add gui-frontend/src/lib/api.ts gui-frontend/src/lib/panels/metadataValues.ts gui-frontend/src/lib/panels/metadataValues.test.ts gui-frontend/src/lib/panels/grants.ts gui-frontend/src/lib/panels/grants.test.ts gui-frontend/src/lib/panels/metadataDraft.svelte.ts
 git commit -m "feat(gui): メタデータ編集: 境界の写しと、フォーム値・承認判定の純粋ロジックを足す"
 ```
 
@@ -3422,9 +3576,11 @@ export function createGrantStore() {
       return anyAllows(roots, path);
     },
     async request(folder: string): Promise<boolean> {
-      const approved = await grantMetadataEditing(folder);
-      if (approved && !roots.includes(folder)) roots = [...roots, folder];
-      return approved;
+      // 保持するのは Rust が解決した実体パス。送った生の文字列を保持すると
+      // 境界の判定とずれて「承認済み表示なのに保存が弾かれる」になる
+      const granted = await grantMetadataEditing(folder);
+      if (granted !== null && !roots.includes(granted)) roots = [...roots, granted];
+      return granted !== null;
     },
   };
 }
@@ -3530,12 +3686,18 @@ export function createGrantStore() {
   });
 ```
 
-編集対象が変わったら読み込む。**`untrack` で囲む** ── `load` はストアの `$state` を
-書くので、囲まないと自分の書き込みで再実行されうる:
+編集対象が変わったら読み込む。**既存の
+`$effect(() => { metadata.load(editingPath); })`（`App.svelte:72-75`）を
+書き換える**（足すと `load` が二重に走る）:
 
 ```ts
   $effect(() => {
-    const target = editingPath;
+    // 非 JPEG では読みに行かない。read_image_metadata は readable_jpeg で
+    // PNG / WebP を弾くので、無条件に呼ぶと情報モードで PNG をクリックするたびに
+    // エラートーストが出る（グリッドは PNG / WebP も並べる）
+    const target = editingPath !== null && editingIsJpeg ? editingPath : null;
+    // `untrack` で囲む ── `load` はストアの $state を書くので、
+    // 囲まないと自分の書き込みで再実行されうる
     untrack(() => {
       metadata.load(target).catch((e) => {
         toast.error(`メタデータを読めませんでした: ${describeError(e)}`);
@@ -3570,7 +3732,12 @@ export function createGrantStore() {
 
   async function handleSaveAndNext() {
     const next = nextImagePath;
-    if (await handleSaveMetadata()) editingPath = next;
+    if (!(await handleSaveMetadata())) return;
+    editingPath = next;
+    // **グリッドの選択も動かす。** 単一選択モードの `aria-selected` と太枠は
+    // `focusedPath` で決まる（`PhotoGrid.svelte` の `isSelected`）ので、
+    // ここを落とすと「パネルは次の写真・グリッドの枠は前の写真」になる
+    if (next !== null) focusedPath = next;
   }
 ```
 
@@ -3630,10 +3797,10 @@ export function createGrantStore() {
         stored.set(path, metadata);
         return { metadata, warnings: [] };
       },
-      grant_metadata_editing: () => {
-        if (denyGrant) return false;
+      grant_metadata_editing: ({ folder }: { folder: string }) => {
+        if (denyGrant) return null;
         granted = true;
-        return true;
+        return folder;
       },
 ```
 
@@ -3811,9 +3978,17 @@ git commit -m "feat(gui): メタデータ編集: パネルを読み書きと書�
 
 ```ts
   function handleFocus(image: ImageEntry) {
-    focusedPath = image.path;
+    if (mode === "metadata") {
+      // **`focusedPath` の代入もガードの内側に入れる。** 外に出すと、
+      // ダイアログでキャンセルしてもグリッドの選択だけが移動する
+      guarded(() => {
+        focusedPath = image.path;
+        editingPath = image.path;
+      });
+      return;
+    }
     // 変換モードのクリックは focusedPath と selectedPaths にしか触らない（刷新 spec §3-2）
-    if (mode === "metadata") guarded(() => (editingPath = image.path));
+    focusedPath = image.path;
   }
 
   function handleModeChange(next: AppMode) {
@@ -3899,7 +4074,8 @@ git commit -m "feat(gui): メタデータ編集: パネルを読み書きと書�
     await rail.getByRole("button", { name: "変換" }).click();
     await page.getByRole("button", { name: "破棄して移動" }).click(); // ここは出てよい
 
-    await page.getByLabel("タイトル"); // 変換モードなので存在しない ── 次行で確認する
+    // 変換モードに入った（タイトル欄はもう無い）
+    await expect(page.getByLabel("タイトル")).toHaveCount(0);
     await expect(page.getByRole("alertdialog")).toBeHidden();
     await page.getByRole("option").nth(3).click();
     await expect(page.getByRole("alertdialog")).toBeHidden();
@@ -4270,8 +4446,10 @@ pub async fn read_image_ratings(paths: Vec<String>) -> Result<Vec<RatingEntry>, 
 }
 ```
 
-`gui/Cargo.toml` の `[dependencies]` に `rayon = "1.10"` を足す
-（core と同じ版。workspace の版固定の方針に合わせ、core の指定と一致させること）。
+**`rayon` は workspace で固定する。** ルートの `Cargo.toml` の
+`[workspace.dependencies]` に `rayon = "1.10"` を移し、`core/Cargo.toml` と
+`gui/Cargo.toml` の双方を `rayon.workspace = true` にする。gui 側に版を直書きすると
+「複数クレートが使う依存は workspace で固定する」（S6-M19）に自分で反することになる。
 `main.rs` の `generate_handler!` に `commands::read_image_ratings,` を足す。
 
 契約を再生成する:
@@ -4311,6 +4489,9 @@ import { readImageRatings } from "../api";
  * 1 回の要求は 1 度の IPC にまとめる ── 40 回の往復にすると、
  * スクロールのたびに IPC が詰まる。
  */
+/** 1 回の要求で送る枚数。Rust 側の `MAX_BATCH` と揃える */
+const CHUNK = 64;
+
 export function createRatingStore() {
   const ratings = new SvelteMap<string, number | null>();
   let inFlight = new Set<string>();
@@ -4324,17 +4505,23 @@ export function createRatingStore() {
     request(paths: string[]) {
       const missing = paths.filter((p) => !ratings.has(p) && !inFlight.has(p));
       if (missing.length === 0) return;
-      missing.forEach((p) => inFlight.add(p));
-      readImageRatings(missing)
-        .then((entries) => {
-          for (const entry of entries) ratings.set(entry.path, entry.rating);
-        })
-        .catch(() => {
-          // ★はグリッドの飾り。読めなくても操作は成立するので通知しない
-        })
-        .finally(() => {
-          missing.forEach((p) => inFlight.delete(p));
-        });
+      // **Rust 側の上限（64）で分割してから送る。**
+      // 超過分をサーバーに切らせると、返ってこなかったパスは ratings に入らないまま
+      // inFlight から消え、可視範囲が動くたびに同じ要求を繰り返して永遠に埋まらない
+      for (let at = 0; at < missing.length; at += CHUNK) {
+        const chunk = missing.slice(at, at + CHUNK);
+        chunk.forEach((p) => inFlight.add(p));
+        readImageRatings(chunk)
+          .then((entries) => {
+            for (const entry of entries) ratings.set(entry.path, entry.rating);
+          })
+          .catch(() => {
+            // ★はグリッドの飾り。読めなくても操作は成立するので通知しない
+          })
+          .finally(() => {
+            chunk.forEach((p) => inFlight.delete(p));
+          });
+      }
     },
 
     /** 保存した 1 枚だけ取り直す */
@@ -4362,16 +4549,27 @@ export function createRatingStore() {
     unsavedPath: string | null;
 ```
 
-タイルの中に（既存のファイル名の並びに合わせて）:
+**`{@const}` はブロック（`{#each}` / `{#if}` など）の直接の子でなければならない。**
+`<div class="tile">` の直下に書くと `const_tag_invalid_placement` でコンパイルが落ちる。
+既存の `{@const index = ...}` / `{@const thumb = ...}` と同じ位置、
+`{#each visible as image, offset (image.path)}` の直下に足す:
 
 ```svelte
-      {#if unsavedPath === image.path}
-        <span class="unsaved-mark" title="未保存の変更があります" aria-hidden="true">●</span>
-      {/if}
-      {@const stars = ratingFor(image.path)}
-      {#if stars}
-        <span class="stars" aria-hidden="true">{"★".repeat(stars)}</span>
-      {/if}
+      {#each visible as image, offset (image.path)}
+        {@const index = range.startIndex + offset}
+        {@const thumb = thumbnailFor(image.path, metrics.thumbnailSize)}
+        {@const stars = ratingFor(image.path)}
+```
+
+そのうえで、タイルの中（既存のファイル名の並びに合わせて）:
+
+```svelte
+          {#if unsavedPath === image.path}
+            <span class="unsaved-mark" title="未保存の変更があります" aria-hidden="true">●</span>
+          {/if}
+          {#if stars}
+            <span class="stars" aria-hidden="true">{"★".repeat(stars)}</span>
+          {/if}
 ```
 
 ★と未保存マークは `aria-hidden`。タイルの `aria-label` に足すと、
@@ -4396,13 +4594,22 @@ export function createRatingStore() {
 ```ts
   const ratings = createRatingStore();
 
-  // 可視範囲が動いたらサムネイルと★の両方に伝える
+  // 可視範囲を App にも持たせる。**モードの切替では可視範囲が変わらない**ので、
+  // onVisibleRangeChange だけを起点にすると、変換モードから情報モードへ入って
+  // スクロールするまで★が 1 つも出ない（PhotoGrid の $effect は range 依存）
+  let visibleRange = $state({ start: 0, end: -1 });
+
   function handleVisibleRangeChange(start: number, end: number) {
     thumbnails.setVisibleRange(start, end);
-    if (mode === "metadata") {
-      ratings.request(images.slice(start, end + 1).map((img) => img.path));
-    }
+    visibleRange = { start, end };
   }
+
+  // 可視範囲・モード・写真一覧のどれが動いても、情報モードなら★を取りに行く
+  $effect(() => {
+    if (mode !== "metadata") return;
+    const paths = images.slice(visibleRange.start, visibleRange.end + 1).map((img) => img.path);
+    untrack(() => ratings.request(paths));
+  });
 ```
 `loadFolder` の中で `ratings.forget()`、`handleSaveMetadata` の成功時に
 `ratings.invalidate(metadata.path!)` を呼ぶ。
@@ -4616,6 +4823,44 @@ git commit -m "docs: メタデータ編集: spec の GUI 節を刷新に寄せ�
 ### spec と食い違った点
 
 （実装して初めて分かったことを書く。spec 側も直したなら、どちらをどう直したか）
+
+---
+
+## 未決（ユーザー回答待ち。決まるまで着手しない）
+
+| # | 何が分からないか | どちらに倒すと何が変わるか |
+|---|---|---|
+| U1 | Task 1 / 2 が要るカメラ直出し JPEG（MakerNote 付き）と Lightroom 書き出し JPEG が手元にあるか | **無いまま進める**と、spec の「割れたらクレート選定ごと見直す」分岐が判定不能のまま Task 3 以降へ進む。**待つ**なら Task 1 が着手のブロッカーになる |
+| U2 | `docs/README.md` の「現行仕様」表に、レイアウトを刷新 spec へ委譲したメタデータ編集 spec を並べてよいか | **並べる**と表は 1 つで済むが、読者がレイアウトの出典を取り違えうる。**注記付きで分ける**と索引が複雑になる |
+| U3 | 「保存して次の写真へ」でグリッドのスクロールを追従させるか | **追従させない**と、可視範囲の外の写真を編集し続ける状態になり得る。**追従させる**なら `PhotoGrid` にスクロール指示の窓口を足すことになる（刷新 spec §4-3 に記述なし） |
+| U4 | 既存 XMP 保持の受け入れ条件を「バイト単位」と「値の単位」のどちらで書くか | spec は「1 バイトも変わらないこと」と書いているが、所有属性を落とした `rdf:Description` の start タグだけは組み直しで整形が変わる（値は不変）。**バイト単位を貫く**なら XML の書き戻しをやめてバイト列の切り貼りで実装することになり、Task 7 の複雑さが跳ねる。**値の単位に緩める**なら spec の当該行も直す |
+
+U4 は本計画の Global Constraints と Task 7 に「値の単位」で暫定的に書いてあるが、
+**spec 本文（§既存 XMP パケットは保持する / §テスト方針）はまだ直していない。**
+U4 の回答が出るまで Task 18 で spec を書き換えないこと。
+
+---
+
+## レビュー反映（2026-09-01）
+
+`docs/tmp/review.md` の指摘を 1 件ずつコードに当てて確認し、**全件採用**した。
+主な変更点と、なぜそれが問題だったか:
+
+| ID | 反映先 | 何が壊れていたか |
+|---|---|---|
+| C1 | Task 4 / 9 | XMP は読み取りで `trim()` するのに EXIF はしない。書き込み側も trim しないので、**末尾改行つきのコメントは保存が必ず失敗**し、食い違い警告も誤発火する。読み取りを全経路 trim に揃え、`normalized()` でも trim する |
+| S1 | Task 5 / 7 | `make lint` が `-D warnings` の `dead_code` で落ちる（実利用者がテストだけの段階）。lint は Task 9 / 10 に寄せた |
+| S2 | Task 17 | `{@const}` はブロックの直接の子でないとコンパイルできない。`{#each}` 直下へ移した |
+| S3 | Task 8 / 9 | 既存 Exif の解析失敗を `unwrap_or_else` で握りつぶすと、**MakerNote ごと消えた Exif に置き換わる**。しかも `read_exif_info` が失敗時に `default` を返すため検証を素通りする（issue #93 の症状そのもの）。書き込みは Err、読み取りは warning にした |
+| S4 | Task 7 / 10 | `push_attribute` は属性の区切りを単一スペースに正規化するので、`rdf:Description` を組み直すと整形が変わる。**落とす属性が無ければ元のタグをそのまま流す**ようにし、Global Constraints の言い方も実装に合わせた。統合テストの「40 バイト固定長で切る」は char 境界を割って panic するので、属性 1 つを丸ごと切り出す形に直した |
+| S5 | Task 3 / 4 / 6 | モジュール宣言を Step 3 でしていたため、Step 2 の「落ちることを確認する」が **0 tests / PASS** で通っていた（red が偽物）。宣言を Step 1 へ |
+| S6 | Task 12 / 13 | `types.ts` を赤のままコミットする手順だった。契約の red→green は同一タスク内で見届けてから緑にしてコミットする |
+| S7 | Task 14 / 15 | 単一選択の枠は `focusedPath` で決まる。「保存して次へ」が `editingPath` しか進めず、ガードのキャンセル時も `focusedPath` だけ動いていた |
+| S8 | Task 17 | ★の取得起点が可視範囲の変化だけで、**モードを切り替えただけでは出ない**。加えて 64 枚超をサーバー側で切ると、返らなかったぶんが永久に埋まらない。分割を送信側に置いた |
+| S9 | Task 14 | 情報モードで PNG をクリックするたびにエラートーストが出る（グリッドは PNG / WebP も並べる）。非 JPEG では読みに行かない |
+| S10 | Task 2 | フィクスチャに編集項目が入っていないことの確認手順が無かった |
+| S11 | Task 17 | `gui/Cargo.toml` への `rayon` 直書きは、本計画自身が引く S6-M19 に反する。workspace で固定する |
+| Nit ×6 | 各所 | 誤った根拠のコメント、検査していない e2e の行、`$effect` を「置き換える」の明示、XMP を Exif APP1 の隣に置く、Exif 解析失敗の warning、`grant_metadata_editing` が解決後のルートを返す |
 
 ---
 
