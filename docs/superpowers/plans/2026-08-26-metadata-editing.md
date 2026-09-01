@@ -254,7 +254,9 @@ fn exif_fields(bytes: &[u8]) -> Vec<(String, String)> {
         .expect("EXIF が読めない");
     let mut fields: Vec<(String, String)> = reader
         .fields()
-        .filter(|f| !(f.ifd_num == exif::In::THUMBNAIL && f.tag == exif::Tag::JPEGInterchangeFormat))
+        .filter(|f| {
+            !(f.ifd_num == exif::In::THUMBNAIL && f.tag == exif::Tag::JPEGInterchangeFormat)
+        })
         .map(|f| {
             (
                 format!("{:?}/{}", f.ifd_num, f.tag),
@@ -321,7 +323,10 @@ fn a_real_photo_survives_two_write_cycles() {
     // --- この画像が何を持っているか（assert ではなく記録） ---
     let meta = Metadata::new_from_path(&source).expect("EXIF が読めない");
     let has_maker_note = meta.get_tag_by_hex(MAKER_NOTE, None).next().is_some();
-    let has_gps = meta.get_tag_by_hex(GPS_IFD, Some(ExifTagGroup::GENERIC)).next().is_some()
+    let has_gps = meta
+        .get_tag_by_hex(GPS_IFD, Some(ExifTagGroup::GENERIC))
+        .next()
+        .is_some()
         || meta.get_ifd(ExifTagGroup::GPS, 0).is_some();
     // **MakerNote の有無は assert しない。** 本ツールの編集対象は Lightroom 書き出しで、
     // そこに MakerNote は入っていない。有無を出力に残し、実施メモへ書き写す
@@ -392,6 +397,10 @@ fn a_real_photo_survives_two_write_cycles() {
     // `None == None`（サムネイルを持たない画像）は許容するが、`Some` から `None`
     // （サムネイル消失）は assert_eq! の不一致として必ず検知される。
     let after_thumbnail = thumbnail_bytes(&second);
+    assert!(
+        baseline_thumbnail.is_some(),
+        "この写真には埋め込みサムネイルが必要（比較が空振りしていないことの前提条件）"
+    );
     assert_eq!(
         baseline_thumbnail, after_thumbnail,
         "サムネイル本体が書き込み前後で変わった（消失または内容の変化）"
