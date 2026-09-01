@@ -100,9 +100,9 @@ spec の「検証済みの事実と、未検証のリスク」は、実測が**�
 | `core/src/metadata/exif.rs` | `little_exif` による EXIF 側の読み書き。UCS-2LE と `UserComment` の文字コード識別子 |
 | `core/src/metadata/xmp.rs` | XMP パケットの取り出し・**プロパティ単位の差し替え**・新規生成・`img-parts` によるセグメント挿入 |
 | `core/src/metadata/atomic.rs` | 検証付き原子的置換と `catch_unwind` |
-| `core/tests/metadata_spike.rs` | `#[ignore]` の実測用。カメラ直出し JPEG での round-trip とフィクスチャ生成 |
-| `core/tests/metadata_integration.rs` | 実カメラ由来フィクスチャでの統合テスト |
-| `core/tests/fixtures/camera-direct.jpg` | カメラ直出しの EXIF（MakerNote 付き）を持つ小さい JPEG |
+| `core/tests/metadata_spike.rs` | `#[ignore]` の実測用。実写真での round-trip、フィクスチャ生成、読み取りコストの計測 |
+| `core/tests/metadata_integration.rs` | 実写真由来フィクスチャでの統合テスト |
+| `core/tests/fixtures/exif-only.jpg` | 実写真の Exif を持ち、XMP は持たない小さい JPEG |
 | `core/tests/fixtures/lightroom-xmp.jpg` | `crs:` 等の他名前空間を持つ XMP パケット付き JPEG |
 | `gui-frontend/src/lib/panels/metadataValues.ts` | `EditableMetadata` ⇄ フォーム値の変換（純粋。`bun test` の対象） |
 | `gui-frontend/src/lib/panels/grants.ts` | パスが承認済みルート配下かの判定（純粋。`bun test` の対象） |
@@ -130,10 +130,28 @@ spec の「検証済みの事実と、未検証のリスク」は、実測が**�
 | `CLAUDE.md` / `docs/README.md` | 新 API・新コマンド・設計方針の更新 |
 
 ---
-## Task 1: 依存の追加と、カメラ直出し JPEG での round-trip 実測
+## Task 1: 依存の追加と、実写真での round-trip 実測
 
 spec の「未検証（実装時に必ず潰すこと）」への回答。**ここが割れたらクレート選定ごと
 設計を見直す**ので、いちばん最初に置く。
+
+> **spec の前提を 1 つ狭める（2026-09-01 の利用者確認）。**
+> spec は「Lightroom 等を通していないカメラ直出しの JPEG（MakerNote 付き・GPS 付き）で
+> 同じ検証を必ず 1 度通す」と要求しているが、**利用者はカメラ直出し JPEG を使わない**
+> （手元の写真はすべて Lightroom 書き出し）。つまり本ツールが実際に書き込む対象に
+> MakerNote は入っていない。
+>
+> したがって検証は **Lightroom 書き出し JPEG で行う**。MakerNote 付きの JPEG
+> （他人の写真・スマートフォンの写真など）を掴んだ場合は **残リスク**として扱い、
+> 「壊さずに失敗する」ことで守る:
+>
+> - Task 9 の `build()` は既存 Exif を解析できないとき **Err で止める**（S3 の反映）
+> - 置き換えは検証付き原子的置換なので、**元ファイルは必ず無傷**
+> - 症状は「保存できませんでした」であって、データ消失ではない
+>
+> MakerNote 付きの 1 枚が手に入ったら、下の `#[ignore]` テストに
+> `PICTURE_TOOL_SPIKE_JPEG` で渡せばいつでも再検査できる。**残リスクは
+> 実施メモと spec §未検証リスクに明記すること**（Task 18）。
 
 **Files:**
 - Modify: `core/Cargo.toml`
@@ -145,26 +163,29 @@ spec の「未検証（実装時に必ず潰すこと）」への回答。**こ�
   本実装の同等物は Task 9 で `core/src/metadata/atomic.rs` に作る）と、
   環境変数 `PICTURE_TOOL_SPIKE_JPEG` の約束（Task 2 も同じ変数を使う）
 
-- [ ] **Step 1: 検証用のカメラ直出し JPEG を用意する**
+- [ ] **Step 1: 検証用の写真を用意する**
 
-**Lightroom 等を通していない、カメラが書いたままの JPEG** が要る。
-spec の実測に使われた画像は `Software` が `Adobe Photoshop Lightroom Classic 15.2.1` で、
-**MakerNote と GPS IFD を持っていなかった**。`little_exif` の issue #93
-（既存 EXIF を読み込んで書き戻すと `failed to fill whole buffer` で失敗する）は
-MakerNote が絡む可能性があり、再現条件を満たしていない。
+**実際に編集対象になる写真** ── すなわち Lightroom 書き出しの JPEG を 1 枚選び、
+絶対パスを控える。次で条件を機械的に確認する。
 
-利用者の写真フォルダーから 1 枚選び、絶対パスを控える。次で条件を機械的に確認する。
+MakerNote 付きの JPEG（スマートフォンの写真など）も手に入るなら、同じテストへ
+別途渡して結果を実施メモに残す。**手に入らなくても Task 1 は完了とする**
+（上記の残リスクの扱い）。
 
 - [ ] **Step 2: 実測テストを書く**
 
 `core/tests/metadata_spike.rs`:
 
 ```rust
-//! カメラ直出し JPEG（MakerNote 付き）での round-trip 実測。
+//! 実写真での round-trip 実測。
 //!
 //! spec 2026-08-18「未検証（実装時に必ず潰すこと）」への回答であり、
 //! 将来クレートを上げたときの再検査にも使う。**通常のテスト実行では走らない**
-//! （実カメラの画像はリポジトリに入れないため）。
+//! （実写真をそのままリポジトリに入れないため）。
+//!
+//! MakerNote 付きの JPEG が手に入ったら、同じ変数へ渡して再検査する
+//! （本ツールの編集対象は Lightroom 書き出しなので常用の経路ではないが、
+//! `little_exif` の issue #93 が残っている以上、掴めるときに掴んでおく価値がある）。
 //!
 //! 実行:
 //!   PICTURE_TOOL_SPIKE_JPEG=/path/to/DSC00123.JPG \
@@ -181,7 +202,7 @@ const XP_TITLE: u16 = 0x9c9b;
 
 fn spike_source() -> std::path::PathBuf {
     let raw = std::env::var("PICTURE_TOOL_SPIKE_JPEG")
-        .expect("PICTURE_TOOL_SPIKE_JPEG にカメラ直出し JPEG の絶対パスを渡すこと");
+        .expect("PICTURE_TOOL_SPIKE_JPEG に検証用 JPEG の絶対パスを渡すこと");
     std::path::PathBuf::from(raw)
 }
 
@@ -211,6 +232,10 @@ fn scan_start(bytes: &[u8]) -> usize {
     }
 }
 
+fn baseline_fields_is_empty(bytes: &[u8]) -> bool {
+    exif_fields(bytes).is_empty()
+}
+
 /// kamadak-exif で全フィールドを列挙する。**little_exif とは独立の実装**なので、
 /// 「little_exif で書いて little_exif で読めた」の同語反復にならない。
 fn exif_fields(bytes: &[u8]) -> Vec<(String, String)> {
@@ -232,24 +257,28 @@ fn exif_fields(bytes: &[u8]) -> Vec<(String, String)> {
 }
 
 #[test]
-#[ignore = "実カメラの画像が要る。PICTURE_TOOL_SPIKE_JPEG で渡す"]
-fn camera_direct_jpeg_survives_two_write_cycles() {
+#[ignore = "実写真が要る。PICTURE_TOOL_SPIKE_JPEG で渡す"]
+fn a_real_photo_survives_two_write_cycles() {
     let source = spike_source();
     let original = std::fs::read(&source).expect("読めない");
 
-    // --- 前提条件: この画像が本当に「カメラ直出し」か ---
+    // --- この画像が何を持っているか（assert ではなく記録） ---
     let meta = Metadata::new_from_path(&source).expect("EXIF が読めない");
     let has_maker_note = meta.get_tag_by_hex(MAKER_NOTE, None).next().is_some();
     let has_gps = meta.get_tag_by_hex(GPS_IFD, Some(ExifTagGroup::GENERIC)).next().is_some()
         || meta.get_ifd(ExifTagGroup::GPS, 0).is_some();
+    // **MakerNote の有無は assert しない。** 本ツールの編集対象は Lightroom 書き出しで、
+    // そこに MakerNote は入っていない。有無を出力に残し、実施メモへ書き写す
+    // （MakerNote 付きで通った実績があるかどうかが、残リスクの評価そのものになる）
     println!("MakerNote: {} / GPS: {}", has_maker_note, has_gps);
     assert!(
-        has_maker_note,
-        "MakerNote が無い。Lightroom 等を通した画像では issue #93 の再現条件を満たさない"
+        !baseline_fields_is_empty(&original),
+        "Exif が 1 つも読めない。編集対象として不適切な画像"
     );
 
     let baseline_fields = exif_fields(&original);
     let baseline_scan = &original[scan_start(&original)..];
+    println!("Exif フィールド数: {}", baseline_fields.len());
 
     // --- 1 回目 ---
     let mut buffer = original.clone();
@@ -328,7 +357,7 @@ Run:
 PICTURE_TOOL_SPIKE_JPEG=/path/to/DSC00123.JPG \
   cargo test -p picture-tool-core --test metadata_spike -- --ignored --nocapture
 ```
-Expected: PASS。`MakerNote: true` が出ること。
+Expected: PASS。`MakerNote` / `GPS` の有無と Exif フィールド数が出力に出ること。
 
 **割れた場合はここで停止し、報告する。** 「クレート選定ごと設計を見直す」が spec の
 決めた分岐であり、後続タスクを進めても無駄になる。出力（特に
@@ -336,31 +365,40 @@ Expected: PASS。`MakerNote: true` が出ること。
 
 - [ ] **Step 6: 結果を実施メモに記録してコミット**
 
-本計画末尾の「実施メモ」に、使った機種・MakerNote / GPS の有無・タグ数の増減を書く。
+本計画末尾の「実施メモ」に、使った画像の出所（Lightroom 書き出しか否か）・
+MakerNote / GPS の有無・タグ数の増減を書く。**MakerNote 付きで検証できなかった場合は、
+そのことを残リスクとして明記する**（Task 18 で spec にも書く）。
 
 ```bash
 git add core/Cargo.toml core/tests/metadata_spike.rs docs/superpowers/plans/2026-08-26-metadata-editing.md
-git commit -m "test(core): メタデータ編集: カメラ直出し JPEG で little_exif の round-trip を実測する"
+git commit -m "test(core): メタデータ編集: 実写真で little_exif の round-trip を実測する"
 ```
 
 ---
 
-## Task 2: 実カメラ由来のテストフィクスチャを作る
+## Task 2: 実写真由来のテストフィクスチャを作る
 
-実カメラの JPEG（5〜25MB）はそのままリポジトリに入れられない（`.git` は現在 12MB）。
-**EXIF の APP1 セグメントだけを小さい JPEG へ移植する。**
+実写真の JPEG（5〜25MB）はそのままリポジトリに入れられない（`.git` は現在 12MB）。
+**APP1 セグメントだけを小さい JPEG へ移植する。**
 EXIF 内部のオフセットは APP1 の中の TIFF ヘッダ基準なので、セグメントを丸ごと移せば
-MakerNote も IFD1 のサムネイルもそのまま生き残る。
+IFD1 のサムネイルも（あれば MakerNote も）そのまま生き残る。
+
+作るのは 2 本。**どちらも Lightroom 書き出しから作る**（本ツールが実際に書き込む対象）:
+
+| フィクスチャ | 中身 | 使うタスク |
+|---|---|---|
+| `exif-only.jpg` | Exif の APP1 だけを移植。XMP は持たない | Task 6 / 8 / 9 / 10 の基準 |
+| `lightroom-xmp.jpg` | Exif と XMP（`crs:` 付き）の APP1 を両方移植 | Task 7 / 10 の XMP 保持検査 |
 
 **Files:**
 - Modify: `core/tests/metadata_spike.rs`
-- Create: `core/tests/fixtures/camera-direct.jpg`
+- Create: `core/tests/fixtures/exif-only.jpg`
 - Create: `core/tests/fixtures/lightroom-xmp.jpg`
 
 **Interfaces:**
 - Consumes: Task 1 の `PICTURE_TOOL_SPIKE_JPEG`
-- Produces: フィクスチャ 2 本。Task 10 の統合テストが
-  `PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/camera-direct.jpg")` で参照する
+- Produces: フィクスチャ 2 本。参照は
+  `PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/exif-only.jpg")` の形
   （`core/src/exif_frame/logo.rs:171` と同じ流儀）
 
 - [ ] **Step 1: 生成テストを書く**
@@ -390,8 +428,8 @@ fn tiny_jpeg() -> Vec<u8> {
 }
 
 #[test]
-#[ignore = "フィクスチャの生成。PICTURE_TOOL_SPIKE_JPEG で実カメラの画像を渡す"]
-fn generate_camera_direct_fixture() {
+#[ignore = "フィクスチャの生成。PICTURE_TOOL_SPIKE_JPEG で実写真を渡す"]
+fn generate_exif_only_fixture() {
     let source = spike_source();
     let src = Jpeg::from_bytes(Bytes::from(std::fs::read(&source).unwrap())).unwrap();
 
@@ -407,8 +445,8 @@ fn generate_camera_direct_fixture() {
     out.segments_mut().insert(1, exif_app1);
 
     let bytes = out.encoder().bytes();
-    std::fs::write(fixture_path("camera-direct.jpg"), &bytes).unwrap();
-    println!("camera-direct.jpg: {} bytes", bytes.len());
+    std::fs::write(fixture_path("exif-only.jpg"), &bytes).unwrap();
+    println!("exif-only.jpg: {} bytes", bytes.len());
 
     // 移植できたことを、独立の実装（kamadak-exif）で確かめる
     let fields = exif_fields(&bytes);
@@ -424,9 +462,9 @@ fn generate_camera_direct_fixture() {
 Run:
 ```bash
 PICTURE_TOOL_SPIKE_JPEG=/path/to/DSC00123.JPG \
-  cargo test -p picture-tool-core --test metadata_spike generate_camera_direct -- --ignored --nocapture
+  cargo test -p picture-tool-core --test metadata_spike generate_exif_only -- --ignored --nocapture
 ```
-Expected: `camera-direct.jpg` が 40〜120KB 程度で生成され、MakerNote / Make / Model /
+Expected: `exif-only.jpg` が 40〜120KB 程度で生成され、Make / Model /
 LensModel / DateTimeOriginal が列挙に出ること。
 
 **あわせて「編集項目が 1 つも入っていない」ことを確認する。**
@@ -444,14 +482,16 @@ LensModel / DateTimeOriginal が列挙に出ること。
 - `BodySerialNumber` / `LensSerialNumber` / `OwnerName` / `Artist` / `Copyright`
 
 利用者が座標の混入を望まない場合は、GPS を持たない別の 1 枚で作り直す。
-**GPS 付きでの検証は spec の要求だが、リポジトリに入れるかどうかは別の判断**であり、
-検証だけなら Task 1 の spike（コミットしない）で足りる。
+**フィクスチャに GPS は要らない**（当初 spec は GPS 付きでの検証を求めていたが、
+Task 1 の注記のとおり本ツールの対象は Lightroom 書き出しであり、その要求は
+残リスクの記述へ置き換えた）。
 
 - [ ] **Step 4: XMP 付きフィクスチャを用意する**
 
 Task 7（既存 XMP パケットの保持）に要る。**`crs:` 等の他名前空間を持つ**
 Lightroom 書き出し JPEG から、同じ手口で APP1 を 2 つとも移植する。
-`camera-direct.jpg` と違い、EXIF の APP1 と XMP の APP1 の**両方**を移す。
+`exif-only.jpg` と違い、EXIF の APP1 と XMP の APP1 の**両方**を移す。
+**`exif-only.jpg` とは別の 1 枚から作ってよい**（`crs:` を持っているものを選ぶ）。
 
 ```rust
 #[test]
@@ -489,8 +529,8 @@ Lightroom 書き出しが手元に無い場合は、**`crs:` を含む XMP パ�
 - [ ] **Step 5: コミット**
 
 ```bash
-git add core/tests/metadata_spike.rs core/tests/fixtures/camera-direct.jpg core/tests/fixtures/lightroom-xmp.jpg
-git commit -m "test(core): メタデータ編集: 実カメラ由来の EXIF を持つ小さいフィクスチャを用意する"
+git add core/tests/metadata_spike.rs core/tests/fixtures/exif-only.jpg core/tests/fixtures/lightroom-xmp.jpg
+git commit -m "test(core): メタデータ編集: 実写真由来の Exif を持つ小さいフィクスチャを用意する"
 ```
 
 ---
@@ -1261,7 +1301,7 @@ mod tests {
         use img_parts::Bytes;
         let bytes = std::fs::read(
             std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-                .join("tests/fixtures/camera-direct.jpg"),
+                .join("tests/fixtures/exif-only.jpg"),
         )
         .unwrap();
         let jpeg = Jpeg::from_bytes(Bytes::from(bytes)).unwrap();
@@ -1670,7 +1710,7 @@ fn install_puts_the_packet_before_the_scan() {
     use img_parts::Bytes;
     let bytes = std::fs::read(
         std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join("tests/fixtures/camera-direct.jpg"),
+            .join("tests/fixtures/exif-only.jpg"),
     )
     .unwrap();
     let mut jpeg = Jpeg::from_bytes(Bytes::from(bytes)).unwrap();
@@ -1994,7 +2034,7 @@ fn scratch(name: &str) -> (tempfile::TempDir, PathBuf) {
 
 #[test]
 fn reading_a_file_without_any_editable_metadata_yields_none() {
-    let (_dir, path) = scratch("camera-direct.jpg");
+    let (_dir, path) = scratch("exif-only.jpg");
     let read = read_metadata(&path).unwrap();
     assert_eq!(read.metadata, EditableMetadata::default());
     assert!(read.warnings.is_empty());
@@ -2199,7 +2239,7 @@ mod tests {
 /// 読み取り側が trim するので、書き込み側も trim しないと読み戻し検証が必ず落ちる
 #[test]
 fn a_comment_with_a_trailing_newline_survives_a_save() {
-    let (_dir, path) = scratch("camera-direct.jpg");
+    let (_dir, path) = scratch("exif-only.jpg");
     write_metadata(&path, &EditableMetadata {
         comment: Some("順光。もう少し寄れた\n".into()),
         ..Default::default()
@@ -2226,7 +2266,7 @@ fn normalizing_trims_and_folds_empty_strings_and_zero_stars_into_none() {
 /// 優先順位は XMP が先頭。業界標準であり MWG も digiKam も Lightroom もそこを見る
 #[test]
 fn xmp_wins_over_exif_and_the_discarded_value_becomes_a_warning() {
-    let (_dir, path) = scratch("camera-direct.jpg");
+    let (_dir, path) = scratch("exif-only.jpg");
 
     // EXIF だけに古い値を入れる
     write_metadata(&path, &EditableMetadata {
@@ -2255,7 +2295,7 @@ fn xmp_wins_over_exif_and_the_discarded_value_becomes_a_warning() {
 /// 値が一致していれば警告は出ない。**保存すれば全箇所が揃うので警告は自然に消える**
 #[test]
 fn matching_values_produce_no_warning() {
-    let (_dir, path) = scratch("camera-direct.jpg");
+    let (_dir, path) = scratch("exif-only.jpg");
     write_metadata(&path, &EditableMetadata {
         title: Some("同じ".into()),
         comment: Some("同じ".into()),
@@ -2282,7 +2322,7 @@ fn overwrite_xmp_only(path: &std::path::Path, values: &EditableMetadata) {
 /// **ピクセル不変は設計の必須条件。** 回帰したら即座に落ちること
 #[test]
 fn writing_metadata_does_not_touch_a_single_pixel_byte() {
-    let (_dir, path) = scratch("camera-direct.jpg");
+    let (_dir, path) = scratch("exif-only.jpg");
     let before = std::fs::read(&path).unwrap();
     let before_scan = before[atomic::scan_offset(&before).unwrap()..].to_vec();
 
@@ -2298,7 +2338,7 @@ fn writing_metadata_does_not_touch_a_single_pixel_byte() {
 
 #[test]
 fn writing_metadata_round_trips_japanese() {
-    let (_dir, path) = scratch("camera-direct.jpg");
+    let (_dir, path) = scratch("exif-only.jpg");
     let values = EditableMetadata {
         title: Some("夕暮れの港".into()),
         comment: Some("順光。もう少し寄れた".into()),
@@ -2311,7 +2351,7 @@ fn writing_metadata_round_trips_japanese() {
 /// 一時ファイルが残らないこと。残ると次回の書き込みで衝突しうる
 #[test]
 fn writing_metadata_leaves_no_temporary_file_behind() {
-    let (dir, path) = scratch("camera-direct.jpg");
+    let (dir, path) = scratch("exif-only.jpg");
     write_metadata(&path, &EditableMetadata { rating: Some(1), ..Default::default() }).unwrap();
     let leftovers: Vec<_> = std::fs::read_dir(dir.path())
         .unwrap()
@@ -2561,10 +2601,10 @@ git commit -m "feat(core): メタデータ編集: 検証付き原子的置換で
 
 ---
 
-## Task 10: 実カメラ由来フィクスチャでの統合テスト
+## Task 10: 実写真由来フィクスチャでの統合テスト
 
 単体テストは合成データでも通ってしまう。**spec のテスト方針が要求する項目**を、
-実カメラの EXIF と実物の XMP パケットに対して 1 本にまとめる。
+実写真の Exif と実物の XMP パケットに対して 1 本にまとめる。
 
 **Files:**
 - Create: `core/tests/metadata_integration.rs`
@@ -2578,8 +2618,8 @@ git commit -m "feat(core): メタデータ編集: 検証付き原子的置換で
 ```rust
 //! メタデータ編集の統合テスト。
 //!
-//! 合成画像だけでは spec の「未検証リスク」を踏み抜く。**実カメラ由来の EXIF**
-//! （MakerNote 付き）と、**他名前空間を含む実物の XMP パケット**に対して検査する。
+//! 合成画像だけでは spec の「未検証リスク」を踏み抜く。**実写真由来の Exif** と、
+//! **他名前空間を含む実物の XMP パケット**に対して検査する。
 
 use picture_tool_core::metadata::{read_metadata, write_metadata, EditableMetadata};
 use std::path::{Path, PathBuf};
@@ -2611,12 +2651,14 @@ fn exif_fields(path: &Path) -> Vec<(String, String)> {
 /// **既存タグの保存** — 追加した項目以外のタグ集合に差分が無いこと
 #[test]
 fn writing_metadata_keeps_every_existing_exif_tag() {
-    let (_dir, path) = scratch("camera-direct.jpg");
+    let (_dir, path) = scratch("exif-only.jpg");
     let before = exif_fields(&path);
-    // 前提条件: 実カメラ由来である（MakerNote を持つ）
+    // 前提条件: 実写真由来の Exif が本当に入っていること。
+    // ここが空だと「タグが消えていない」は自明に通ってしまう
     assert!(
-        before.iter().any(|(name, _)| name.contains("MakerNote")),
-        "フィクスチャに MakerNote が無い。Task 2 を見直すこと"
+        before.len() > 10 && before.iter().any(|(name, _)| name.contains("Model")),
+        "フィクスチャの Exif が薄すぎる。Task 2 を見直すこと: {:?}",
+        before
     );
 
     write_metadata(&path, &EditableMetadata {
@@ -2634,7 +2676,7 @@ fn writing_metadata_keeps_every_existing_exif_tag() {
 /// **再編集** — 2 回書いても壊れない（`little_exif` issue #93 の再現条件）
 #[test]
 fn writing_twice_keeps_the_file_readable() {
-    let (_dir, path) = scratch("camera-direct.jpg");
+    let (_dir, path) = scratch("exif-only.jpg");
     for stars in [2u8, 5] {
         write_metadata(&path, &EditableMetadata {
             title: Some(format!("{} 回目", stars)),
@@ -2702,6 +2744,33 @@ fn writing_metadata_preserves_foreign_xmp_namespaces() {
     assert_eq!(read_metadata(&path).unwrap().metadata.rating, Some(1));
 }
 
+/// **解析できない Exif を黙って作り直さないこと。**
+///
+/// 本ツールの編集対象は Lightroom 書き出しで MakerNote を持たないため、
+/// `little_exif` の issue #93（MakerNote 絡みで解析に失敗しうる）は
+/// **残リスクとして受け入れている**（Task 1 の注記）。その受け入れが成立する根拠が
+/// この検査 ── 解析できない Exif に当たったら、作り直さずに失敗する。
+/// **このテストを落とすと残リスクの前提が崩れる。**
+#[test]
+fn a_file_whose_exif_cannot_be_parsed_is_refused_without_being_modified() {
+    let (_dir, path) = scratch("exif-only.jpg");
+    let mut bytes = std::fs::read(&path).unwrap();
+    // Exif APP1 の中の TIFF ヘッダだけを壊す。セグメント長は保つので
+    // img-parts は読めるが、little_exif は解析に失敗する
+    let at = bytes
+        .windows(6)
+        .position(|window| window == b"Exif\0\0")
+        .expect("Exif APP1 が無い")
+        + 6;
+    bytes[at..at + 8].copy_from_slice(&[0xAA; 8]);
+    std::fs::write(&path, &bytes).unwrap();
+
+    let error = write_metadata(&path, &EditableMetadata { rating: Some(3), ..Default::default() })
+        .expect_err("解析できない Exif を黙って作り直してはいけない");
+    assert!(error.to_string().contains("Exif"), "理由が伝わる文面であること: {}", error);
+    assert_eq!(std::fs::read(&path).unwrap(), bytes, "元ファイルは無傷であること");
+}
+
 /// **原子性** — 書き込みに失敗しても元ファイルが無傷であること
 #[test]
 fn a_failed_write_leaves_the_original_untouched() {
@@ -2720,7 +2789,11 @@ fn a_failed_write_leaves_the_original_untouched() {
 - [ ] **Step 2: 走らせる**
 
 Run: `cargo test -p picture-tool-core --test metadata_integration`
-Expected: PASS（4 テスト）
+Expected: PASS（5 テスト）
+
+`a_file_whose_exif_cannot_be_parsed_is_refused_without_being_modified` が
+「Err にならない」で落ちた場合は、`little_exif` がこの壊し方を受け入れているということ。
+**テストを消さずに壊し方を変える** ── 残リスクの受け入れ根拠がこの 1 本にある。
 
 - [ ] **Step 3: 全体を通す**
 
@@ -2731,7 +2804,7 @@ Expected: PASS
 
 ```bash
 git add core/tests/metadata_integration.rs
-git commit -m "test(core): メタデータ編集: 実カメラ由来の画像で既存タグ・XMP・原子性を検査する"
+git commit -m "test(core): メタデータ編集: 実写真由来の画像で既存タグ・XMP・原子性を検査する"
 ```
 
 ---
@@ -3387,6 +3460,8 @@ git commit -m "feat(gui): メタデータ編集: 境界の写しと、フォー�
 - Modify: `gui-frontend/src/lib/panels/metadataValues.ts` + `.test.ts`（`isEditableImage`）
 - Create: `gui-frontend/src/lib/panels/grants.svelte.ts`
 - Modify: `gui-frontend/src/lib/panels/MetadataPanel.svelte`
+- Modify: `gui-frontend/src/lib/browser/gridMetrics.ts` + `.test.ts`（`scrollTopToReveal`）
+- Modify: `gui-frontend/src/lib/browser/PhotoGrid.svelte`（`revealPath`）
 - Modify: `gui-frontend/src/App.svelte`
 - Modify: `gui-frontend/e2e/stub.ts`, `gui-frontend/e2e/metadata.spec.ts`
 
@@ -3734,10 +3809,15 @@ export function createGrantStore() {
     const next = nextImagePath;
     if (!(await handleSaveMetadata())) return;
     editingPath = next;
-    // **グリッドの選択も動かす。** 単一選択モードの `aria-selected` と太枠は
-    // `focusedPath` で決まる（`PhotoGrid.svelte` の `isSelected`）ので、
-    // ここを落とすと「パネルは次の写真・グリッドの枠は前の写真」になる
-    if (next !== null) focusedPath = next;
+    // **グリッドの選択も動かし、スクロールも追従させる。**
+    // 単一選択モードの `aria-selected` と太枠は `focusedPath` で決まる
+    // （`PhotoGrid.svelte` の `isSelected`）ので、落とすと
+    // 「パネルは次の写真・グリッドの枠は前の写真」になる。
+    // 送り続けると可視範囲の外へ出るので `revealPath` も呼ぶ（Step 6b）
+    if (next !== null) {
+      focusedPath = next;
+      grid?.revealPath(next);
+    }
   }
 ```
 
@@ -3765,6 +3845,124 @@ export function createGrantStore() {
       variant="filled"
       disabled={!canWriteEditing || !editingIsJpeg || !metadata.isDirty || metadata.saving}
       onclick={handleSaveMetadata}>保存</Button>
+```
+
+- [ ] **Step 6b: 「次へ送り」でグリッドを追従させる**
+
+送り続けると編集対象がグリッドの可視範囲の外へ出る。**行位置の計算は
+`gridMetrics.ts` の純粋関数に置く**（`bun test` の対象にできる）。
+
+`gui-frontend/src/lib/browser/gridMetrics.test.ts` に足す失敗するテスト:
+
+```ts
+import { computeGridMetrics, scrollTopToReveal } from "./gridMetrics";
+
+describe("指定の1枚を可視範囲に入れる", () => {
+  // 幅 800 / タイル 200 → 3 列、行高は (tileWidth*5/4 + 18 + 8)
+  const metrics = computeGridMetrics(800, 200, 60);
+
+  test("すでに見えているなら動かさない", () => {
+    expect(scrollTopToReveal(metrics, 0, 0, 600)).toBe(0);
+  });
+
+  test("下に隠れているぶんだけ下げる", () => {
+    const row = 8;
+    const index = row * metrics.columns;
+    const scrolled = scrollTopToReveal(metrics, index, 0, 600);
+    expect(scrolled).toBeCloseTo((row + 1) * metrics.rowHeight - 600);
+  });
+
+  test("上に隠れているなら行の先頭まで戻す", () => {
+    expect(scrollTopToReveal(metrics, 0, 2000, 600)).toBe(0);
+  });
+
+  // 末尾を超えて飛ぶと paddingTop が総高を超えて画面が壊れる
+  test("末尾より下へは行かない", () => {
+    const max = metrics.totalRows * metrics.rowHeight - 600;
+    expect(scrollTopToReveal(metrics, 59, 0, 600)).toBeLessThanOrEqual(max);
+  });
+});
+```
+
+実装（`gridMetrics.ts`）:
+
+```ts
+/**
+ * `index` の 1 枚が見えるのに必要な `scrollTop`。すでに見えているなら現在値のまま。
+ *
+ * 「保存して次の写真へ」で送り続けたときに、編集対象が可視範囲の外へ出ないようにする。
+ * 計算をここに置くのは、`PhotoGrid` の runes を通さずに検査できるようにするため。
+ */
+export function scrollTopToReveal(
+  metrics: GridMetrics,
+  index: number,
+  scrollTop: number,
+  viewportHeight: number
+): number {
+  const { columns, rowHeight, totalRows } = metrics;
+  if (index < 0 || columns <= 0 || !Number.isFinite(rowHeight) || rowHeight <= 0) {
+    return scrollTop;
+  }
+  const top = Math.floor(index / columns) * rowHeight;
+  const bottom = top + rowHeight;
+  const max = Math.max(0, totalRows * rowHeight - viewportHeight);
+  if (top < scrollTop) return Math.min(top, max);
+  if (bottom > scrollTop + viewportHeight) return Math.min(bottom - viewportHeight, max);
+  return scrollTop;
+}
+```
+
+`PhotoGrid.svelte` に窓口を足す（`focusedPath` の変化を見て自動でスクロールする案は
+退けた ── 利用者自身のクリックでも動いてしまい、クリックした位置がずれる）:
+
+```ts
+  /**
+   * 指定の 1 枚を可視範囲へ入れる。呼ぶのは「保存して次の写真へ」だけ。
+   * `scrollTop` は $bindable なので、代入は親と `scroller` の両方へ伝わる
+   */
+  export function revealPath(path: string) {
+    const index = images.findIndex((image) => image.path === path);
+    if (index < 0) return;
+    scrollTop = scrollTopToReveal(metrics, index, scrollTop, viewportHeight);
+  }
+```
+
+`App.svelte`:
+
+```ts
+  let grid = $state<ReturnType<typeof PhotoGrid> | undefined>();
+```
+`PhotoGrid` に `bind:this={grid}` を付け、`handleSaveAndNext` の末尾で呼ぶ:
+
+```ts
+    if (next !== null) {
+      focusedPath = next;
+      grid?.revealPath(next);
+    }
+```
+
+e2e（`metadata.spec.ts`）:
+
+```ts
+  test("送り続けても編集対象がグリッドの外へ出ない", async ({ page }) => {
+    await installTauriStub(page, { imageCount: 120 });
+    await page.goto("/");
+    await page.getByRole("button", { name: "photos", exact: false }).first().click();
+    await page.getByRole("option").first().click();
+    await page
+      .getByRole("navigation", { name: "モード" })
+      .getByRole("button", { name: "情報" })
+      .click();
+    await page.getByRole("button", { name: "このフォルダーへの書き込みを許可..." }).click();
+
+    for (let i = 0; i < 30; i++) {
+      await page.getByRole("button", { name: "保存して次の写真へ" }).click();
+    }
+    // 選択中のタイルが描画されていて、画面内に見えていること
+    const selected = page.getByRole("option").and(page.locator('[aria-selected="true"]'));
+    await expect(selected).toHaveCount(1);
+    await expect(selected).toBeInViewport();
+  });
 ```
 
 - [ ] **Step 7: スタブに 3 コマンドを足す**
@@ -4733,20 +4931,76 @@ rail 幅 80px に日本語 3 語を収めるための決着（刷新 spec §8）
 追加する関数は `writable_image` と、その内側で使う `readable_jpeg`（読み取り側の
 コマンドも同じ条件で通す）の 2 本である旨を書き足す。
 
-- [ ] **Step 3: spec の「実装順序」と「未検証のリスク」を現状に合わせる**
+- [ ] **Step 3: spec の「既存 XMP パケットは保持する」を値の単位に直す**
+
+**受け入れ条件はバイト単位ではなく値の単位で書く**（2026-09-01 の利用者判断）。
+XML を書き戻す実装である以上、本ツールの属性を落とした `rdf:Description` の
+start タグだけは属性の区切りが単一スペースへ正規化される。**値は 1 つも変わらない**が、
+バイト列は一致しない。バイト単位を貫くならバイト列の切り貼り実装が要り、
+守れるものに対して複雑さが見合わない。
+
+「### 既存 XMP パケットは保持する（必須要件）」の引用ブロックを差し替える:
+
+```markdown
+> **既存の XMP パケットを丸ごと削除して書き直してはならない。**
+> パケットをパースし、本ツールが扱う 4 プロパティ
+> （`xmp:Rating` / `MicrosoftPhoto:Rating` / `dc:title` / `dc:description`）
+> **だけを差し替え、他の名前空間のプロパティと値はすべて元のまま残す**。
+> 触る必要が無い要素・属性はバイト列のまま写す。
+>
+> 例外は、本ツールの属性を落とした `rdf:Description` の start タグだけである。
+> 組み直しにより属性の区切りが単一スペースへ正規化される（**値は不変**）。
+> XML の書き戻しで実装する以上ここは避けられず、守りたいのは
+> 「他アプリのデータを壊さないこと」であってバイト列の同一性ではない。
+```
+
+「## テスト方針」の該当行も直す:
+
+```markdown
+- **既存 XMP の保持** — `crs:` 等の他名前空間を含む XMP パケットを持つ画像に書き込み、
+  **本ツールが扱う 4 プロパティ以外のプロパティと値が 1 つも変わらないこと**を検証する。
+  Lightroom 書き出し画像をフィクスチャに含める
+```
+
+- [ ] **Step 4: spec の「実装順序」と「未検証のリスク」を現状に合わせる**
 
 - 「実装順序」の 1 と 2 に **完了印**を付け、3 が本計画であることと計画への
   リンクを書く
-- 「検証済みの事実と、未検証のリスク」の**冒頭に結論を追記する**。Task 1 の実測結果
-  （カメラ直出し JPEG での round-trip）と、Task 7 で既存 XMP 保持を満たしたこと。
-  **数字と機種名を書く** ── 「通った」だけでは次に読む人が再検査できない
+- 「検証済みの事実と、未検証のリスク」の**冒頭に結論を追記する**。Task 1 の実測結果と、
+  Task 7 で既存 XMP 保持を満たしたこと。**数字と画像の出所を書く** ──
+  「通った」だけでは次に読む人が再検査できない
+- **「未検証（実装時に必ず潰すこと）」の要求を、残リスクの記述に書き換える**
+  （2026-09-01 の利用者確認: 利用者はカメラ直出し JPEG を使わない）:
 
-- [ ] **Step 4: `docs/README.md` を直す**
+```markdown
+### 残リスク: MakerNote 付き JPEG
 
-- メタデータ編集 spec を「設計確定・実装前」から「現行仕様」の表へ移す
+`little_exif` の issue #93（既存 Exif を読み込んで書き戻すと
+`failed to fill whole buffer` で失敗する）は MakerNote が絡む可能性があるが、
+**本ツールが実際に書き込む対象は Lightroom 書き出しの JPEG であり、MakerNote を
+持たない**（利用者確認済み）。当初は「カメラ直出しの JPEG で必ず 1 度検証する」を
+実装の前提条件としていたが、対象に存在しない条件のために着手を止める意味が無い。
+
+代わりに**壊さずに失敗すること**で守る。`core::metadata` の書き込みは、
+既存 Exif を解析できない場合に**作り直さず `Err` で止める**。置き換えは
+検証付き原子的置換なので元ファイルは必ず無傷で、症状は「保存できませんでした」
+であってデータ消失ではない。この保証は
+`core/tests/metadata_integration.rs` の
+`a_file_whose_exif_cannot_be_parsed_is_refused_without_being_modified` が守る。
+
+MakerNote 付きの JPEG が手に入ったら、`core/tests/metadata_spike.rs` の
+`#[ignore]` テストに `PICTURE_TOOL_SPIKE_JPEG` で渡していつでも再検査できる。
+```
+
+- [ ] **Step 5: `docs/README.md` を直す**
+
+- メタデータ編集 spec を「設計確定・実装前」から「現行仕様」の表へ移す。
+  **内容欄に「レイアウトの出典は GUI デザイン刷新 spec」と 1 行添える**
+  （2026-09-01 の利用者判断）。同じ表に 2 本並ぶので、注記が無いと読者が
+  レイアウトの出典を取り違える
 - 「直近の実装計画」の先頭に本計画を足す
 
-- [ ] **Step 5: `CLAUDE.md` を直す**
+- [ ] **Step 6: `CLAUDE.md` を直す**
 
 - 「Core ライブラリ API」の表に行を足す:
 
@@ -4773,7 +5027,7 @@ rail 幅 80px に日本語 3 語を収めるための決着（刷新 spec §8）
 - 「ユーザーデータの置き場所」の下に、メタデータの書き込み先が
   **利用者の写真そのもの**であることを 1 行足す
 
-- [ ] **Step 6: 全部通してコミット**
+- [ ] **Step 7: 全部通してコミット**
 
 Run: `make check && cd gui-frontend && bun run e2e`
 Expected: PASS
@@ -4783,7 +5037,7 @@ git add docs CLAUDE.md
 git commit -m "docs: メタデータ編集: spec の GUI 節を刷新に寄せ、実装済みの前提を反映する"
 ```
 
-- [ ] **Step 7: ブランチを畳む**
+- [ ] **Step 8: ブランチを畳む**
 
 `superpowers:finishing-a-development-branch` に従って `main` へ統合する。
 
@@ -4797,12 +5051,14 @@ git commit -m "docs: メタデータ編集: spec の GUI 節を刷新に寄せ�
 
 | 項目 | 結果 |
 |---|---|
-| 使った画像（機種 / サイズ） | |
+| 使った画像（出所 / 機種 / サイズ） | |
+| Lightroom 書き出しか | |
 | MakerNote / GPS の有無 | |
 | 1 回目の書き込み | |
 | 2 回目の書き込み（issue #93） | |
 | ピクセル不変 | |
 | 消えたタグ | |
+| **MakerNote 付きでも検証できたか**（できなければ残リスクのまま） | |
 
 ### Task 17 の実測（必須）
 
@@ -4826,18 +5082,21 @@ git commit -m "docs: メタデータ編集: spec の GUI 節を刷新に寄せ�
 
 ---
 
-## 未決（ユーザー回答待ち。決まるまで着手しない）
+## 決着（2026-09-01 の利用者判断）
 
-| # | 何が分からないか | どちらに倒すと何が変わるか |
+| # | 決めたこと | 反映先 |
 |---|---|---|
-| U1 | Task 1 / 2 が要るカメラ直出し JPEG（MakerNote 付き）と Lightroom 書き出し JPEG が手元にあるか | **無いまま進める**と、spec の「割れたらクレート選定ごと見直す」分岐が判定不能のまま Task 3 以降へ進む。**待つ**なら Task 1 が着手のブロッカーになる |
-| U2 | `docs/README.md` の「現行仕様」表に、レイアウトを刷新 spec へ委譲したメタデータ編集 spec を並べてよいか | **並べる**と表は 1 つで済むが、読者がレイアウトの出典を取り違えうる。**注記付きで分ける**と索引が複雑になる |
-| U3 | 「保存して次の写真へ」でグリッドのスクロールを追従させるか | **追従させない**と、可視範囲の外の写真を編集し続ける状態になり得る。**追従させる**なら `PhotoGrid` にスクロール指示の窓口を足すことになる（刷新 spec §4-3 に記述なし） |
-| U4 | 既存 XMP 保持の受け入れ条件を「バイト単位」と「値の単位」のどちらで書くか | spec は「1 バイトも変わらないこと」と書いているが、所有属性を落とした `rdf:Description` の start タグだけは組み直しで整形が変わる（値は不変）。**バイト単位を貫く**なら XML の書き戻しをやめてバイト列の切り貼りで実装することになり、Task 7 の複雑さが跳ねる。**値の単位に緩める**なら spec の当該行も直す |
+| U1 | **カメラ直出し JPEG は使わない。** 利用者の写真はすべて Lightroom 書き出しで、本ツールが書き込む対象に MakerNote は入っていない。検証は Lightroom 書き出しで行い、MakerNote 付きは**残リスク**として「壊さずに失敗する」ことで守る | Task 1 の注記、Task 2 のフィクスチャ 2 本、Task 10 の `a_file_whose_exif_cannot_be_parsed_is_refused_without_being_modified`、Task 18 Step 4 の spec 書き換え |
+| U2 | `docs/README.md` の「現行仕様」表に並べ、**レイアウトの出典が刷新 spec であることを 1 行添える** | Task 18 Step 5 |
+| U3 | 「保存して次の写真へ」で**グリッドのスクロールを追従させる**。行位置の計算は `gridMetrics.ts` の純粋関数に置く | Task 14 Step 6b |
+| U4 | 既存 XMP 保持の受け入れ条件は**値の単位**に緩める。spec 本文（§既存 XMP パケットは保持する / §テスト方針）も書き換える | Global Constraints、Task 7、Task 18 Step 3 |
 
-U4 は本計画の Global Constraints と Task 7 に「値の単位」で暫定的に書いてあるが、
-**spec 本文（§既存 XMP パケットは保持する / §テスト方針）はまだ直していない。**
-U4 の回答が出るまで Task 18 で spec を書き換えないこと。
+**U1 は spec の要求を狭める判断である。** spec は「カメラ直出しの JPEG で必ず 1 度検証する。
+割れたらクレート選定ごと設計を見直す」と書いていた。対象に存在しない条件のために
+着手を止める意味は無いが、**代わりに置いた保証（解析できない Exif は作り直さずに
+`Err` で止める）が消えると、この判断の前提ごと崩れる。**
+`a_file_whose_exif_cannot_be_parsed_is_refused_without_being_modified` を
+「よく分からないテスト」として消さないこと。
 
 ---
 
