@@ -242,6 +242,15 @@ mod contract {
                 },
             ),
             entry(
+                "ratingEntryUnrated",
+                "RatingEntry",
+                "未評価（rating: None）の直列化を固定する。読めなかった場合と綴りが同じになる",
+                RatingEntry {
+                    path: "/home/user/photos/unrated.jpg".to_string(),
+                    rating: None,
+                },
+            ),
+            entry(
                 "processingConfigWithMaxWidth",
                 "ProcessingConfig",
                 "出力幅の上限あり（4 の倍数で送る）",

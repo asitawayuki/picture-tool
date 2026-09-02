@@ -49,6 +49,15 @@ export interface StubOptions {
   metadataWarnings?: string[];
   /** grant_metadata_editing が「許可しない」を返す */
   denyGrant?: boolean;
+  /**
+   * 情報モードへ入っただけ（保存を経由せず）で★が出ることを検査するための下ごしらえ。
+   * 画像のインデックス（`list_images` が返す 0 始まりの並び順）→ 評価値（1〜5）。
+   *
+   * `read_image_ratings` は `stored`（保存済みメタデータ）からしか値を引かない。
+   * 保存経路のテストしか無いと、`App.svelte` の可視範囲起点の `$effect` を丸ごと
+   * 消しても e2e が気づけない穴になる（裁定 X1）。
+   */
+  seedRatings?: Record<number, number>;
 }
 
 /**
@@ -66,10 +75,18 @@ export async function installTauriStub(page: Page, options: StubOptions = {}) {
       failThumbnails: boolean;
       metadataWarnings: string[];
       denyGrant: boolean;
+      seedRatings: Record<number, number>;
       template: Template;
     }) => {
-    const { imageCount, frameWarnings, failThumbnails, metadataWarnings, denyGrant, template } =
-      opts;
+    const {
+      imageCount,
+      frameWarnings,
+      failThumbnails,
+      metadataWarnings,
+      denyGrant,
+      seedRatings,
+      template,
+    } = opts;
     /** サムネイルは 24 種類だけ作って使い回す。
      *  全部同じにするとデコードが 1 回で済んでしまい、スクロール計測の
      *  負荷が実際より軽く出る。全部別にすると生成自体が計測を汚す。 */
@@ -130,11 +147,20 @@ export async function installTauriStub(page: Page, options: StubOptions = {}) {
      *  キャッシュが当たってしまい「取り直している」ことを検査できない */
     function imagesFor(folder: string) {
       const dir = folder.replace(/\/+$/, "") || "/photos";
-      return Array.from({ length: imageCount }, (_, i) => ({
+      const images = Array.from({ length: imageCount }, (_, i) => ({
         ...template.image,
         name: `photo-${String(i).padStart(4, "0")}.jpg`,
         path: `${dir}/${i}.jpg`,
       }));
+      // 「読み込んだ時点で既に★が付いている」fixture。保存で上書き済みの分は
+      // 触らない（テスト内で保存 → 再訪した場合に、仕込みで書き戻さないため）
+      for (const [indexStr, rating] of Object.entries(seedRatings)) {
+        const image = images[Number(indexStr)];
+        if (image && !stored.has(image.path)) {
+          stored.set(image.path, { title: null, comment: null, rating });
+        }
+      }
+      return images;
     }
 
     const presets = [template.preset];
@@ -147,12 +173,27 @@ export async function installTauriStub(page: Page, options: StubOptions = {}) {
 
     // どのコマンドが何で呼ばれたかを検査できるようにする。
     // 「Rust へ通知した」型の配線は、画面に出ないので他に確かめようが無い。
-    // **上限付きの記録**（裁定 V1）。無制限に積むと、`read_image_ratings` が
-    // 可視範囲のたびに呼ばれる scroll.spec.ts（3,000 枚）で数千要素になる。
-    // 直近だけ残せば、末尾を見る既存の検査（`set_unsaved_state` の最新値）は壊れない
-    const CALLS_LIMIT = 200;
+    // **コマンドごとに直近 N 件だけ残す**（裁定 V1 / 裁定 X3 Minor#1）。
+    // 総件数で切ると、頻繁に呼ばれるコマンド（`get_thumbnail` 等）が
+    // `set_unsaved_state` のようなたまにしか呼ばれないコマンドを押し出し、
+    // 「最新の set_unsaved_state を見る」検査が理由不明に落ちうる。
+    // コマンドごとに分けて間引けば、そのコマンド自身の直近 N 件は必ず残る
+    const CALLS_LIMIT_PER_CMD = 50;
+    const callsByCmd = new Map<string, { cmd: string; args: unknown }[]>();
+    /** 検査用に公開する平坦な一覧。中身はコマンドごとの直近 N 件を連結したもの
+     *  （全コマンドをまたいだ呼び出し順は保証しない。既存の検査は cmd で絞ってから
+     *  末尾を見るだけなので、その範囲では影響しない） */
     const calls: { cmd: string; args: unknown }[] = [];
     (window as unknown as Record<string, unknown>).__stubCalls = calls;
+
+    function recordCall(cmd: string, args: unknown) {
+      const list = callsByCmd.get(cmd) ?? [];
+      list.push({ cmd, args });
+      if (list.length > CALLS_LIMIT_PER_CMD) list.shift();
+      callsByCmd.set(cmd, list);
+      calls.length = 0;
+      for (const l of callsByCmd.values()) calls.push(...l);
+    }
 
     const handlers: Record<string, (args: any) => unknown> = {
       list_drives: () => ["/"],
@@ -260,8 +301,7 @@ export async function installTauriStub(page: Page, options: StubOptions = {}) {
         return id;
       },
       async invoke(cmd: string, args: any) {
-        calls.push({ cmd, args });
-        if (calls.length > CALLS_LIMIT) calls.shift();
+        recordCall(cmd, args);
         const handler = handlers[cmd];
         if (!handler) throw new Error(`stub: 未対応のコマンド ${cmd}`);
         return handler(args ?? {});
@@ -274,6 +314,7 @@ export async function installTauriStub(page: Page, options: StubOptions = {}) {
       failThumbnails: options.failThumbnails ?? false,
       metadataWarnings: options.metadataWarnings ?? [],
       denyGrant: options.denyGrant ?? false,
+      seedRatings: options.seedRatings ?? {},
       template: TEMPLATE,
     }
   );

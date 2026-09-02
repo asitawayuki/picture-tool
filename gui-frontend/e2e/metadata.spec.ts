@@ -423,4 +423,29 @@ test.describe("メタデータモード", () => {
     await page.getByLabel("タイトル").fill("書きかけ");
     await expect(tile.getByTitle("未保存の変更があります")).toBeVisible();
   });
+
+  test("情報モードへ入っただけで、読み込み時点の★がタイルに出る（保存を経由しない・裁定 X1）", async ({
+    page,
+  }) => {
+    // beforeEach とは別条件（seedRatings 付き）なのでこのテスト内で貼り直す。
+    // `read_image_ratings` は保存済み（`stored`）からしか値を引かないので、
+    // 「保存を一度もせずに、情報モードへ入っただけで★が出る」経路は
+    // この仕込みが無いと検査しようが無い（可視範囲起点の $effect を丸ごと消しても
+    // 保存経由のテストだけでは気づけない、という指摘への対応）
+    await installTauriStub(page, { imageCount: 12, seedRatings: { 0: 3 } });
+    await page.goto("/");
+    await page.getByRole("button", { name: "photos", exact: false }).first().click();
+
+    const tile = page.getByRole("option").first();
+    // 前提条件: フォルダーを開いた直後（まだ情報モードではない）は★が出ていない
+    await expect(tile.getByText("★", { exact: false })).toBeHidden();
+
+    // 保存は一切していない。モード切替だけで★が出るはず
+    await page
+      .getByRole("navigation", { name: "モード" })
+      .getByRole("button", { name: "情報" })
+      .click();
+
+    await expect(tile.getByText("★★★")).toBeVisible();
+  });
 });

@@ -51,6 +51,12 @@ export const ratingEntry: RatingEntry = {
   rating: 3,
 };
 
+/** 未評価（rating: None）の直列化を固定する。読めなかった場合と綴りが同じになる */
+export const ratingEntryUnrated: RatingEntry = {
+  path: "/home/user/photos/unrated.jpg",
+  rating: null,
+};
+
 /** 出力幅の上限あり（4 の倍数で送る） */
 export const processingConfigWithMaxWidth: ProcessingConfig = {
   bg_color: "white",
