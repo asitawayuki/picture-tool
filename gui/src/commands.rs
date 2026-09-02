@@ -665,6 +665,28 @@ pub async fn read_image_metadata(path: String) -> Result<core::metadata::Metadat
     .map_err(|e| e.to_string())?
 }
 
+/// メタデータの書き込み先を検証する。
+///
+/// **見るのは `metadata_roots` だけ。** 変換の出力先の承認（`pick_output_folder`）は
+/// ここでは効かない ── 「出力先フォルダーを選択」のダイアログは既存写真の書き換えに
+/// ついて何も言っていないので、それを書き込みの同意として使ってはならない。
+///
+/// コマンド本体（`#[tauri::command]` かつ `tauri::State` を取る）は単体テストから
+/// 呼べないので、**どちらの集合を見るかという判断だけ**をここへ出してテスト可能にしている。
+fn metadata_target(state: &ProcessingState, path: &str) -> Result<PathBuf, String> {
+    security::writable_image(&state.metadata_roots, path)
+}
+
+/// メタデータ編集の承認を記録する。**足すのは `metadata_roots` だけ。**
+///
+/// 承認ダイアログ（`grant_metadata_editing`）は「タイトル・コメント・評価を
+/// 書き込めるようにします」としか言っておらず、変換の出力先になることには触れていない。
+/// `metadata_target` と対にしてここへ出してあるのは、同じ理由（コマンド本体を
+/// 単体テストから呼べない）でテスト可能にするため。
+fn approve_metadata_root(state: &ProcessingState, dir: PathBuf) {
+    state.metadata_roots.grant(dir);
+}
+
 /// 検証付き原子的置換で書き込み、**保存直後の実際の中身を返す**
 ///
 /// 戻り値を保存済みの値としてそのまま使えるので、フロント側が
@@ -676,7 +698,7 @@ pub async fn write_image_metadata(
     path: String,
     metadata: core::metadata::EditableMetadata,
 ) -> Result<core::metadata::MetadataRead, String> {
-    let file = security::writable_image(&state.writable_roots, &path)?;
+    let file = metadata_target(&state, &path)?;
     tokio::task::spawn_blocking(move || {
         core::metadata::write_metadata(&file, &metadata).map_err(|e| e.to_string())?;
         core::metadata::read_metadata(&file).map_err(|e| e.to_string())
@@ -724,7 +746,7 @@ pub async fn grant_metadata_editing(
     // シンボリックリンク越しなどで境界とフロントの表示がずれ、
     // 「承認済みと出ているのに保存が弾かれる」になる
     let granted = dir.to_string_lossy().to_string();
-    state.writable_roots.grant(dir);
+    approve_metadata_root(&state, dir);
     Ok(Some(granted))
 }
 
@@ -749,7 +771,16 @@ pub async fn read_image_ratings(paths: Vec<String>) -> Result<Vec<RatingEntry>, 
     /// 乗っ取られた webview がライブラリ全体を投げてきても走査量が跳ねない
     const MAX_BATCH: usize = 64;
 
-    let paths: Vec<String> = paths.into_iter().take(MAX_BATCH).collect();
+    // **黙って切らずに拒否する。** 超過分を捨てると、返ってこなかったパスは
+    // 呼び出し側の期待から静かに落ち、「一部の★が永遠に出ない」という
+    // 診断しにくい症状になる（フロントは `CHUNK = 64` で分割して送る）
+    if paths.len() > MAX_BATCH {
+        return Err(format!(
+            "Too many paths in one request: {} (max {})",
+            paths.len(),
+            MAX_BATCH
+        ));
+    }
     tokio::task::spawn_blocking(move || {
         use rayon::prelude::*;
         let entries = paths
@@ -936,5 +967,57 @@ mod tests {
         // 着手していないものは「失敗」ではない。要求リストとの差分で
         // 「未処理」として表示させるため、どちらにも載せない。
         assert!(failures.is_empty());
+    }
+
+    // --- 書き込みの承認: 変換の出力先とメタデータ編集は別の同意 ---
+
+    /// **出力先フォルダーの選択は、メタデータ書き込みの承認を兼ねない。**
+    ///
+    /// `pick_output_folder` のダイアログは「出力先フォルダーを選択」としか言っておらず、
+    /// 既存写真の書き換えについては何も述べていない。利用者が出力先に自分の写真
+    /// フォルダーを選ぶのは普通の操作なので、そこを兼ねてしまうと追加の同意なしに
+    /// 配下の全 JPEG が書き換え可能になる。
+    #[test]
+    fn approving_an_output_folder_does_not_approve_metadata_writing() {
+        let dir = TempDir::new().unwrap();
+        let photo = dir.path().join("a.jpg");
+        write_real_jpeg(&photo);
+        let root = fs::canonicalize(dir.path()).unwrap();
+
+        let state = ProcessingState::new();
+        // `pick_output_folder` が承認する側だけを埋める
+        state.writable_roots.grant(root.clone());
+
+        // 前提条件: 変換の出力先としては承認済みである
+        // （＝「何も承認していないから拒否された」ではない）
+        assert!(security::writable_dir(&state.writable_roots, &as_str(dir.path())).is_ok());
+
+        assert!(
+            metadata_target(&state, &as_str(&photo)).is_err(),
+            "出力先の承認だけでメタデータを書き換えられてはならない"
+        );
+
+        // 前提条件: `grant_metadata_editing` が承認する側を埋めれば通る
+        // （＝ファイルそのものが理由で落ちているのではない）
+        approve_metadata_root(&state, root);
+        assert!(metadata_target(&state, &as_str(&photo)).is_ok());
+    }
+
+    /// 逆向きも兼ねない。メタデータ編集の承認は変換の出力先にならない
+    #[test]
+    fn approving_metadata_editing_does_not_approve_an_output_folder() {
+        let dir = TempDir::new().unwrap();
+        let photo = dir.path().join("a.jpg");
+        write_real_jpeg(&photo);
+        let root = fs::canonicalize(dir.path()).unwrap();
+
+        let state = ProcessingState::new();
+        // `grant_metadata_editing` が承認する側だけを埋める
+        approve_metadata_root(&state, root);
+
+        // 前提条件: メタデータ編集としては承認済みである
+        assert!(metadata_target(&state, &as_str(&photo)).is_ok());
+
+        assert!(security::writable_dir(&state.writable_roots, &as_str(dir.path())).is_err());
     }
 }

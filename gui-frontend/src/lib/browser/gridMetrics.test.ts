@@ -18,6 +18,7 @@ import {
   computeGridMetrics,
   computeVisibleRange,
   scrollTopToReveal,
+  tileLabel,
 } from "./gridMetrics";
 
 describe("computeGridMetrics", () => {
@@ -203,5 +204,21 @@ describe("指定の1枚を可視範囲に入れる", () => {
     const overScrolled = metrics.totalRows * metrics.rowHeight + 10_000;
     const max = metrics.totalRows * metrics.rowHeight - 600;
     expect(scrollTopToReveal(metrics, index, overScrolled, 600)).toBeLessThanOrEqual(max);
+  });
+});
+
+// ★と未保存マークはどちらも `aria-hidden` の飾りなので、読み上げ名に
+// 出さないと支援技術からは「どれが未保存でどれが★付きか」が一切分からない
+describe("tileLabel", () => {
+  test("何も無ければファイル名だけ", () => {
+    expect(tileLabel("a.jpg", undefined, false)).toBe("a.jpg");
+    // 未取得（undefined）と「読んだが未評価」（null）を区別せず、どちらも出さない
+    expect(tileLabel("a.jpg", null, false)).toBe("a.jpg");
+  });
+
+  test("★と未保存を名前に足す", () => {
+    expect(tileLabel("a.jpg", 3, false)).toBe("a.jpg ★3");
+    expect(tileLabel("a.jpg", null, true)).toBe("a.jpg 未保存");
+    expect(tileLabel("a.jpg", 5, true)).toBe("a.jpg ★5 未保存");
   });
 });

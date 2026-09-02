@@ -33,6 +33,14 @@
 //! 「利用者が自分で承認したフォルダーのメタデータを壊す」まで。承認していない
 //! フォルダーには一切書けず、承認は次回起動時に消える。
 //!
+//! **2 つの書き込みは別々の `WritableRoots` を見る**（`ProcessingState` の
+//! `writable_roots` と `metadata_roots`）。**それぞれのダイアログが承認したことだけを
+//! 承認する**ため ── 「出力先フォルダーを選択」のダイアログは既存写真の書き換えについて
+//! 一言も触れておらず、出力先に自分の写真フォルダーを選ぶのはごく普通の操作である。
+//! 集合を共有していると、その選択だけで webview が追加の同意なしに配下の全 JPEG の
+//! メタデータを書き換えられてしまう（フロントの承認表示も実権限より狭くなり、
+//! 「まだ許可されていません」と出したまま書き込めてしまう）。
+//!
 //! 判定と実際の I/O の間にリンクを差し替えられる TOCTOU までは防げない。
 //! これはローカル権限を持つ攻撃者を想定したもので、本モジュールの脅威モデル
 //! （乗っ取られた webview）の外側にある。
@@ -68,11 +76,12 @@ const MAX_PRESET_NAME_CHARS: usize = 64;
 /// **どちらの経路も webview 単独では通せない** ── 必ず OS ネイティブのダイアログを経由し、
 /// 利用者の操作（許可 / 選択）が要る。承認はプロセス限りで、次回起動時に消える。
 ///
-/// **この集合は 2 つの用途で共有されている**（`writable_dir` と `writable_image` の両方が
-/// 参照する）。つまり `grant_metadata_editing` で承認したフォルダーは、変換の出力先
-/// （`writable_dir`）としても承認済みになる。実害は「そのフォルダーに `_processed` 付きの
-/// 変換済みファイルが増える」までにとどまる ── 既存写真の上書きは出力ファイル名の重複回避が
-/// 防ぎ、元ファイルの削除は別途ネイティブの確認（`confirm_delete_originals`）が要るため。
+/// **この型は用途ごとに別々の実体を持つ。** `ProcessingState` が
+/// `writable_roots`（変換の出力先。`pick_output_folder` が足し、`writable_dir` が見る）と
+/// `metadata_roots`（メタデータ編集。`grant_metadata_editing` が足し、`writable_image` が
+/// 見る）の 2 本を持ち、**一方の承認が他方に波及することはない**。
+/// かつては 1 本を共有していたが、出力先の選択ダイアログが既存写真の書き換えについて
+/// 何も言っていない以上、それを書き込みの同意として使うことはできない。
 #[derive(Default)]
 pub struct WritableRoots {
     roots: Mutex<Vec<PathBuf>>,
@@ -651,6 +660,33 @@ mod tests {
         // 落ちているのではない）
         assert!(readable_image(&as_str(&link)).is_ok());
         assert!(writable_image(&roots, &as_str(&link)).is_err());
+    }
+
+    /// **変換の出力先として承認しただけのフォルダーでは、メタデータ編集を拒否する。**
+    ///
+    /// 「出力先フォルダーを選択」のダイアログは既存写真の書き換えについて一言も
+    /// 触れていないので、その承認をメタデータ書き込みの同意に流用してはならない。
+    /// 実際にどちらの集合を見るかという**配線**は `commands::metadata_target` 側の
+    /// テストが押さえる（コマンド本体は単体テストから呼べないため）。
+    #[test]
+    fn writable_image_rejects_a_folder_that_was_only_approved_as_an_output_folder() {
+        let dir = TempDir::new().unwrap();
+        let photo = dir.path().join("a.jpg");
+        write_real_jpeg(&photo);
+
+        let output_roots = WritableRoots::default();
+        let metadata_roots = WritableRoots::default();
+        output_roots.grant(fs::canonicalize(dir.path()).unwrap());
+
+        // 前提条件: 変換の出力先としては通る（＝「どの集合でも拒否される」ではない）
+        assert!(writable_dir(&output_roots, &as_str(dir.path())).is_ok());
+
+        assert!(writable_image(&metadata_roots, &as_str(&photo)).is_err());
+
+        // 前提条件: メタデータ編集として承認すれば通る（＝ファイルそのものが
+        // 理由で落ちているのではない）
+        metadata_roots.grant(fs::canonicalize(dir.path()).unwrap());
+        assert!(writable_image(&metadata_roots, &as_str(&photo)).is_ok());
     }
 
     // --- 一覧の境界: 実在ディレクトリのみ ---

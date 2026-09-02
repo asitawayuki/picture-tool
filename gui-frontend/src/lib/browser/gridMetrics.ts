@@ -137,3 +137,21 @@ export function scrollTopToReveal(
   if (bottom > scrollTop + viewportHeight) return Math.min(bottom - viewportHeight, max);
   return scrollTop;
 }
+
+/**
+ * タイルの読み上げ名。**★と未保存マークは視覚だけの表現**（どちらも
+ * `aria-hidden`）なので、支援技術にはここで文字として渡す。
+ *
+ * 計算をここに置くのは `scrollTopToReveal` と同じ理由 ── `PhotoGrid` の runes を
+ * 通さずに検査できるようにするため。
+ */
+export function tileLabel(
+  name: string,
+  stars: number | null | undefined,
+  unsaved: boolean
+): string {
+  const parts = [name];
+  if (stars) parts.push(`★${stars}`);
+  if (unsaved) parts.push("未保存");
+  return parts.join(" ");
+}

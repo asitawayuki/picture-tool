@@ -9,6 +9,7 @@
     computeGridMetrics,
     computeVisibleRange,
     scrollTopToReveal,
+    tileLabel,
   } from "./gridMetrics";
   import type { RequestKind } from "./requestQueue";
   import type { ImageEntry } from "../types";
@@ -325,6 +326,7 @@
         {@const index = range.startIndex + offset}
         {@const thumb = thumbnailFor(image.path, metrics.thumbnailSize)}
         {@const stars = ratingFor(image.path)}
+        {@const unsaved = unsavedPath === image.path}
         <!-- キーボードは listbox（親）側の onkeydown が composite widget として
              一括で受ける。ARIA の listbox/option ではそれが正しい形で、
              option ごとに handler を重ねると同じキーが二重に走る。
@@ -338,7 +340,7 @@
           aria-selected={isSelected(image)}
           aria-setsize={images.length}
           aria-posinset={index + 1}
-          aria-label={image.name}
+          aria-label={tileLabel(image.name, stars, unsaved)}
           tabindex={index === rovingIndex ? 0 : -1}
           data-index={index}
           onclick={(e) => {
@@ -364,7 +366,7 @@
             {/if}
           </div>
           <span class="filename">{image.name}</span>
-          {#if unsavedPath === image.path}
+          {#if unsaved}
             <span class="unsaved-mark" title="未保存の変更があります" aria-hidden="true">●</span>
           {/if}
           {#if stars}

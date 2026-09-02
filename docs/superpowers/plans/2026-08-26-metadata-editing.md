@@ -82,7 +82,7 @@ spec の「検証済みの事実と、未検証のリスク」は、実測が**�
 | DTO 契約 | `gui-frontend/src/lib/dto.contract.ts` は**手で編集しない**。`gui/src/types.rs` の `mod contract` を直し、`UPDATE_DTO_CONTRACT=1 cargo test -p picture-tool-gui contract` で再生成する |
 | core は `eprintln!` しない | 利用者に伝える事象は戻り値の `warnings` に積む（唯一の例外は Task 9 で明示） |
 | 依存のバージョン固定 | `little_exif = "=0.6.23"` / `img-parts = "=0.4.0"` / `quick-xml = "0.37"`。前 2 者は 1.0 未満・更新頻度が緩やかなため `=` で固定する（spec の要求） |
-| `quick-xml` は 1 版に揃える | `little_exif` 0.6.23 が `quick-xml` 0.37.5 に依存している。**0.42 を足すと同じクレートの 2 版が同時にリンクされる**（workspace `Cargo.toml` の S6-M19 の禁止事項）。`0.37` を指定して cargo に統合させること（`cargo tree` で 1 行になるのを確認済み） |
+| `quick-xml` は 1 版に揃える | `little_exif` 0.6.23 が `quick-xml` 0.37.5 に依存している。**0.42 を足すと同じクレートの 2 版が同時にリンクされる**（workspace `Cargo.toml` の S6-M19 の禁止事項）。`0.37` を指定して cargo に統合させ、**`little_exif` と `picture-tool-core` が同じ版を共有する**こと（`cargo tree -p picture-tool-core -i quick-xml` で確認済み。`Cargo.lock` には macOS 限定の `plist` 経由で 0.38.4 が**変更前から**並んでおり、これは本計画の対象外） |
 | Svelte 5 | runes（`$state` / `$derived` / `$effect`）。旧構文は使わない |
 | 生の色を書かない | 余白・角丸・タイポも `gui-frontend/src/styles/` のトークン経由 |
 | e2e のポート | 5174 が塞がっている環境では `E2E_PORT=5199 bun run e2e` |

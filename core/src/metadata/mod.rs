@@ -153,21 +153,35 @@ pub fn read_metadata(path: &Path) -> Result<MetadataRead> {
 
     let mut warnings = Vec::new();
 
+    // 解析は先に試すが、**警告にするかどうかは JPEG の構造を見てから決める**
+    // （`raw` を `Jpeg` へ渡すと所有権が移るので、順序はこの形になる）。
+    let exif_parse = Metadata::new_from_vec(&raw, FileExtension::JPEG);
+
+    let jpeg = Jpeg::from_bytes(Bytes::from(raw))
+        .with_context(|| format!("JPEG として読めません: {}", path.display()))?;
+
     // Exif が無い画像でも読み取り自体は成立させる（全項目 None になるだけ）。
     // ただし**解析に失敗したことは黙らない** ── そのまま保存すると Exif を
     // 作り直すことになるので、利用者に伝わっている必要がある
-    // （書き込み側の `build` は同じ状況で Err にする）
-    let exif_meta = match Metadata::new_from_vec(&raw, FileExtension::JPEG) {
+    // （書き込み側の `build` は同じ状況で Err にする）。
+    //
+    // **「Exif が無い」と「Exif が壊れている」を混ぜない。** `little_exif` は
+    // APP1 に出会わないまま EOI へ到達しても `Err("No EXIF data found!")` を返すので、
+    // 素直に警告へ積むと **Exif APP1 を持たない JPEG すべて**に生の英語エラーが出る。
+    // 本ツールが変換して出力した JPEG は Exif を持たないため、`_processed` フォルダーを
+    // 情報モードで開くと全写真がその状態になる。判定は `build` 側と同じ
+    // `has_exif_segment` に揃える。
+    let exif_meta = match exif_parse {
         Ok(meta) => meta,
         Err(error) => {
-            warnings.push(format!("Exif を解析できませんでした: {}", error));
+            if has_exif_segment(&jpeg) {
+                warnings.push(format!("Exif を解析できませんでした: {}", error));
+            }
             Metadata::new()
         }
     };
     let exif_side = exif::read(&exif_meta);
 
-    let jpeg = Jpeg::from_bytes(Bytes::from(raw))
-        .with_context(|| format!("JPEG として読めません: {}", path.display()))?;
     let xmp_side = match xmp::extract(&jpeg) {
         Some(packet) => xmp::read(&packet)?,
         None => xmp::XmpSide::default(),

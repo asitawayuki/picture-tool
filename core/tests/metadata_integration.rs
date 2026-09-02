@@ -463,3 +463,67 @@ fn writing_metadata_to_a_jpeg_without_any_exif_segment_creates_one() {
         read.warnings
     );
 }
+
+/// **Exif APP1 を持たない JPEG を読んでも警告は出ないこと。**
+///
+/// `little_exif` の読み取りは、APP1 に出会わないまま EOI へ到達すると
+/// `Err("No EXIF data found!")` を返す。これをそのまま警告へ積むと
+/// **Exif を持たない JPEG すべて**に生の英語エラーが出る ── 本ツールの変換出力
+/// （`JpegEncoder` は Exif を書かない）が丸ごとそれに当たるので、利用者が
+/// `_processed` フォルダーを情報モードで開くと全写真に警告が並ぶ。
+///
+/// あわせて **XMP 側の読み取りが生きている**ことも見る。警告が空なだけなら
+/// 「読み取りごと死んでいる」でも通ってしまうため。
+#[test]
+fn reading_a_jpeg_without_any_exif_segment_reports_no_warning() {
+    let (_dir, path) = scratch("exif-only.jpg");
+
+    // まず両方（Exif と XMP）に値を書いてから、Exif APP1 だけを取り除く。
+    // XMP が残るので「Exif 不在でも XMP は読める」ことを検査できる
+    write_metadata(
+        &path,
+        &EditableMetadata {
+            title: Some("夕暮れの港".into()),
+            rating: Some(3),
+            ..Default::default()
+        },
+    )
+    .unwrap();
+
+    let written = std::fs::read(&path).unwrap();
+    let mut jpeg =
+        img_parts::jpeg::Jpeg::from_bytes(img_parts::Bytes::from(written.clone())).unwrap();
+    jpeg.segments_mut().retain(|segment| {
+        !(segment.marker() == img_parts::jpeg::markers::APP1
+            && segment.contents().starts_with(b"Exif\0\0"))
+    });
+    let stripped = jpeg.encoder().bytes().to_vec();
+    std::fs::write(&path, &stripped).unwrap();
+
+    // 前提条件1: Exif APP1 が本当に無い（＝解析が必ず失敗する状況を作れている）
+    assert!(
+        !stripped.windows(6).any(|window| window == b"Exif\0\0"),
+        "前提条件が崩れている: Exif APP1 が残っている"
+    );
+    // 前提条件2: XMP パケットは残っている（読めるものが何も無いなら、
+    // 「XMP が読めた」という下の検査は成立しない）
+    assert!(
+        stripped
+            .windows(XMP_NAMESPACE.len())
+            .any(|window| window == XMP_NAMESPACE),
+        "前提条件が崩れている: XMP パケットまで消えている"
+    );
+
+    let read = read_metadata(&path).unwrap();
+    assert!(
+        read.warnings.is_empty(),
+        "Exif を持たない JPEG に警告を出してはいけない: {:?}",
+        read.warnings
+    );
+    // XMP 側の読み取りは機能している
+    assert_eq!(read.metadata.title.as_deref(), Some("夕暮れの港"));
+    assert_eq!(read.metadata.rating, Some(3));
+}
+
+/// XMP パケットを見分ける APP1 の識別子
+const XMP_NAMESPACE: &[u8] = b"http://ns.adobe.com/xap/1.0/\0";

@@ -7,9 +7,18 @@ use std::sync::{Arc, Mutex};
 pub struct ProcessingState {
     pub cancel_flag: Arc<AtomicBool>,
     pub thumbnail_cache: Mutex<LruCache<String, String>>,
-    /// ネイティブダイアログで書き込みを許可されたフォルダー。
-    /// 起動時は空＝どこにも書けない状態から始まる。
+    /// **変換の出力先**として、ネイティブダイアログで選ばれたフォルダー
+    /// （`pick_output_folder`）。起動時は空＝どこにも書けない状態から始まる。
     pub writable_roots: WritableRoots,
+    /// **メタデータ編集**として、ネイティブダイアログで承認されたフォルダー
+    /// （`grant_metadata_editing`）。
+    ///
+    /// `writable_roots` と**分けてある**。出力先の選択ダイアログは
+    /// 「出力先フォルダーを選択」としか言っておらず、既存写真の書き換えについては
+    /// 一言も触れていない。集合を共有すると、出力先に自分の写真フォルダーを選んだ
+    /// だけで、そのフォルダー配下の全 JPEG のメタデータが追加の同意なしに
+    /// 書き換え可能になってしまう（それぞれのダイアログが承認したことだけを承認する）。
+    pub metadata_roots: WritableRoots,
     /// メタデータの下書きに未保存の変更があるか。
     /// フロントが `set_unsaved_state` で更新し、終了時の確認だけがこれを読む
     pub unsaved: AtomicBool,
@@ -24,6 +33,7 @@ impl ProcessingState {
             cancel_flag: Arc::new(AtomicBool::new(false)),
             thumbnail_cache: Mutex::new(LruCache::new(NonZeroUsize::new(500).unwrap())),
             writable_roots: WritableRoots::default(),
+            metadata_roots: WritableRoots::default(),
             unsaved: AtomicBool::new(false),
             close_prompt_open: AtomicBool::new(false),
         }

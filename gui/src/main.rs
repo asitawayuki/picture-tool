@@ -53,8 +53,9 @@ fn main() {
             let handle = window.app_handle().clone();
             std::thread::spawn(move || {
                 let state = handle.state::<ProcessingState>();
-                // panic しても close_prompt_open を必ず降ろす。ガードは他の文より
-                // 後で宣言する ── Drop は宣言と逆順（＝最後）に走るので、
+                // panic しても close_prompt_open を必ず降ろす。ガードは
+                // **他の処理より先に**（`state` の取得より後に）宣言する ──
+                // Drop は宣言と逆順（＝ここで宣言すれば最後）に走るので、
                 // これで「unsaved を先に落としてから close_prompt_open を降ろす」
                 // 順序が、途中の return や panic があっても崩れない
                 let _prompt_guard = PromptGuard(&state.close_prompt_open);

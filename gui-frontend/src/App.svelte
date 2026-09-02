@@ -175,8 +175,11 @@
     // ユーザーが答えていない新しいダイアログを勝手に解決してしまう
     const action = pendingLeave;
     const didSave = await handleSaveMetadata();
+    // **失敗したらダイアログは閉じない。** 閉じてしまうと「移動しなかった」ことが
+    // トーストからしか分からず、未保存の変更を抱えたまま元の画面に戻される
+    if (!didSave) return;
     pendingLeave = null;
-    if (didSave) action?.();
+    action?.();
   }
 
   async function loadFolder(path: string) {

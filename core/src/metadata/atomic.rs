@@ -110,12 +110,15 @@ pub(super) fn replace_verified(
             .with_context(|| format!("一時ファイルを作れません: {}", temp.0.display()))?;
         file.write_all(&patched)
             .with_context(|| format!("一時ファイルを書けません: {}", temp.0.display()))?;
+        // 元の権限を引き継ぐ。落とすと「作った人しか読めない」写真になる。
+        // **`sync_all` より前に置く** ── `sync_all` は内容と inode の両方を
+        // 永続化するので、後ろに置くと権限の変更だけがディスクに届かないまま
+        // rename されうる（内容は無事だが、クラッシュ直後に権限が落ちる）
+        if let Ok(meta) = std::fs::metadata(path) {
+            let _ = std::fs::set_permissions(&temp.0, meta.permissions());
+        }
         file.sync_all()
             .with_context(|| format!("一時ファイルを永続化できません: {}", temp.0.display()))?;
-    }
-    // 元の権限を引き継ぐ。落とすと「作った人しか読めない」写真になる
-    if let Ok(meta) = std::fs::metadata(path) {
-        let _ = std::fs::set_permissions(&temp.0, meta.permissions());
     }
     verify(&temp.0, path, expected)?;
 
