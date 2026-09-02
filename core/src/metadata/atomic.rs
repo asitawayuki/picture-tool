@@ -213,6 +213,10 @@ mod tests {
     /// 2 スレッドが同じ temp パスを使い、検証済みでないバイト列が rename されうる
     /// （TOCTOU）。`dir` と `name`、プレフィックス `.` とサフィックス
     /// `.picture-tool.tmp` は保たれることも見る。
+    ///
+    /// この検査は逐次 2 回の呼び出しで足りる。`AtomicU64::fetch_add` は並行に
+    /// 呼んでも同じ値を 2 度返さない（呼び出しごとに異なる値を返すことが
+    /// 保証されている）ため、並行呼び出しを足しても検証力はほぼ増えない。
     #[test]
     fn temp_path_is_unique_within_the_same_process() {
         let dir = PathBuf::from("/tmp/picture-tool-test-dir");
