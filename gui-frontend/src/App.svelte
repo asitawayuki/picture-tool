@@ -14,6 +14,7 @@
   import Button from "./lib/ui/Button.svelte";
   import ProgressOverlay from "./lib/ProgressOverlay.svelte";
   import DeleteOriginalsDialog from "./lib/DeleteOriginalsDialog.svelte";
+  import UnsavedChangesDialog from "./lib/UnsavedChangesDialog.svelte";
   import ResultDialog from "./lib/ResultDialog.svelte";
   import Toast from "./lib/Toast.svelte";
   import { toast, describeError } from "./lib/toasts.svelte";
@@ -42,6 +43,10 @@
 
   // メタデータの編集対象。未保存ガードはこれの変更にだけ掛かる。
   let editingPath = $state<string | null>(null);
+
+  // 未保存のまま離れようとしたときに保留する操作。
+  // 3 経路（写真の切替 / モードの移動 / フォルダーの変更）をここへ集める
+  let pendingLeave = $state<(() => void) | null>(null);
 
   // 変換モード専用の選択。フォルダーを変えたらクリアする（spec §3-2）
   const selectedPaths = new SvelteSet<string>();
@@ -114,11 +119,37 @@
   // フォルダー連打で古い listImages の応答が新しい一覧を上書きしないようトークンで守る
   let listImagesToken = 0;
 
-  async function handleSelectFolder(path: string) {
+  // 未保存のまま離れようとしたときに保留していた操作を実行する
+  function guarded(action: () => void) {
+    if (metadata.isDirty) {
+      pendingLeave = action;
+      return;
+    }
+    action();
+  }
+
+  function resumeLeave() {
+    const action = pendingLeave;
+    pendingLeave = null;
+    action?.();
+  }
+
+  function handleDiscardAndLeave() {
+    metadata.discard();
+    resumeLeave();
+  }
+
+  async function handleSaveAndLeave() {
+    if (await handleSaveMetadata()) resumeLeave();
+    else pendingLeave = null;
+  }
+
+  async function loadFolder(path: string) {
     currentFolder = path;
     gridScrollTop = 0;
-    // フォルダーを変えたら最後に触った写真は無効
+    // フォルダーを変えたら最後に触った写真・編集対象は無効
     focusedPath = null;
+    editingPath = null;
     // 選択は常に現在のフォルダー内に閉じる。SelectionList を廃止したので
     // 画面外の選択を可視化・解除する窓口がもう無い（spec §3-2 / §5-1）
     selectedPaths.clear();
@@ -137,6 +168,10 @@
     }
   }
 
+  async function handleSelectFolder(path: string) {
+    guarded(() => void loadFolder(path));
+  }
+
   // クリックは「選択のトグル ＋ focusedPath の移動」を同時に行う（spec §3-2）
   function handleToggleSelect(image: ImageEntry) {
     if (selectedPaths.has(image.path)) selectedPaths.delete(image.path);
@@ -145,15 +180,32 @@
   }
 
   function handleFocus(image: ImageEntry) {
-    focusedPath = image.path;
-    // 変換モードのクリックは focusedPath と selectedPaths にしか触らない。
+    if (mode === "metadata") {
+      // **`focusedPath` の代入もガードの内側に入れる。** 外に出すと、
+      // ダイアログでキャンセルしてもグリッドの選択だけが移動する
+      guarded(() => {
+        focusedPath = image.path;
+        editingPath = image.path;
+      });
+      return;
+    }
+    // 変換モードのクリックは focusedPath と selectedPaths にしか触らない（spec §3-2）。
     // ここで editingPath を動かすと、変換モードで写真をチェックするたびに
     // 未保存ガードが誤発火する
-    if (mode === "metadata") editingPath = image.path;
+    focusedPath = image.path;
+  }
+
+  function handleModeChange(next: AppMode) {
+    // メタデータモードから出るときだけガードする。入るときは失うものが無い
+    if (mode === "metadata" && next !== "metadata") {
+      guarded(() => applyModeChange(next));
+      return;
+    }
+    applyModeChange(next);
   }
 
   // メタデータモードへ入ったとき、編集対象が空なら最後に触った 1 枚を採る（spec §3-2）
-  function handleModeChange(next: AppMode) {
+  function applyModeChange(next: AppMode) {
     mode = next;
     if (next === "metadata" && editingPath === null) editingPath = focusedPath;
     // 下書きはモードを跨いで保つ。null のときだけ、いま選ばれているプリセットから起こす
@@ -178,9 +230,9 @@
 
   async function handleSaveMetadata(): Promise<boolean> {
     try {
-      await metadata.save();
-      toast.success("保存しました。");
-      return true;
+      const didSave = await metadata.save();
+      if (didSave) toast.success("保存しました。");
+      return didSave;
     } catch (e) {
       toast.error(`保存できませんでした: ${describeError(e)}`);
       return false;
@@ -336,6 +388,16 @@
     response={convert.result.response}
     cancelled={convert.result.cancelled}
     onClose={convert.dismissResult}
+  />
+{/if}
+
+{#if pendingLeave !== null}
+  <UnsavedChangesDialog
+    name={editingImage?.name ?? ""}
+    canSave={canWriteEditing && editingIsJpeg}
+    onCancel={() => (pendingLeave = null)}
+    onDiscard={handleDiscardAndLeave}
+    onSave={handleSaveAndLeave}
   />
 {/if}
 

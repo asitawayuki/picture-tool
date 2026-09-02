@@ -235,4 +235,93 @@ test.describe("メタデータモード", () => {
     await expect(selected).toHaveCount(1);
     await expect(selected).toBeInViewport();
   });
+
+  test("未保存のまま別の写真へ移ろうとすると止められる（刷新 spec §3-4）", async ({ page }) => {
+    await page.getByLabel("タイトル").fill("書きかけ");
+    await page.getByRole("option").nth(1).click();
+
+    await expect(
+      page.getByRole("alertdialog", { name: "保存していない変更があります" })
+    ).toBeVisible();
+    // 前提条件: まだ移動していない
+    await expect(page.locator('[data-region="right"]').getByText("photo-0000.jpg")).toBeVisible();
+
+    await page.getByRole("button", { name: "破棄して移動" }).click();
+    await expect(page.locator('[data-region="right"]').getByText("photo-0001.jpg")).toBeVisible();
+    await expect(page.getByLabel("タイトル")).toHaveValue("");
+  });
+
+  test("キャンセルすると編集内容が残る", async ({ page }) => {
+    await page.getByLabel("タイトル").fill("書きかけ");
+    await page.getByRole("option").nth(1).click();
+    await page.getByRole("button", { name: "キャンセル" }).click();
+
+    await expect(page.getByLabel("タイトル")).toHaveValue("書きかけ");
+    await expect(page.locator('[data-region="right"]').getByText("photo-0000.jpg")).toBeVisible();
+  });
+
+  test("rail で別モードへ移るときもガードが出る", async ({ page }) => {
+    await page.getByLabel("タイトル").fill("書きかけ");
+    await page
+      .getByRole("navigation", { name: "モード" })
+      .getByRole("button", { name: "変換" })
+      .click();
+    await expect(
+      page.getByRole("alertdialog", { name: "保存していない変更があります" })
+    ).toBeVisible();
+  });
+
+  /**
+   * **変換モードのクリックではガードを出さない。**
+   * 出すと、メタデータで編集途中のまま変換モードで写真をチェックするたびに
+   * ダイアログが出る（刷新 spec §3-2）
+   */
+  test("変換モードでの選択トグルではガードが出ない", async ({ page }) => {
+    await page.getByLabel("タイトル").fill("書きかけ");
+    const rail = page.getByRole("navigation", { name: "モード" });
+    await rail.getByRole("button", { name: "変換" }).click();
+    await page.getByRole("button", { name: "破棄して移動" }).click(); // ここは出てよい
+
+    // 変換モードに入った（タイトル欄はもう無い）
+    await expect(page.getByLabel("タイトル")).toHaveCount(0);
+    await expect(page.getByRole("alertdialog")).toBeHidden();
+    await page.getByRole("option").nth(3).click();
+    await expect(page.getByRole("alertdialog")).toBeHidden();
+  });
+
+  /**
+   * 裁定 R1: `metadataDraft.save()` は「実際に書き込めたか」を `Promise<boolean>` で返す。
+   * 早期 return（`path === null` / 保存中 / 保存中に写真が変わった）を「保存できた」と
+   * 取り違えると、`handleSaveAndLeave` の `if (await handleSaveMetadata()) resumeLeave();`
+   * が黙って離脱してしまう。その手前で先に踏める症状として、保存できていないのに
+   * 成功トーストが出る ── これを見る。
+   *
+   * 「保存して移動」を同じ JS タスク内で 2 回連打すると、1 回目は
+   * `metadataDraft` の `saving` フラグをまだセットしていない状態で走り、
+   * 2 回目は 1 回目がセットした `saving === true` を必ず踏む
+   * （同期処理なので描画やスタブの応答速度に依存しない）。よって書き込みが
+   * 実際に起きるのは 1 回だけ、というのは実装の正誤に関わらず成り立つ前提。
+   * その上で「成功トーストが 1 回しか出ない」を見ることで、2 回目の早期 return が
+   * 「保存できた」に化けていないかを検査する。
+   */
+  test("裁定R1: 保存して移動を連打しても成功トーストは書き込めた分しか出ない", async ({
+    page,
+  }) => {
+    await page.getByRole("button", { name: "このフォルダーへの書き込みを許可..." }).click();
+    await page.getByLabel("タイトル").fill("書きかけ");
+    await page.getByRole("option").nth(1).click();
+
+    const saveAndLeave = page.getByRole("button", { name: "保存して移動" });
+    // 前提条件: 連打する対象のボタンが実在し、クリックできる状態にある
+    await expect(saveAndLeave).toBeVisible();
+
+    // Playwright の click() を 2 回連続で await すると、1 回目の描画・状態更新を
+    // 待ってしまい「同じタスク内での連打」を再現できない。同期的に 2 回発火させる
+    await saveAndLeave.evaluate((el: HTMLElement) => {
+      el.click();
+      el.click();
+    });
+
+    await expect(page.getByText("保存しました。")).toHaveCount(1);
+  });
 });

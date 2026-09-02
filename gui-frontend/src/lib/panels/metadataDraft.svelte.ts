@@ -10,9 +10,10 @@ import {
 /**
  * メタデータの下書き。
  *
- * 離脱経路（写真の切替 / rail でのモード移動 / フォルダー変更 / ウィンドウを閉じる）は
- * すべて `isDirty` を通す（刷新 spec §3-4）。判定をここ 1 箇所に置いてあるので、
- * 呼び出し側は分岐を増やさずに済む。
+ * 離脱経路のうち写真の切替 / rail でのモード移動 / フォルダー変更の 3 つは
+ * `isDirty` を通してガード済み（Task 15 / 刷新 spec §3-4）。判定をここ 1 箇所に
+ * 置いてあるので、呼び出し側は分岐を増やさずに済む。ウィンドウを閉じる経路は
+ * まだ未配線（Task 16）。
  */
 export function createMetadataDraft() {
   let path = $state<string | null>(null);
@@ -69,22 +70,29 @@ export function createMetadataDraft() {
     },
 
     /**
-     * 保存する。**戻り値は「ファイルの実際の中身」**なので、それを保存済みの値に採る。
+     * 保存する。**戻り値は「実際に書き込んだか」**（Task 15 / 裁定 R1）。
+     * `path === null` / 保存中 / 保存中に写真が変わった、の早期 return は
+     * すべて `false` を返す ── 呼び出し元の未保存ガードはこれを「離脱してよいか」の
+     * 判断に使うので、「何もしなかった」を「保存した」と区別できないと
+     * 未保存の下書きを黙って捨てて離脱してしまう。
+     *
+     * 実際に書けたときは、応答の**ファイルの実際の中身**を保存済みの値に採る。
      * 送った値をそのまま saved にすると、Rust 側の正規化（空文字→タグ削除など）と
      * 食い違って未保存表示が消えなくなる。
      */
-    async save() {
-      if (path === null || saving) return;
+    async save(): Promise<boolean> {
+      if (path === null || saving) return false;
       const target = path;
       const sending = toMetadata($state.snapshot(values));
       saving = true;
       try {
         const read = await writeImageMetadata(target, sending);
         // 保存中に別の写真へ移っていたら、いまの下書きを上書きしない
-        if (target !== path) return;
+        if (target !== path) return false;
         saved = toValues(read.metadata);
         values = toValues(read.metadata);
         warnings = read.warnings;
+        return true;
       } finally {
         saving = false;
       }
