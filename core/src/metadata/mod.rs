@@ -12,6 +12,20 @@
 mod exif;
 mod xmp;
 
+/// 読めた文字列を正規形に寄せる。**前後の空白（と NUL）は落とし、trim 後が空なら `None`。**
+///
+/// EXIF と XMP の両方から使う共通の trim ルール。**この計画の C1 はまさにこの非対称から
+/// 生まれた実在のバグだった**: XMP 側だけ trim して EXIF 側は trim しない、という状態だと
+/// 末尾に改行の付いたコメントは保存が必ず失敗し、Task 8 の食い違い警告も誤発火する。
+/// EXIF・XMP のどちらが読んでも同じ結果になるよう、trim のロジックをここ1箇所に集約し、
+/// 各モジュールが個別に持たない（3箇所目ができる前に統合しておく）。
+/// 書き込み側も `EditableMetadata::normalized` で trim するので、
+/// 保存 → 読み戻しの検証（Task 9）が一致する。
+pub(crate) fn cleaned(text: &str) -> Option<String> {
+    let trimmed = text.trim_matches(|c: char| c == '\0' || c.is_whitespace());
+    (!trimmed.is_empty()).then(|| trimmed.to_string())
+}
+
 use serde::{Deserialize, Serialize};
 
 /// 人が編集する対象のメタデータ。

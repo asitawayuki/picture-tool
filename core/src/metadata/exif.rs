@@ -11,7 +11,7 @@ use little_exif::exif_tag::ExifTag;
 use little_exif::ifd::ExifTagGroup;
 use little_exif::metadata::Metadata;
 
-use crate::metadata::{stars_to_percent, EditableMetadata};
+use crate::metadata::{cleaned, stars_to_percent, EditableMetadata};
 
 /// IFD0 に置くタグ。`little_exif` に専用の enum バリアントが無いので生の ID で扱う
 pub(super) const XP_TITLE: u16 = 0x9c9b;
@@ -76,18 +76,6 @@ pub(super) fn read(meta: &Metadata) -> ExifSide {
         comment_user,
         rating_percent,
     }
-}
-
-/// 読めた文字列を正規形に寄せる。
-///
-/// **前後の空白は落とす。** XMP は要素テキストが整形の改行・インデントを含みうるので
-/// XMP 側は必ず trim することになり、EXIF 側だけ残すと同じ値が「食い違い」に見える。
-/// 書き込み側も `EditableMetadata::normalized` で trim するので、
-/// 保存 → 読み戻しの検証（Task 9）が一致する。
-/// 空白詰めの `ImageDescription` を書くカメラも救われる。
-fn cleaned(text: &str) -> Option<String> {
-    let trimmed = text.trim_matches(|c: char| c == '\0' || c.is_whitespace());
-    (!trimmed.is_empty()).then(|| trimmed.to_string())
 }
 
 /// UCS-2LE（実質 UTF-16LE）＋ NUL 終端を読む

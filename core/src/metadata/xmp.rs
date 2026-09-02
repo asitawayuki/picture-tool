@@ -13,6 +13,8 @@ use quick_xml::events::{BytesStart, Event};
 use quick_xml::name::{Namespace, ResolveResult};
 use quick_xml::NsReader;
 
+use super::cleaned;
+
 /// APP1 の XMP パケットに前置きされる識別子（末尾の NUL 込み）
 pub(super) const XMP_ID: &[u8] = b"http://ns.adobe.com/xap/1.0/\0";
 
@@ -40,7 +42,14 @@ pub(super) struct XmpSide {
     pub ms_rating_percent: Option<u16>,
 }
 
-/// JPEG から XMP パケットの XML を取り出す
+/// JPEG から XMP パケットの XML を取り出す。
+///
+/// **Extended XMP（65503 バイトを超えるパケットが複数の APP1 に分割される形式）は
+/// 意図的に扱わない。** その識別子は `http://ns.adobe.com/xmp/extension/\0`（GUID 付き）で
+/// `XMP_ID` とは一致しないため、`strip_prefix` に弾かれて誤って本文に混入することはない
+/// （安全側に倒れている）。本ツールが扱う4プロパティ（`dc:title` / `dc:description` /
+/// `xmp:Rating` / `MicrosoftPhoto:Rating`）だけでこの上限を超えることは実運用で
+/// 極めて考えにくく、対応する必要性が薄いための判断
 pub(super) fn extract(jpeg: &Jpeg) -> Option<String> {
     jpeg.segments_by_marker(markers::APP1).find_map(|segment| {
         let xml = segment.contents().strip_prefix(XMP_ID)?;
@@ -63,16 +72,6 @@ fn uri_of<'ns>(ns: &ResolveResult<'ns>) -> Option<&'ns [u8]> {
 
 fn matches(ns: &ResolveResult<'_>, local: &[u8], uri: &str, name: &str) -> bool {
     uri_of(ns) == Some(uri.as_bytes()) && local == name.as_bytes()
-}
-
-/// 読めた文字列を正規形に寄せる。**前後の空白は落とし、trim 後が空なら `None`。**
-///
-/// EXIF 側（`exif::cleaned`）と同じ扱いに揃えてある。XMP は要素テキストが整形の
-/// 改行・インデントを含みうるので、ここで trim しないと同じ値が「食い違い」に
-/// 見えたり、末尾に改行の付いたコメントの保存が失敗したりする（C1 対処）。
-fn cleaned(text: &str) -> Option<String> {
-    let trimmed = text.trim_matches(|c: char| c == '\0' || c.is_whitespace());
-    (!trimmed.is_empty()).then(|| trimmed.to_string())
 }
 
 /// `xmp:Rating` の文字列を★にする。
