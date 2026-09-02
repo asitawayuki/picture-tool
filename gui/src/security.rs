@@ -14,7 +14,8 @@
 //! | ディレクトリ一覧（名前のみ） | 実在するディレクトリであること |
 //! | ファイル内容の読み出し | 実体パスが対応画像の拡張子を持つこと |
 //! | フォントの読み出し | 実体がユーザーフォントディレクトリ配下の ttf/otf であること |
-//! | 書き込み | ネイティブダイアログで許可したルート配下 |
+//! | 書き込み（変換の出力） | ネイティブダイアログで許可したルート配下 |
+//! | 書き込み（メタデータ編集） | 利用者がフォルダー単位で承認したルート配下の、既存の JPEG のみ |
 //! | 元ファイルの削除 | 実行ごとに OS ネイティブの確認ダイアログで承認されること |
 //!
 //! いずれも `canonicalize` した**実体**に対して判定する。シンボリックリンクや
@@ -24,6 +25,13 @@
 //! 「許可ルート配下」に縛ると通常利用で削除が一切できなくなるため。代わりに
 //! webview が偽装できない OS のダイアログを毎回挟み、対象の枚数と場所を提示する
 //! （`commands::confirm_delete_originals`）。
+//!
+//! メタデータ編集の書き込み先も「許可ルート配下」に縛れない点は削除と同じだが、
+//! 保存のたびにダイアログを出すのは使い物にならない。そこで**フォルダー単位で 1 度だけ**
+//! OS ネイティブの確認を挟み（`commands::grant_metadata_editing`）、承認されたルートを
+//! `WritableRoots` に足す。乗っ取られた webview にできる最悪のことは
+//! 「利用者が自分で承認したフォルダーのメタデータを壊す」まで。承認していない
+//! フォルダーには一切書けず、承認は次回起動時に消える。
 //!
 //! 判定と実際の I/O の間にリンクを差し替えられる TOCTOU までは防げない。
 //! これはローカル権限を持つ攻撃者を想定したもので、本モジュールの脅威モデル
@@ -145,6 +153,43 @@ pub fn preset_name(raw: &str) -> Result<String, String> {
         return Err(format!("Invalid preset name: {}", raw));
     }
     Ok(raw.to_string())
+}
+
+/// メタデータを読み書きしてよい JPEG として検証し、実体のパスを返す
+///
+/// `readable_image` より**強い**。メタデータ編集の対象は JPEG だけで
+/// （spec §スコープ）、PNG / WebP は core の `metadata` が扱わない。
+pub fn readable_jpeg(raw: &str) -> Result<PathBuf, String> {
+    let resolved = readable_image(raw)?;
+    let is_jpeg = resolved
+        .extension()
+        .and_then(OsStr::to_str)
+        .is_some_and(|ext| ext.eq_ignore_ascii_case("jpg") || ext.eq_ignore_ascii_case("jpeg"));
+    if !is_jpeg {
+        return Err(format!("Metadata editing supports JPEG only: {}", raw));
+    }
+    Ok(resolved)
+}
+
+/// 書き込んでよい画像として検証し、実体のパスを返す
+///
+/// 条件は 3 つ:
+/// 1. 実体が JPEG であること
+/// 2. 承認済みルート配下であること
+/// 3. **既に存在するファイルであること**（`readable_image` が `is_file` を見る）
+///
+/// **新規ファイル作成は一切許可しない。** メタデータ編集が新しいファイルを作る理由が
+/// 無いので、塞げる分は塞ぐ。`writable_dir` が未作成パスを許すのと対照的なのは、
+/// あちらが「出力先フォルダーを作る」用途だから。
+pub fn writable_image(roots: &WritableRoots, raw: &str) -> Result<PathBuf, String> {
+    let resolved = readable_jpeg(raw)?;
+    if !roots.allows(&resolved) {
+        return Err(format!(
+            "This folder has not been approved for metadata editing: {}",
+            raw
+        ));
+    }
+    Ok(resolved)
 }
 
 /// 書き込み先ディレクトリとして検証し、実体のパスを返す
@@ -481,6 +526,86 @@ mod tests {
 
         assert!(writable_dir(&roots, "out").is_err());
         assert!(writable_dir(&roots, "").is_err());
+    }
+
+    // --- 書き込みの境界（メタデータ編集）: 承認済みルート配下の既存 JPEG のみ ---
+
+    #[test]
+    fn writable_image_rejects_everything_before_the_user_approves_a_folder() {
+        let dir = TempDir::new().unwrap();
+        let photo = dir.path().join("a.jpg");
+        write_real_jpeg(&photo);
+        let roots = WritableRoots::default();
+        assert!(writable_image(&roots, &as_str(&photo)).is_err());
+    }
+
+    #[test]
+    fn writable_image_accepts_an_existing_jpeg_under_an_approved_folder() {
+        let dir = TempDir::new().unwrap();
+        let photo = dir.path().join("a.jpg");
+        write_real_jpeg(&photo);
+        let roots = WritableRoots::default();
+        roots.grant(fs::canonicalize(dir.path()).unwrap());
+        assert!(writable_image(&roots, &as_str(&photo)).is_ok());
+    }
+
+    /// **新規ファイル作成は一切許可しない。** メタデータ編集が新しいファイルを
+    /// 作る理由が無いので、塞げる分は塞ぐ
+    #[test]
+    fn writable_image_rejects_a_path_that_does_not_exist_yet() {
+        let dir = TempDir::new().unwrap();
+        let roots = WritableRoots::default();
+        roots.grant(fs::canonicalize(dir.path()).unwrap());
+        assert!(writable_image(&roots, &as_str(&dir.path().join("new.jpg"))).is_err());
+    }
+
+    /// 承認したのは 1 フォルダーだけ。名前が前方一致する兄弟は別物
+    #[test]
+    fn writable_image_rejects_a_sibling_whose_name_merely_starts_with_an_approved_root() {
+        let base = TempDir::new().unwrap();
+        let approved = base.path().join("photos");
+        let sibling = base.path().join("photos-old");
+        fs::create_dir(&approved).unwrap();
+        fs::create_dir(&sibling).unwrap();
+        let photo = sibling.join("a.jpg");
+        write_real_jpeg(&photo);
+
+        let roots = WritableRoots::default();
+        roots.grant(fs::canonicalize(&approved).unwrap());
+        assert!(writable_image(&roots, &as_str(&photo)).is_err());
+    }
+
+    /// JPEG 以外は、承認済みフォルダーの中にあっても拒否する
+    #[test]
+    fn writable_image_rejects_formats_the_metadata_module_cannot_handle() {
+        let dir = TempDir::new().unwrap();
+        let png = dir.path().join("a.png");
+        image::DynamicImage::ImageRgb8(image::RgbImage::from_pixel(4, 4, image::Rgb([1, 2, 3])))
+            .save(&png)
+            .unwrap();
+        let roots = WritableRoots::default();
+        roots.grant(fs::canonicalize(dir.path()).unwrap());
+        // 前提条件: readable_image としては通る（＝「画像ではないから落ちた」ではない）
+        assert!(readable_image(&as_str(&png)).is_ok());
+        assert!(writable_image(&roots, &as_str(&png)).is_err());
+    }
+
+    /// リンク解決後の実体で判定する。承認フォルダーの中に置いた `.jpg` という名前の
+    /// リンクで、外のファイルを書き換えられては境界の意味が無い
+    #[cfg(unix)]
+    #[test]
+    fn writable_image_rejects_a_jpeg_named_symlink_pointing_outside() {
+        let base = TempDir::new().unwrap();
+        let approved = base.path().join("photos");
+        fs::create_dir(&approved).unwrap();
+        let outside = base.path().join("secret.jpg");
+        write_real_jpeg(&outside);
+        let link = approved.join("innocent.jpg");
+        std::os::unix::fs::symlink(&outside, &link).unwrap();
+
+        let roots = WritableRoots::default();
+        roots.grant(fs::canonicalize(&approved).unwrap());
+        assert!(writable_image(&roots, &as_str(&link)).is_err());
     }
 
     // --- 一覧の境界: 実在ディレクトリのみ ---
