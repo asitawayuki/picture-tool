@@ -115,7 +115,7 @@
           bind:value={draft.values.title}
           label="タイトル"
           placeholder="未設定"
-          disabled={!editable || draft.loading}
+          disabled={!editable || draft.loading || draft.saving}
         />
         <div class="sub">
           <TextField
@@ -124,11 +124,13 @@
             multiline
             rows={4}
             placeholder="未設定"
-            disabled={!editable || draft.loading}
+            disabled={!editable || draft.loading || draft.saving}
           />
         </div>
         <div class="mismatch" aria-live="polite">
-          {#each draft.warnings as warning (warning)}
+          <!-- 警告文字列自体をキーにしない。Rust が同一文言の警告を2つ返すと
+               キー重複で Svelte が実行時エラーを投げる -->
+          {#each draft.warnings as warning, index (index)}
             <p class="warning">{warning}</p>
           {/each}
         </div>
@@ -136,7 +138,7 @@
 
       <!-- 4. レーティング -->
       <Card level={1} title="レーティング">
-        <Rating bind:value={draft.values.rating} disabled={!editable || draft.loading} />
+        <Rating bind:value={draft.values.rating} disabled={!editable || draft.loading || draft.saving} />
       </Card>
 
       <!-- 5. 撮影情報（読み取り専用） -->

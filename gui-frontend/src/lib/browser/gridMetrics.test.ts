@@ -184,10 +184,13 @@ describe("指定の1枚を可視範囲に入れる", () => {
     expect(scrollTopToReveal(metrics, 0, 2000, 600)).toBe(0);
   });
 
-  // 末尾を超えて飛ぶと paddingTop が総高を超えて画面が壊れる
+  // 末尾を超えて飛ぶと paddingTop が総高を超えて画面が壊れる。
+  // ここは bottom 分岐（bottom = totalRows*rowHeight を超えない）を通るので、
+  // 戻り値は max と厳密に一致するはず ── toBeLessThanOrEqual だと
+  // クランプが無くても数学的に成立してしまう恒真式になる（下のテストで実測済み）
   test("末尾より下へは行かない", () => {
     const max = metrics.totalRows * metrics.rowHeight - 600;
-    expect(scrollTopToReveal(metrics, 59, 0, 600)).toBeLessThanOrEqual(max);
+    expect(scrollTopToReveal(metrics, 59, 0, 600)).toBeCloseTo(max);
   });
 
   // 上の「末尾より下へは行かない」は bottom 分岐（bottom は totalRows*rowHeight を

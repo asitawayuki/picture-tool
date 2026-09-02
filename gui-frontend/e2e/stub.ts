@@ -105,6 +105,27 @@ export async function installTauriStub(page: Page, options: StubOptions = {}) {
       return m ? Number(m[1]) : 0;
     }
 
+    /**
+     * Rust 側の保存時正規化を模す（前後の空白を落とす）。
+     *
+     * `write_image_metadata` が送られた値をそのまま echo すると、
+     * 「`saved` は戻り値ではなく送った値で更新する」という退行を e2e が
+     * 検出できない（送った値と返す値が常に同じになるため）。ここで
+     * 実際に値を変えて返すことで、UI 側が戻り値を使っていることを検査できる形にする
+     */
+    function normalizeMetadata(metadata: any) {
+      const trim = (v: unknown) => {
+        if (typeof v !== "string") return null;
+        const t = v.trim();
+        return t === "" ? null : t;
+      };
+      return {
+        title: trim(metadata?.title),
+        comment: trim(metadata?.comment),
+        rating: metadata?.rating ?? null,
+      };
+    }
+
     /** フォルダーごとに別のパスを返す。同じパスを返すと、フォルダーを変えても
      *  キャッシュが当たってしまい「取り直している」ことを検査できない */
     function imagesFor(folder: string) {
@@ -190,14 +211,18 @@ export async function installTauriStub(page: Page, options: StubOptions = {}) {
         return null;
       },
       list_available_fonts: () => [template.font],
+      // 形は契約（template.metadata = dto.metadataRead）から取り、値だけ上書きする。
+      // { metadata, warnings } と手で組むと境界の写しが3つ目に増える
       read_image_metadata: ({ path }: { path: string }) => ({
+        ...template.metadata,
         metadata: stored.get(path) ?? template.emptyMetadata,
         warnings: stored.has(path) ? [] : metadataWarnings,
       }),
       write_image_metadata: ({ path, metadata }: { path: string; metadata: unknown }) => {
         if (!granted) throw "This folder has not been approved for metadata editing";
-        stored.set(path, metadata);
-        return { metadata, warnings: [] };
+        const normalized = normalizeMetadata(metadata);
+        stored.set(path, normalized);
+        return { ...template.metadata, metadata: normalized, warnings: [] };
       },
       grant_metadata_editing: ({ folder }: { folder: string }) => {
         if (denyGrant) return null;

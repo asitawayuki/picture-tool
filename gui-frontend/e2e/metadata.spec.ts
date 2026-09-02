@@ -13,7 +13,7 @@ import { clearStorageOnce, installTauriStub } from "./stub";
  * 「2 つ当たった」として落ちる ── **落ちるのは正しく、
  * どちらを見ているのか曖昧なテストにしないための制約**。
  */
-test.describe("メタデータモード（レイアウトのみ）", () => {
+test.describe("メタデータモード", () => {
   test.beforeEach(async ({ page }) => {
     await installTauriStub(page, { imageCount: 12 });
     await clearStorageOnce(page);
@@ -52,10 +52,13 @@ test.describe("メタデータモード（レイアウトのみ）", () => {
     await page.getByRole("button", { name: "このフォルダーへの書き込みを許可..." }).click();
     await expect(page.getByText("このフォルダーへ書き込めます", { exact: false })).toBeVisible();
 
-    await page.getByLabel("タイトル").fill("夕暮れの港");
-    await page.getByRole("button", { name: "保存", exact: true }).click();
-
     const panel = page.locator('[data-region="right"]');
+    await page.getByLabel("タイトル").fill("夕暮れの港");
+    // 前提条件: 保存前は未保存表示が出ている（fill が効いていることの確認。
+    // これが無いと「fill が効かず最初から hidden」でも green になる）
+    await expect(panel.getByText("未保存の変更があります")).toBeVisible();
+
+    await page.getByRole("button", { name: "保存", exact: true }).click();
     await expect(panel.getByText("未保存の変更があります")).toBeHidden();
 
     // 別の写真へ移って戻ると、保存した値が読み直される
@@ -63,6 +66,57 @@ test.describe("メタデータモード（レイアウトのみ）", () => {
     await expect(page.getByLabel("タイトル")).toHaveValue("");
     await page.getByRole("option").nth(0).click();
     await expect(page.getByLabel("タイトル")).toHaveValue("夕暮れの港");
+  });
+
+  test("拒否すると承認済みの表示にならず、保存もできないまま（spec §衝突2）", async ({
+    page,
+  }) => {
+    // beforeEach とは別条件なのでこのテスト内で貼り直す
+    await installTauriStub(page, { imageCount: 4, denyGrant: true });
+    await page.goto("/");
+    await page.getByRole("button", { name: "photos", exact: false }).first().click();
+    await page.getByRole("option").first().click();
+    await page
+      .getByRole("navigation", { name: "モード" })
+      .getByRole("button", { name: "情報" })
+      .click();
+
+    await page.getByRole("button", { name: "このフォルダーへの書き込みを許可..." }).click();
+
+    // grants.request() が拒否を承認と取り違えると、この通知だけが出なくなる
+    // （表示状態自体は roots が変わらない限り崩れないので、通知を見ないと
+    // 「戻り値を確かめずに承認したことにしている」退行を検出できない）
+    await expect(page.getByText("書き込みは許可されませんでした。")).toBeVisible();
+
+    // 拒否されても承認済みの表示にはならず、許可ボタンも消えない
+    await expect(page.getByText("このフォルダーへ書き込めます", { exact: false })).toBeHidden();
+    await expect(
+      page.getByRole("button", { name: "このフォルダーへの書き込みを許可..." })
+    ).toBeVisible();
+
+    // 前提条件: 未保存の変更はある
+    await page.getByLabel("タイトル").fill("夕暮れの港");
+    await expect(
+      page.locator('[data-region="right"]').getByText("未保存の変更があります")
+    ).toBeVisible();
+    await expect(page.getByRole("button", { name: "保存", exact: true })).toBeDisabled();
+  });
+
+  test("保存で正規化された値が saved に採られる（送った値ではなく戻り値を使う）", async ({
+    page,
+  }) => {
+    await page.getByRole("button", { name: "このフォルダーへの書き込みを許可..." }).click();
+
+    const panel = page.locator('[data-region="right"]');
+    // 前後に空白を付けて保存する。スタブは保存時に trim して返す（core の正規化を模す）
+    await page.getByLabel("タイトル").fill("  夕暮れの港  ");
+    await page.getByRole("button", { name: "保存", exact: true }).click();
+
+    // 戻り値（trim 済み）が saved に採られていれば、表示は空白の落ちた値になり、
+    // かつ values も saved と揃うので未保存表示は出ない。
+    // 送った値をそのまま saved にする退行だと、表示は空白付きのまま変わらない
+    await expect(page.getByLabel("タイトル")).toHaveValue("夕暮れの港");
+    await expect(panel.getByText("未保存の変更があります")).toBeHidden();
   });
 
   test("食い違い警告が編集欄の脇に出る（spec §食い違いは警告として返す）", async ({
@@ -118,7 +172,7 @@ test.describe("メタデータモード（レイアウトのみ）", () => {
     await rating.press("ArrowRight");
     await expect(rating).toHaveAttribute("aria-valuenow", "2");
 
-    // 保存先はまだ無いので、編集できても保存ボタンは disabled のまま
+    // まだ承認していないので、編集できても保存ボタンは disabled のまま
     await expect(page.getByRole("button", { name: "保存", exact: true })).toBeDisabled();
   });
 
