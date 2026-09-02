@@ -105,9 +105,153 @@ pub(crate) fn percent_to_stars(percent: u16) -> Option<u8> {
     }
 }
 
+use anyhow::{Context, Result};
+use img_parts::jpeg::Jpeg;
+use img_parts::Bytes;
+use little_exif::filetype::FileExtension;
+use little_exif::metadata::Metadata;
+use std::path::Path;
+
+/// 1 箇所ぶんの候補。`&'static str` は利用者に見せる場所の名前
+type Candidate = (&'static str, Option<String>);
+
+/// 優先順位の高い順に並んだ候補から 1 つ採る。
+/// **採らなかった側に別の値があれば警告に積む**（core は判断せず事実だけを上へ渡す）
+fn pick(label: &str, candidates: Vec<Candidate>, warnings: &mut Vec<String>) -> Option<String> {
+    let present: Vec<Candidate> = candidates
+        .into_iter()
+        .filter(|(_, v)| v.is_some())
+        .collect();
+    let (chosen_where, chosen) = present.first()?.clone();
+
+    let others: Vec<String> = present
+        .iter()
+        .skip(1)
+        .filter(|(_, value)| *value != chosen)
+        .map(|(place, value)| format!("{} = 「{}」", place, value.as_deref().unwrap_or("")))
+        .collect();
+
+    if !others.is_empty() {
+        warnings.push(format!(
+            "{}に、他のアプリが書いた別の値があります（{} を採用。ほかに {}）。保存すると揃います",
+            label,
+            chosen_where,
+            others.join(" / ")
+        ));
+    }
+    chosen
+}
+
+/// 画像から、人が編集する 3 項目を読む。
+///
+/// 箇所ごとに値が食い違っていた場合は優先順位で 1 つ採り、
+/// 捨てた値の存在を `warnings` に積む。
+pub fn read_metadata(path: &Path) -> Result<MetadataRead> {
+    let raw =
+        std::fs::read(path).with_context(|| format!("ファイルを読めません: {}", path.display()))?;
+
+    let mut warnings = Vec::new();
+
+    // Exif が無い画像でも読み取り自体は成立させる（全項目 None になるだけ）。
+    // ただし**解析に失敗したことは黙らない** ── そのまま保存すると Exif を
+    // 作り直すことになるので、利用者に伝わっている必要がある
+    // （書き込み側の `build` は同じ状況で Err にする）
+    let exif_meta = match Metadata::new_from_vec(&raw, FileExtension::JPEG) {
+        Ok(meta) => meta,
+        Err(error) => {
+            warnings.push(format!("Exif を解析できませんでした: {}", error));
+            Metadata::new()
+        }
+    };
+    let exif_side = exif::read(&exif_meta);
+
+    let jpeg = Jpeg::from_bytes(Bytes::from(raw))
+        .with_context(|| format!("JPEG として読めません: {}", path.display()))?;
+    let xmp_side = match xmp::extract(&jpeg) {
+        Some(packet) => xmp::read(&packet)?,
+        None => xmp::XmpSide::default(),
+    };
+
+    let title = pick(
+        "タイトル",
+        vec![
+            ("XMP dc:title", xmp_side.title.clone()),
+            ("Exif XPTitle", exif_side.title_xp.clone()),
+            ("Exif ImageDescription", exif_side.title_description.clone()),
+        ],
+        &mut warnings,
+    );
+
+    let comment = pick(
+        "コメント",
+        vec![
+            ("XMP dc:description", xmp_side.description.clone()),
+            ("Exif UserComment", exif_side.comment_user.clone()),
+            ("Exif XPComment", exif_side.comment_xp.clone()),
+        ],
+        &mut warnings,
+    );
+
+    // ★は型が違うので、いったん文字列に寄せてから同じ仕組みに通す
+    let rating = pick(
+        "レーティング",
+        vec![
+            ("XMP xmp:Rating", xmp_side.rating.map(|s| s.to_string())),
+            (
+                "Exif RatingPercent",
+                exif_side
+                    .rating_percent
+                    .and_then(percent_to_stars)
+                    .map(|s| s.to_string()),
+            ),
+            (
+                "XMP MicrosoftPhoto:Rating",
+                xmp_side
+                    .ms_rating_percent
+                    .and_then(percent_to_stars)
+                    .map(|s| s.to_string()),
+            ),
+        ],
+        &mut warnings,
+    )
+    .and_then(|s| s.parse::<u8>().ok());
+
+    Ok(MetadataRead {
+        metadata: EditableMetadata {
+            title,
+            comment,
+            rating,
+        },
+        warnings,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::path::PathBuf;
+
+    fn fixture(name: &str) -> PathBuf {
+        PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/fixtures")
+            .join(name)
+    }
+
+    /// テンポラリに複製して返す。元のフィクスチャは書き換えない
+    fn scratch(name: &str) -> (tempfile::TempDir, PathBuf) {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join(name);
+        std::fs::copy(fixture(name), &path).unwrap();
+        (dir, path)
+    }
+
+    #[test]
+    fn reading_a_file_without_any_editable_metadata_yields_none() {
+        let (_dir, path) = scratch("exif-only.jpg");
+        let read = read_metadata(&path).unwrap();
+        assert_eq!(read.metadata, EditableMetadata::default());
+        assert!(read.warnings.is_empty());
+    }
 
     /// Microsoft 公式の変換表（spec §レーティングの値変換）。
     /// 1 が 1% なのは 20% ではない ── ここを等間隔にすると Windows 側の★が 1 つずれる
