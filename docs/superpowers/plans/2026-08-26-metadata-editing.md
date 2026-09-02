@@ -5189,6 +5189,32 @@ Exif セグメント全体がその分だけ伸び、後方に置かれた IFD1 
 --ignored --nocapture` は PASS。spec 本文の変更は不要（クレート選定を見直す事態には
 該当しないと裁定）。
 
+**Task 2: `exif-only.jpg` のサイズ見積もり（40〜120KB）が外れた。実測 14.8KB。**
+brief の Step 2 は「40〜120KB 程度」を期待値として書いていたが、実際に生成した
+`exif-only.jpg` は 15,110 bytes（14.8KB）だった。原因は見積もりが大きすぎただけで、
+移植そのものは壊れていない: 埋め込みサムネイル本体が 12,408 bytes、Exif フィールド
+54 件分の TIFF 構造が数 KB、土台の `tiny_jpeg()`（64×80, quality 92）が 1〜2KB で、
+合計するとちょうど 15KB 前後になるのが妥当な内訳。この写真は Lightroom 書き出しで
+MakerNote を持たない（ブランドごとの巨大な独自バイナリが無い）ため、brief が想定して
+いたよりも Exif セグメント自体が小さかったと考えられる。
+
+裏取り: `exif-only.jpg` / `lightroom-xmp.jpg` の両方から `JPEGInterchangeFormat` /
+`JPEGInterchangeFormatLength` を辿ってサムネイル本体を切り出し、元写真のサムネイル
+（171×256, 12,408 bytes）と SHA256 が完全一致することを確認した
+（`bc425c25...29f925b`、3 ファイルとも同一）。`exif_fields()` の列挙にも Make / Model /
+LensModel / DateTimeOriginal が期待どおり出ている。spec 本文の変更は不要。
+
+**Task 2: フィクスチャ 2 本は同じ 1 枚の実写真から作った。**
+brief は `exif-only.jpg` と `lightroom-xmp.jpg` を別の写真から作ってもよいとしていたが、
+今回は `PICTURE_TOOL_SPIKE_JPEG` / `PICTURE_TOOL_LIGHTROOM_JPEG` の両方に同じ 1 枚
+（`20241130-DSC05240.jpg`、Lightroom Classic 14.0.1 書き出し、SONY ILCE-7CM2、
+Exif フィールド 54 件、`crs:` 付き XMP あり）を割り当てた。1 枚で「Exif の APP1 だけ」
+「Exif + XMP の APP1」の両方の役割を兼ねられたため。GPS なし、BodySerialNumber /
+LensSerialNumber なし、ImageDescription / XPTitle / XPComment / UserComment / Rating /
+RatingPercent なし（Task 8 の「編集可能なメタデータが無い」前提が成立）。
+ただし `Artist` = "KoMO" と `Copyright` = "KoMO" は入っており、これはリポジトリに
+永久に残ることを説明したうえで利用者が明示承認済み（2026-09-01）。
+
 ---
 
 ## 決着（2026-09-01 の利用者判断）

@@ -228,3 +228,79 @@ fn a_real_photo_survives_two_write_cycles() {
     );
     println!("サムネイル本体一致: {}", baseline_thumbnail.is_some());
 }
+
+use img_parts::jpeg::{markers, Jpeg};
+use img_parts::Bytes;
+
+fn fixture_path(name: &str) -> std::path::PathBuf {
+    std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures")
+        .join(name)
+}
+
+/// 64x80 の合成 JPEG。画素は何でもよい ── 守りたいのは移植する EXIF の中身。
+fn tiny_jpeg() -> Vec<u8> {
+    let img = image::RgbImage::from_fn(64, 80, |x, y| {
+        image::Rgb([(x * 4) as u8, (y * 3) as u8, 128])
+    });
+    let mut buffer = std::io::Cursor::new(Vec::new());
+    image::DynamicImage::ImageRgb8(img)
+        .write_to(&mut buffer, image::ImageOutputFormat::Jpeg(92))
+        .unwrap();
+    buffer.into_inner()
+}
+
+#[test]
+#[ignore = "フィクスチャの生成。PICTURE_TOOL_SPIKE_JPEG で実写真を渡す"]
+fn generate_exif_only_fixture() {
+    let source = spike_source();
+    let src = Jpeg::from_bytes(Bytes::from(std::fs::read(&source).unwrap())).unwrap();
+
+    let exif_app1 = src
+        .segments_by_marker(markers::APP1)
+        .find(|s| s.contents().starts_with(b"Exif\0\0"))
+        .expect("EXIF の APP1 が無い")
+        .clone();
+
+    let mut out = Jpeg::from_bytes(Bytes::from(tiny_jpeg())).unwrap();
+    // APP0(JFIF) の直後に置く。**末尾に push すると EOI の後ろに行き、
+    // 再パース時に消える**（spec「img-parts の落とし穴」）
+    out.segments_mut().insert(1, exif_app1);
+
+    let bytes = out.encoder().bytes();
+    std::fs::write(fixture_path("exif-only.jpg"), &bytes).unwrap();
+    println!("exif-only.jpg: {} bytes", bytes.len());
+
+    // 移植できたことを、独立の実装（kamadak-exif）で確かめる
+    let fields = exif_fields(&bytes);
+    println!("フィールド数: {}", fields.len());
+    for (name, value) in &fields {
+        println!("  {} = {}", name, value);
+    }
+}
+
+#[test]
+#[ignore = "フィクスチャの生成。PICTURE_TOOL_LIGHTROOM_JPEG で Lightroom 書き出しを渡す"]
+fn generate_lightroom_xmp_fixture() {
+    let raw = std::env::var("PICTURE_TOOL_LIGHTROOM_JPEG")
+        .expect("PICTURE_TOOL_LIGHTROOM_JPEG に Lightroom 書き出し JPEG のパスを渡すこと");
+    let src = Jpeg::from_bytes(Bytes::from(std::fs::read(&raw).unwrap())).unwrap();
+
+    let app1: Vec<_> = src
+        .segments_by_marker(markers::APP1)
+        .filter(|s| {
+            s.contents().starts_with(b"Exif\0\0")
+                || s.contents().starts_with(b"http://ns.adobe.com/xap/1.0/\0")
+        })
+        .cloned()
+        .collect();
+    assert_eq!(app1.len(), 2, "EXIF と XMP の APP1 が両方あること");
+
+    let mut out = Jpeg::from_bytes(Bytes::from(tiny_jpeg())).unwrap();
+    for (i, seg) in app1.into_iter().enumerate() {
+        out.segments_mut().insert(1 + i, seg);
+    }
+    let bytes = out.encoder().bytes();
+    std::fs::write(fixture_path("lightroom-xmp.jpg"), &bytes).unwrap();
+    println!("lightroom-xmp.jpg: {} bytes", bytes.len());
+}
