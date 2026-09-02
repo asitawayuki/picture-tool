@@ -248,6 +248,16 @@ mod tests {
     #[test]
     fn reading_a_file_without_any_editable_metadata_yields_none() {
         let (_dir, path) = scratch("exif-only.jpg");
+
+        // 前提条件: exif-only.jpg は実際に Exif を持ち、`Metadata::new_from_vec` は
+        // 実データに対して解析を試みている。warnings が空なのは「解析対象が無いから」
+        // ではないことを、独立実装（kamadak-exif ベースの `read_exif_info`）で裏付ける
+        let exif_info = crate::read_exif_info(&path).unwrap();
+        assert!(
+            exif_info.camera_make.is_some() && exif_info.camera_model.is_some(),
+            "前提条件が崩れている: exif-only.jpg から撮影情報が読めなかった"
+        );
+
         let read = read_metadata(&path).unwrap();
         assert_eq!(read.metadata, EditableMetadata::default());
         assert!(read.warnings.is_empty());
