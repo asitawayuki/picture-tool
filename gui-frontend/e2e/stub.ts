@@ -218,7 +218,12 @@ export async function installTauriStub(page: Page, options: StubOptions = {}) {
         metadata: stored.get(path) ?? template.emptyMetadata,
         warnings: stored.has(path) ? [] : metadataWarnings,
       }),
+      // 呼ばれた回数を記録する。「連打しても実際の書き込みは1回だけ」を
+      // 検査するときの前提条件（本当に1回しか実行されていないか）に使う
+      // （Task 15 fix round 裁定 T4 Minor#4）
       write_image_metadata: ({ path, metadata }: { path: string; metadata: unknown }) => {
+        const log = ((window as any).__writeMetadataRequests ??= []);
+        log.push({ path });
         if (!granted) throw "This folder has not been approved for metadata editing";
         const normalized = normalizeMetadata(metadata);
         stored.set(path, normalized);

@@ -140,8 +140,14 @@
   }
 
   async function handleSaveAndLeave() {
-    if (await handleSaveMetadata()) resumeLeave();
-    else pendingLeave = null;
+    // await をまたぐ前に「いま同意を取ろうとしている」保留アクションを固定する
+    // （Task 15 裁定 T3）。`resumeLeave()` のように await 後の pendingLeave を
+    // 読み直すと、保存が往復している間に別の pendingLeave へ差し替わっていた場合
+    // ユーザーが答えていない新しいダイアログを勝手に解決してしまう
+    const action = pendingLeave;
+    const didSave = await handleSaveMetadata();
+    pendingLeave = null;
+    if (didSave) action?.();
   }
 
   async function loadFolder(path: string) {
@@ -168,7 +174,7 @@
     }
   }
 
-  async function handleSelectFolder(path: string) {
+  function handleSelectFolder(path: string) {
     guarded(() => void loadFolder(path));
   }
 
@@ -181,6 +187,10 @@
 
   function handleFocus(image: ImageEntry) {
     if (mode === "metadata") {
+      // 編集中のタイルを再クリックしただけなら何も動かさない。保留する操作が
+      // 同じ値の再代入で無意味な上、未保存のまま再クリックするたびにダイアログが
+      // 出てしまう（Task 15 裁定 T4 Minor#1）
+      if (image.path === editingPath) return;
       // **`focusedPath` の代入もガードの内側に入れる。** 外に出すと、
       // ダイアログでキャンセルしてもグリッドの選択だけが移動する
       guarded(() => {
@@ -267,7 +277,7 @@
         onDelete={frame.remove}
       />
     {:else}
-      <FolderTree onSelectFolder={handleSelectFolder} />
+      <FolderTree {currentFolder} onSelectFolder={handleSelectFolder} />
     {/if}
   {/snippet}
 
@@ -395,6 +405,7 @@
   <UnsavedChangesDialog
     name={editingImage?.name ?? ""}
     canSave={canWriteEditing && editingIsJpeg}
+    saving={metadata.saving}
     onCancel={() => (pendingLeave = null)}
     onDiscard={handleDiscardAndLeave}
     onSave={handleSaveAndLeave}

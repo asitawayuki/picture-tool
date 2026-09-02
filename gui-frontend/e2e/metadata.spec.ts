@@ -272,20 +272,65 @@ test.describe("メタデータモード", () => {
   });
 
   /**
-   * **変換モードのクリックではガードを出さない。**
-   * 出すと、メタデータで編集途中のまま変換モードで写真をチェックするたびに
-   * ダイアログが出る（刷新 spec §3-2）
+   * Task 15 裁定 T2: `FolderTree` はハイライトを自分の `$state` ではなく
+   * `currentFolder` prop から導く。先に自分の state を動かしていた頃は、
+   * ガードでキャンセルしてもツリーのハイライトだけ新しいフォルダーへ移っていた
+   * （グリッドと `currentFolder` は元のまま ── ブリーフが `focusedPath` について
+   * 警告した失敗モードと同型）。
    */
-  test("変換モードでの選択トグルではガードが出ない", async ({ page }) => {
+  test("未保存でフォルダーを変えようとしてキャンセルすると、ツリーのハイライトは元のフォルダーのまま（Task 15 裁定 T2）", async ({
+    page,
+  }) => {
+    const photosRow = page
+      .locator(".tree-row")
+      .filter({ has: page.getByRole("button", { name: "photos", exact: false }) })
+      .first();
+    const archiveRow = page
+      .locator(".tree-row")
+      .filter({ has: page.getByRole("button", { name: "archive", exact: false }) })
+      .first();
+    // 前提条件: 最初は beforeEach で選んだ photos がハイライトされている
+    await expect(photosRow).toHaveClass(/selected/);
+    await expect(archiveRow).not.toHaveClass(/selected/);
+
+    await page.getByLabel("タイトル").fill("書きかけ");
+    await page.getByRole("button", { name: "archive", exact: false }).first().click();
+    await expect(
+      page.getByRole("alertdialog", { name: "保存していない変更があります" })
+    ).toBeVisible();
+
+    await page.getByRole("button", { name: "キャンセル" }).click();
+
+    // ハイライトは archive へ移っていない（currentFolder はキャンセルで動いていない）
+    await expect(photosRow).toHaveClass(/selected/);
+    await expect(archiveRow).not.toHaveClass(/selected/);
+  });
+
+  /**
+   * 「破棄して移動」でダイアログが解決したら、そのまま変換モードへ入り、
+   * ダイアログも閉じたままである（`resumeLeave` が `pendingLeave` を確実に消している）。
+   *
+   * かつては続けて変換モードのグリッドをクリックし「ダイアログが出ない」まで見ていたが、
+   * discard 直後は isDirty が偽になっており、以降 metadata モードへ戻らない限り
+   * 再び真にはなり得ない（メタデータの編集 UI は metadata モードにしか無い）ため、
+   * その後半 2 行は「変換モードのクリックもガードに通す」欠陥を入れても落ちないことを
+   * 欠陥注入 (B) で確認し、削除した。変換モードのクリックが editingPath に触れないことは
+   * 「変換モードのクリックは editingPath を動かさない（spec §3-2）」が別に検査している。
+   */
+  test("破棄して移動すると変換モードへ入り、ダイアログは閉じたまま", async ({ page }) => {
     await page.getByLabel("タイトル").fill("書きかけ");
     const rail = page.getByRole("navigation", { name: "モード" });
     await rail.getByRole("button", { name: "変換" }).click();
     await page.getByRole("button", { name: "破棄して移動" }).click(); // ここは出てよい
 
-    // 変換モードに入った（タイトル欄はもう無い）
+    // 変換モードに入った（タイトル欄はもう無い）。discard で isDirty が偽になった直後なので、
+    // ここから先で変換モードのグリッドをクリックしても isDirty は再び真になり得ない
+    // （メタデータの編集 UI は metadata モードにしか無い）。つまりこの時点で「クリックしても
+    // ダイアログが出ない」を検査しても、isDirty が真になる余地が無いぶん、
+    // editingPath を変換モードで動かす欠陥を入れても素通りしてしまい検査にならない
+    // （欠陥注入 (B) で実測済み）。変換モードのクリックが editingPath に触れないことは
+    // 「変換モードのクリックは editingPath を動かさない（spec §3-2）」で別に検査している。
     await expect(page.getByLabel("タイトル")).toHaveCount(0);
-    await expect(page.getByRole("alertdialog")).toBeHidden();
-    await page.getByRole("option").nth(3).click();
     await expect(page.getByRole("alertdialog")).toBeHidden();
   });
 
@@ -316,12 +361,24 @@ test.describe("メタデータモード", () => {
     await expect(saveAndLeave).toBeVisible();
 
     // Playwright の click() を 2 回連続で await すると、1 回目の描画・状態更新を
-    // 待ってしまい「同じタスク内での連打」を再現できない。同期的に 2 回発火させる
+    // 待ってしまい「同じタスク内での連打」を再現できない。同期的に 2 回発火させる。
+    // Svelte の disabled 反映は次の描画まで遅れるので、2 回目もこの時点では
+    // まだ有効な DOM 要素にクリックが通る
     await saveAndLeave.evaluate((el: HTMLElement) => {
       el.click();
       el.click();
     });
 
+    // 前提条件: 実際の書き込みは狙いどおり 1 回しか起きていない
+    // （そうでなければ、そもそも「早期 return を成功と取り違える」状況を
+    // 作れていない ── これを見ずにトースト回数だけ見ると、再現に失敗しているのか
+    // 実装が直っているのかを区別できない）
+    await expect
+      .poll(() => page.evaluate(() => (window as any).__writeMetadataRequests?.length ?? 0))
+      .toBe(1);
+
+    // 本題: 書き込めたのは 1 回なのに、成功トーストが 2 回出ていないか
+    // （早期 return を「保存できた」と取り違えていないか）
     await expect(page.getByText("保存しました。")).toHaveCount(1);
   });
 });
