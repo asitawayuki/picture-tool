@@ -14,7 +14,7 @@ use quick_xml::events::{BytesStart, BytesText, Event};
 use quick_xml::name::{Namespace, ResolveResult};
 use quick_xml::{NsReader, Writer};
 
-use super::{cleaned, stars_to_percent, without_forbidden_controls, EditableMetadata};
+use super::{cleaned, stars_to_percent, without_xml_forbidden_chars, EditableMetadata};
 
 /// APP1 の XMP パケットに前置きされる識別子（末尾の NUL 込み）
 pub(super) const XMP_ID: &[u8] = b"http://ns.adobe.com/xap/1.0/\0";
@@ -424,8 +424,8 @@ fn properties_xml(values: &EditableMetadata) -> String {
     // **フィルタしてから空判定する。** 逆にすると `"\u{0b}"` のような入力で
     // EXIF 側（`exif::apply` は フィルタ → 空判定）はタグを削除し、XMP 側は
     // 空の `dc:title` 要素を書く ── 「空欄ならプロパティごと消す」規則が片側で破れる
-    let title = values.title.as_deref().map(without_forbidden_controls);
-    let comment = values.comment.as_deref().map(without_forbidden_controls);
+    let title = values.title.as_deref().map(without_xml_forbidden_chars);
+    let comment = values.comment.as_deref().map(without_xml_forbidden_chars);
     if let Some(title) = title.as_deref().filter(|t| !t.is_empty()) {
         out.push_str(&lang_alt("dc:title", title));
     }
@@ -445,7 +445,7 @@ fn properties_xml(values: &EditableMetadata) -> String {
 /// この 4 プロパティは本ツールが所有する（UI が 1 言語しか編集できない）ため
 /// 意図した挙動だが、他言語を持つ利用者にとっては損失である
 fn lang_alt(name: &str, text: &str) -> String {
-    // `text` は呼び出し側で `without_forbidden_controls` を通してある
+    // `text` は呼び出し側で `without_xml_forbidden_chars` を通してある
     // （XML 1.0 が許さない文字はエスケープしても入れられないため）
     let escaped = quick_xml::escape::escape(text);
     format!(

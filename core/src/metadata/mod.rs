@@ -43,7 +43,7 @@ pub(crate) fn cleaned(text: &str) -> Option<String> {
 /// 違う文字列が保存され、読み戻しの一致検証が食い違う（`cleaned` を 1 箇所に
 /// 統合したのとまったく同じ理由）。`EditableMetadata::normalized`（Task 9）も
 /// このヘルパを使うこと。
-pub(crate) fn without_forbidden_controls(text: &str) -> std::borrow::Cow<'_, str> {
+pub(crate) fn without_xml_forbidden_chars(text: &str) -> std::borrow::Cow<'_, str> {
     fn forbidden(c: char) -> bool {
         (c < '\u{20}' && !matches!(c, '\t' | '\n' | '\r')) || matches!(c, '\u{fffe}' | '\u{ffff}')
     }
@@ -304,20 +304,20 @@ mod tests {
     #[test]
     fn forbidden_control_characters_are_removed_but_tab_lf_cr_survive() {
         assert_eq!(
-            without_forbidden_controls("a\u{0b}b\u{0c}c\u{0}d\u{7}e"),
+            without_xml_forbidden_chars("a\u{0b}b\u{0c}c\u{0}d\u{7}e"),
             "abcde"
         );
         // XML 1.0 の Char 生成規則は U+FFFE / U+FFFF も除外する
-        assert_eq!(without_forbidden_controls("a\u{fffe}b\u{ffff}c"), "abc");
-        assert_eq!(without_forbidden_controls("a\tb\nc\rd"), "a\tb\nc\rd");
+        assert_eq!(without_xml_forbidden_chars("a\u{fffe}b\u{ffff}c"), "abc");
+        assert_eq!(without_xml_forbidden_chars("a\tb\nc\rd"), "a\tb\nc\rd");
         // C1 制御文字と DEL は XML 1.0 で合法。落とさない
         assert_eq!(
-            without_forbidden_controls("a\u{7f}b\u{85}c"),
+            without_xml_forbidden_chars("a\u{7f}b\u{85}c"),
             "a\u{7f}b\u{85}c"
         );
         // 落とすものが無ければ借用のまま（余計な確保をしない）
         assert!(matches!(
-            without_forbidden_controls("港"),
+            without_xml_forbidden_chars("港"),
             std::borrow::Cow::Borrowed(_)
         ));
     }

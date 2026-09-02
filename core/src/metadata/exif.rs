@@ -11,7 +11,7 @@ use little_exif::exif_tag::ExifTag;
 use little_exif::ifd::ExifTagGroup;
 use little_exif::metadata::Metadata;
 
-use crate::metadata::{cleaned, stars_to_percent, without_forbidden_controls, EditableMetadata};
+use crate::metadata::{cleaned, stars_to_percent, without_xml_forbidden_chars, EditableMetadata};
 
 /// IFD0 に置くタグ。`little_exif` に専用の enum バリアントが無いので生の ID で扱う
 pub(super) const XP_TITLE: u16 = 0x9c9b;
@@ -144,8 +144,8 @@ pub(super) fn apply(meta: &mut Metadata, values: &EditableMetadata) {
 
     // XMP 側（XML）が許さない制御文字をここでも落とす。**両側で同じ文字列を
     // 書かないと、Task 9 の「保存 → 読み戻して一致検証」が食い違う**
-    let title = values.title.as_deref().map(without_forbidden_controls);
-    let comment = values.comment.as_deref().map(without_forbidden_controls);
+    let title = values.title.as_deref().map(without_xml_forbidden_chars);
+    let comment = values.comment.as_deref().map(without_xml_forbidden_chars);
 
     // --- タイトル ---
     match title.as_deref() {
