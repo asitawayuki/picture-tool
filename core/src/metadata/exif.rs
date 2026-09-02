@@ -11,7 +11,7 @@ use little_exif::exif_tag::ExifTag;
 use little_exif::ifd::ExifTagGroup;
 use little_exif::metadata::Metadata;
 
-use crate::metadata::{cleaned, stars_to_percent, EditableMetadata};
+use crate::metadata::{cleaned, stars_to_percent, without_forbidden_controls, EditableMetadata};
 
 /// IFD0 に置くタグ。`little_exif` に専用の enum バリアントが無いので生の ID で扱う
 pub(super) const XP_TITLE: u16 = 0x9c9b;
@@ -142,8 +142,13 @@ fn encode_user_comment(text: &str, endian: &Endian) -> Vec<u8> {
 pub(super) fn apply(meta: &mut Metadata, values: &EditableMetadata) {
     let endian = meta.get_endian();
 
+    // XMP 側（XML）が許さない制御文字をここでも落とす。**両側で同じ文字列を
+    // 書かないと、Task 9 の「保存 → 読み戻して一致検証」が食い違う**
+    let title = values.title.as_deref().map(without_forbidden_controls);
+    let comment = values.comment.as_deref().map(without_forbidden_controls);
+
     // --- タイトル ---
-    match &values.title {
+    match title.as_deref() {
         Some(title) if !title.is_empty() => {
             meta.set_tag(ExifTag::UnknownINT8U(
                 to_ucs2le_nul(title),
@@ -151,7 +156,7 @@ pub(super) fn apply(meta: &mut Metadata, values: &EditableMetadata) {
                 ExifTagGroup::GENERIC,
             ));
             if title.is_ascii() {
-                meta.set_tag(ExifTag::ImageDescription(title.clone()));
+                meta.set_tag(ExifTag::ImageDescription(title.to_string()));
             } else {
                 // ASCII 型に日本語は入らない。古い ASCII 値が残ると
                 // Windows でそちらが出るので消す（正しい値は XPTitle と dc:title にある）
@@ -165,7 +170,7 @@ pub(super) fn apply(meta: &mut Metadata, values: &EditableMetadata) {
     }
 
     // --- コメント（ImageDescription には一切触らない） ---
-    match &values.comment {
+    match comment.as_deref() {
         Some(comment) if !comment.is_empty() => {
             meta.set_tag(ExifTag::UnknownINT8U(
                 to_ucs2le_nul(comment),

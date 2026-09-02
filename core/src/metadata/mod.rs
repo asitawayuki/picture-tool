@@ -26,6 +26,29 @@ pub(crate) fn cleaned(text: &str) -> Option<String> {
     (!trimmed.is_empty()).then(|| trimmed.to_string())
 }
 
+/// **XML 1.0 が許さない C0 制御文字（TAB/LF/CR 以外）を落とす。**
+///
+/// XMP パケットは XML なので、エスケープしてもこれらの文字は入れられない
+/// （`&#11;` と書いても非整形式）。webview 由来の JSON は `\u{0b}` のような文字を
+/// 普通に運べるため、素通しすると**パケット全体が Adobe/expat 系のリーダーから
+/// 読めなくなる**。しかも本ツールの `read()` はそれを読み戻せてしまうので、
+/// 「保存 → 読み戻して一致検証」（Task 9）をすり抜ける。
+///
+/// **EXIF 側と XMP 側の両方から呼ぶ。** 片側だけ落とすと同じ入力から
+/// 違う文字列が保存され、読み戻しの一致検証が食い違う（`cleaned` を 1 箇所に
+/// 統合したのとまったく同じ理由）。`EditableMetadata::normalized`（Task 9）も
+/// このヘルパを使うこと。
+pub(crate) fn without_forbidden_controls(text: &str) -> std::borrow::Cow<'_, str> {
+    fn forbidden(c: char) -> bool {
+        c.is_control() && c < '\u{20}' && !matches!(c, '\t' | '\n' | '\r')
+    }
+    if text.contains(forbidden) {
+        std::borrow::Cow::Owned(text.chars().filter(|c| !forbidden(*c)).collect())
+    } else {
+        std::borrow::Cow::Borrowed(text)
+    }
+}
+
 use serde::{Deserialize, Serialize};
 
 /// 人が編集する対象のメタデータ。
@@ -116,6 +139,21 @@ mod tests {
     fn out_of_range_percent_clamps_to_five_stars() {
         assert_eq!(percent_to_stars(100), Some(5));
         assert_eq!(percent_to_stars(65535), Some(5));
+    }
+
+    /// XML 1.0 が許さない制御文字は落ち、TAB/LF/CR と通常の文字は残る
+    #[test]
+    fn forbidden_control_characters_are_removed_but_tab_lf_cr_survive() {
+        assert_eq!(
+            without_forbidden_controls("a\u{0b}b\u{0c}c\u{0}d\u{7}e"),
+            "abcde"
+        );
+        assert_eq!(without_forbidden_controls("a\tb\nc\rd"), "a\tb\nc\rd");
+        // 落とすものが無ければ借用のまま（余計な確保をしない）
+        assert!(matches!(
+            without_forbidden_controls("港"),
+            std::borrow::Cow::Borrowed(_)
+        ));
     }
 
     /// 往復して同じ★に戻ること。表を片方だけ直した事故を捕まえる
