@@ -9,6 +9,8 @@
 //! もう一方のアプリから「未設定」に見えるため。詳細は
 //! `docs/superpowers/specs/2026-08-18-metadata-editing-design.md`。
 
+mod exif;
+
 use serde::{Deserialize, Serialize};
 
 /// 人が編集する対象のメタデータ。
