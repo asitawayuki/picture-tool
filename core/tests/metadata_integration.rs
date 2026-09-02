@@ -28,6 +28,11 @@ fn scratch(name: &str) -> (tempfile::TempDir, PathBuf) {
 /// 1030 → 1056 も、サムネイル本体の SHA256 が完全一致した状態でのシフトだった）。
 /// 対になる `JPEGInterchangeFormatLength`（サムネイルの長さ）はここでは除外せず比較に残す
 /// （長さが変われば切り詰められたということなので、それは検知したい）。
+///
+/// **この除外の対価は `thumbnail_bytes` による本体バイト列比較で払う。**
+/// オフセットだけを比較から外して本体を見ないままにすると、「長さは同じだが本体が
+/// 別のバイト列に化ける／古い位置を指す」欠陥をどこにも引っかからない穴にしてしまう
+/// （`writing_metadata_keeps_every_existing_exif_tag` 参照）。
 fn exif_fields(path: &Path) -> Vec<(String, String)> {
     let file = std::fs::File::open(path).unwrap();
     let mut reader = std::io::BufReader::new(file);
@@ -50,10 +55,61 @@ fn exif_fields(path: &Path) -> Vec<(String, String)> {
     fields
 }
 
-/// **既存タグの保存** — 追加した項目以外のタグ集合に差分が無いこと
+/// IFD1 のサムネイル JPEG 本体を切り出す。サムネイルを持たない画像では `None` を返す。
+///
+/// `core/tests/metadata_spike.rs` の同名ヘルパと同じ考え方 ── オフセット・長さは
+/// ハードコードせず、渡された `bytes` 自身から kamadak-exif で都度読み直す
+/// （書き込み後の実際の値を見ることで、little_exif がオフセットを正しく追従させているか
+/// 自体を検査対象にするため）。オフセットは Exif セグメント内の `Exif\0\0` マーカー直後、
+/// すなわち TIFF ヘッダの先頭からの相対値
+fn thumbnail_bytes(bytes: &[u8]) -> Option<Vec<u8>> {
+    let mut cursor = std::io::Cursor::new(bytes);
+    let reader = exif::Reader::new().read_from_container(&mut cursor).ok()?;
+
+    let offset_field = reader.get_field(exif::Tag::JPEGInterchangeFormat, exif::In::THUMBNAIL)?;
+    let length_field =
+        reader.get_field(exif::Tag::JPEGInterchangeFormatLength, exif::In::THUMBNAIL)?;
+    let offset = offset_field
+        .value
+        .get_uint(0)
+        .expect("JPEGInterchangeFormat が整数として読めない") as usize;
+    let length = length_field
+        .value
+        .get_uint(0)
+        .expect("JPEGInterchangeFormatLength が整数として読めない") as usize;
+
+    const TIFF_HEADER_MARKER: &[u8] = b"Exif\0\0";
+    let exif_pos = bytes
+        .windows(TIFF_HEADER_MARKER.len())
+        .position(|w| w == TIFF_HEADER_MARKER)
+        .expect("Exif セグメントの `Exif\\0\\0` マーカーが見つからない");
+    let tiff_start = exif_pos + TIFF_HEADER_MARKER.len();
+
+    let start = tiff_start + offset;
+    let end = start + length;
+    assert!(
+        end <= bytes.len(),
+        "サムネイルの範囲がファイル長を超えている（start={start}, end={end}, file_len={}）",
+        bytes.len()
+    );
+    let thumb = &bytes[start..end];
+    // オフセット計算そのものが正しいことの検査。ずれていればここで SOI/EOI が見えないはず
+    assert!(
+        thumb.starts_with(&[0xFF, 0xD8]) && thumb.ends_with(&[0xFF, 0xD9]),
+        "切り出したサムネイルが JPEG として壊れている（offset={offset}, length={length}）"
+    );
+    Some(thumb.to_vec())
+}
+
+/// **既存タグの保存** — 追加した項目以外のタグ集合に差分が無いこと。
+///
+/// **サムネイル本体のバイト列一致も検査する**（`exif_fields` が `JPEGInterchangeFormat`
+/// を比較から除外している対価）。**画素不変**（`sos_offset` 以降が不変）も併せて検査する
+/// ── 実写真＋実 Exif という最も本番に近い経路でピクセル不変を押さえておく
 #[test]
 fn writing_metadata_keeps_every_existing_exif_tag() {
     let (_dir, path) = scratch("exif-only.jpg");
+    let before_bytes = std::fs::read(&path).unwrap();
     let before = exif_fields(&path);
     // 前提条件: 実写真由来の Exif が本当に入っていること。
     // ここが空だと「タグが消えていない」は自明に通ってしまう
@@ -61,6 +117,13 @@ fn writing_metadata_keeps_every_existing_exif_tag() {
         before.len() > 10 && before.iter().any(|(name, _)| name.contains("Model")),
         "フィクスチャの Exif が薄すぎる。Task 2 を見直すこと: {:?}",
         before
+    );
+    let before_thumbnail = thumbnail_bytes(&before_bytes);
+    // 前提条件: このフィクスチャは本当にサムネイルを埋め込んでいること。
+    // ここが `None` だと、下のサムネイル比較は `None == None` で自明に緑になってしまう
+    assert!(
+        before_thumbnail.is_some(),
+        "この写真には埋め込みサムネイルが必要（比較が空振りしていないことの前提条件）"
     );
 
     write_metadata(
@@ -76,6 +139,19 @@ fn writing_metadata_keeps_every_existing_exif_tag() {
     let after = exif_fields(&path);
     let lost: Vec<&(String, String)> = before.iter().filter(|f| !after.contains(f)).collect();
     assert!(lost.is_empty(), "消えた・変わったタグ: {:#?}", lost);
+
+    let after_bytes = std::fs::read(&path).unwrap();
+    let after_thumbnail = thumbnail_bytes(&after_bytes);
+    assert_eq!(
+        before_thumbnail, after_thumbnail,
+        "サムネイル本体が書き込み前後で変わった（消失または内容の変化）"
+    );
+
+    assert_eq!(
+        after_bytes[sos_offset(&after_bytes)..],
+        before_bytes[sos_offset(&before_bytes)..],
+        "既存タグを保存する経路で画素が変化した"
+    );
 }
 
 /// **再編集** — 2 回書いても壊れない（`little_exif` issue #93 の再現条件）
@@ -194,9 +270,18 @@ fn a_file_whose_exif_cannot_be_parsed_is_refused_without_being_modified() {
     // "Exif" は 1 段階内側の `build` の文脈にあるので、チェーン全体を見る
     // `{:#}`（alternate）で確認する。既存の単体テスト（`mod.rs` の
     // `a_non_jpeg_fails_without_modifying_the_file` 等）と同じ確認方法
+    let message = format!("{error:#}");
     assert!(
-        format!("{error:#}").contains("Exif"),
-        "理由が伝わる文面であること: {error:#}"
+        message.contains("Exif"),
+        "理由が伝わる文面であること: {message}"
+    );
+    // "Exif" だけの部分一致だと、`build` の別の失敗文脈（例:
+    // `.context("Exif を書き込めません")`）でも通ってしまい、
+    // `has_exif_segment` ガードを名指ししたことにならない。
+    // ガード固有の文言（"解析できない"）まで確認する
+    assert!(
+        message.contains("解析できない"),
+        "has_exif_segment ガードのメッセージであること（別の失敗経路と取り違えていないか）: {message}"
     );
     assert_eq!(
         std::fs::read(&path).unwrap(),
@@ -319,7 +404,15 @@ fn clearing_previously_set_fields_removes_them_and_keeps_foreign_xmp_namespaces(
 }
 
 /// **Exif を1つも持たない JPEG への保存** — `build` の `Err(_) => Metadata::new()` 分岐
-/// （Exif APP1 を持たない画像には新しい Exif を作ってよい）を通す。
+/// （Exif APP1 を持たない画像には新しい Exif を作ってよい）を通すことを**狙った**テスト。
+///
+/// 統合テストは公開 API（`read_metadata` / `write_metadata`）越しにしか観測できないため、
+/// `little_exif::Metadata::new_from_vec` が実際に `Err` を返して `Err(_) => Metadata::new()`
+/// を通ったのか、`Ok` を返す別の内部経路を通ったのかを直接は区別できない。
+/// **前提条件として保証しているのは「Exif APP1 セグメントが無い」こと**
+/// （下の assert）── これは `has_exif_segment(&jpeg)` が false になる状況そのものなので、
+/// `Metadata::new_from_vec` がどちらを返しても `build` は失敗せず書き込みが完了するはず、
+/// というのがこのテストの主張
 ///
 /// `img-parts` で `exif-only.jpg` から Exif APP1 を取り除いたバイト列を用意し、
 /// そこへ書き込めること・読み戻せること・画素が不変であることを確かめる
