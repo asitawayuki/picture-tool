@@ -18,7 +18,7 @@
   import ResultDialog from "./lib/ResultDialog.svelte";
   import Toast from "./lib/Toast.svelte";
   import { toast, describeError } from "./lib/toasts.svelte";
-  import { listImages } from "./lib/api";
+  import { listImages, setUnsavedState } from "./lib/api";
   import { createThumbnailQueue } from "./lib/browser/thumbnailQueue.svelte";
   import { createPresetStore } from "./lib/panels/presets.svelte";
   import { createConvertRun } from "./lib/panels/convertRun.svelte";
@@ -100,6 +100,15 @@
       metadata.load(target).catch((e) => {
         toast.error(`メタデータを読めませんでした: ${describeError(e)}`);
       });
+    });
+  });
+
+  // 未保存の有無が変わるたびに Rust へ伝える。Tauri の外（vite dev）では
+  // invoke が必ず reject するので、握りつぶす
+  $effect(() => {
+    const dirty = metadata.isDirty;
+    untrack(() => {
+      void setUnsavedState(dirty).catch(() => {});
     });
   });
 

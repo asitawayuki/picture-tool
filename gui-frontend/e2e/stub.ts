@@ -145,6 +145,11 @@ export async function installTauriStub(page: Page, options: StubOptions = {}) {
     const callbacks = new Map<number, (payload: unknown) => void>();
     let nextCallbackId = 1;
 
+    // どのコマンドが何で呼ばれたかを検査できるようにする。
+    // 「Rust へ通知した」型の配線は、画面に出ないので他に確かめようが無い
+    const calls: { cmd: string; args: unknown }[] = [];
+    (window as unknown as Record<string, unknown>).__stubCalls = calls;
+
     const handlers: Record<string, (args: any) => unknown> = {
       list_drives: () => ["/"],
       list_directory: () => [
@@ -234,6 +239,7 @@ export async function installTauriStub(page: Page, options: StubOptions = {}) {
         granted = true;
         return folder;
       },
+      set_unsaved_state: () => null,
       "plugin:event|listen": () => nextCallbackId++,
       "plugin:event|unlisten": () => null,
     };
@@ -245,6 +251,7 @@ export async function installTauriStub(page: Page, options: StubOptions = {}) {
         return id;
       },
       async invoke(cmd: string, args: any) {
+        calls.push({ cmd, args });
         const handler = handlers[cmd];
         if (!handler) throw new Error(`stub: 未対応のコマンド ${cmd}`);
         return handler(args ?? {});

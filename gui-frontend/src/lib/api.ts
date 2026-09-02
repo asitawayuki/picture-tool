@@ -132,3 +132,13 @@ export async function writeImageMetadata(
 export async function grantMetadataEditing(folder: string): Promise<string | null> {
   return invoke("grant_metadata_editing", { folder });
 }
+
+/**
+ * 未保存の有無を Rust に伝える。終了時の確認は Rust 側が OS ネイティブで出す。
+ *
+ * webview で `onCloseRequested` を使うには `window:allow-destroy` が要り、
+ * capabilities を `core:default` に留める前提から外れる（S6-H8 / 刷新 spec §3-4）。
+ */
+export async function setUnsavedState(unsaved: boolean): Promise<void> {
+  return invoke("set_unsaved_state", { unsaved });
+}

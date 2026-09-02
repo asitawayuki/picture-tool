@@ -381,4 +381,23 @@ test.describe("メタデータモード", () => {
     // （早期 return を「保存できた」と取り違えていないか）
     await expect(page.getByText("保存しました。")).toHaveCount(1);
   });
+
+  test("未保存の有無が Rust へ伝わる（刷新 spec §3-4）", async ({ page }) => {
+    const lastUnsaved = () =>
+      page.evaluate(() => {
+        const calls = (window as any).__stubCalls as { cmd: string; args: any }[];
+        const hits = calls.filter((c) => c.cmd === "set_unsaved_state");
+        return hits.length === 0 ? null : hits[hits.length - 1].args.unsaved;
+      });
+
+    // 前提条件: 触る前は false（＝「常に true」ではない）
+    await expect.poll(lastUnsaved).toBe(false);
+
+    await page.getByLabel("タイトル").fill("書きかけ");
+    await expect.poll(lastUnsaved).toBe(true);
+
+    await page.getByRole("button", { name: "このフォルダーへの書き込みを許可..." }).click();
+    await page.getByRole("button", { name: "保存", exact: true }).click();
+    await expect.poll(lastUnsaved).toBe(false);
+  });
 });

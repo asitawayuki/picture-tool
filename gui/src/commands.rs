@@ -728,6 +728,16 @@ pub async fn grant_metadata_editing(
     Ok(Some(granted))
 }
 
+/// 未保存の有無を Rust 側へ通知する
+///
+/// フロントで `onCloseRequested` を使わないのは、`core:default` に
+/// `window:allow-destroy` が含まれず、webview に追加権限が要るため。
+/// 「webview にプラグイン権限を与えない」という既存の前提（`security.rs`）に反する。
+#[tauri::command]
+pub fn set_unsaved_state(state: tauri::State<'_, ProcessingState>, unsaved: bool) {
+    state.unsaved.store(unsaved, Ordering::SeqCst);
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
