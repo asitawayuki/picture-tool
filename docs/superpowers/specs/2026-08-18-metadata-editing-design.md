@@ -1,7 +1,8 @@
 # メタデータ編集（タイトル・コメント・レーティング）設計
 
-**状態**: 設計確定・実装前
-**前提**: この機能の実装は **GUI デザイン刷新の後**に行う（後述「実装順序」）
+**状態**: 実装済み（`feature/metadata-editing` ブランチ）。実装計画と実施メモは
+[`docs/superpowers/plans/2026-08-26-metadata-editing.md`](../plans/2026-08-26-metadata-editing.md)
+**前提**: この機能は **GUI デザイン刷新の後**に実装した（後述「実装順序」）
 
 ## 背景と目的
 
@@ -470,8 +471,13 @@ Lang Alt（`rdf:Alt` + `rdf:li`）であり、他アプリが `en-US` / `fr-FR` 
 - **`writable_image` の境界** — 承認していないルート、存在しないファイル、
   非対応拡張子がそれぞれ拒否されること
 
-テストフィクスチャには**実カメラ由来の JPEG**（MakerNote 付き）を含める。
-合成画像だけでは今回の未検証リスクを踏み抜く。
+テストフィクスチャには**実写真由来の JPEG**を含める。合成画像だけでは検査として弱い。
+`exif-only.jpg` / `lightroom-xmp.jpg` はどちらも Lightroom 書き出しの実写真から作った
+（`core/tests/fixtures/`）。**MakerNote 付きは含まない** ── 本ツールが実際に書き込む対象は
+Lightroom 書き出しの JPEG で、MakerNote を持たないため（詳細は
+「### 残リスク: MakerNote 付き JPEG」）。その代わり、解析できない Exif に当たった場合に
+作り直さず `Err` で止まることを
+`a_file_whose_exif_cannot_be_parsed_is_refused_without_being_modified` が守る。
 
 ## 実装順序
 
