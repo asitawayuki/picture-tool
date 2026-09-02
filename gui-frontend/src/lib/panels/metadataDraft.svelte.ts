@@ -12,8 +12,9 @@ import {
  *
  * 離脱経路のうち写真の切替 / rail でのモード移動 / フォルダー変更の 3 つは
  * `isDirty` を通してガード済み（Task 15 / 刷新 spec §3-4）。判定をここ 1 箇所に
- * 置いてあるので、呼び出し側は分岐を増やさずに済む。ウィンドウを閉じる経路は
- * まだ未配線（Task 16）。
+ * 置いてあるので、呼び出し側は分岐を増やさずに済む。ウィンドウを閉じる経路も
+ * `isDirty` を `App.svelte` が `setUnsavedState` 経由で Rust へ伝える形で配線済み
+ * （Task 16）。
  */
 export function createMetadataDraft() {
   let path = $state<string | null>(null);

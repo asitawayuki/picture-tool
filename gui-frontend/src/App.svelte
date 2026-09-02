@@ -104,11 +104,17 @@
   });
 
   // 未保存の有無が変わるたびに Rust へ伝える。Tauri の外（vite dev）では
-  // invoke が必ず reject するので、握りつぶす
+  // invoke が必ず reject するので、そこだけ握りつぶす。本番で失敗すると
+  // Rust 側の unsaved が false のまま取り残され、終了時に未保存のまま
+  // 黙って閉じてしまう（このガードが防ぎたいことそのもの）ので、
+  // 本番では最低限コンソールに痕跡を残す（利用者に見せるほどではないので toast は出さない）
   $effect(() => {
     const dirty = metadata.isDirty;
     untrack(() => {
-      void setUnsavedState(dirty).catch(() => {});
+      void setUnsavedState(dirty).catch((e) => {
+        if (import.meta.env.DEV) return;
+        console.error("未保存状態の通知に失敗", e);
+      });
     });
   });
 
