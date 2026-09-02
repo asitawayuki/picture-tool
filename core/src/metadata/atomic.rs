@@ -19,6 +19,7 @@ use super::EditableMetadata;
 use anyhow::{anyhow, bail, Context, Result};
 use std::io::Write;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 
 /// SOS（`FF DA`）の開始位置。ここから EOI までが実際の画素データ。
 ///
@@ -55,6 +56,29 @@ pub(super) fn scan_offset(bytes: &[u8]) -> Result<usize> {
     }
 }
 
+/// プロセス内で一時ファイル名を一意にするためのカウンタ。
+///
+/// PID だけでは**他プロセスとの**衝突は防げても、**同一プロセス内**の並行書き込み
+/// （`write_image_metadata` が `spawn_blocking` 上で走ることで起きうる、同じ写真への
+/// 同時書き込み）は防げない。同じ temp パスを 2 スレッドが使うと、書き込み → verify →
+/// rename の間に別スレッドが同じ temp を書き直し、検証済みでないバイト列が元写真の
+/// 上に rename されうる（TOCTOU）。このカウンタが両方の軸で一意性を作る。
+static TEMP_SEQ: AtomicU64 = AtomicU64::new(0);
+
+/// 一時ファイルのパスを組み立てる。`dir` と `name` は保ったまま、
+/// プレフィックス `.` とサフィックス `.picture-tool.tmp` の間に PID とカウンタを挟む。
+///
+/// **呼ぶたびに異なるパスを返す**（同一プロセス内でも）。
+fn temp_path(dir: &Path, name: &str) -> PathBuf {
+    let seq = TEMP_SEQ.fetch_add(1, Ordering::Relaxed);
+    dir.join(format!(
+        ".{}.{}.{}.picture-tool.tmp",
+        name,
+        std::process::id(),
+        seq
+    ))
+}
+
 /// 検証付きの原子的置換
 pub(super) fn replace_verified(
     path: &Path,
@@ -74,7 +98,7 @@ pub(super) fn replace_verified(
         .file_name()
         .and_then(|n| n.to_str())
         .ok_or_else(|| anyhow!("ファイル名を解釈できません: {}", path.display()))?;
-    let temp = TempFile(dir.join(format!(".{}.{}.picture-tool.tmp", name, std::process::id())));
+    let temp = TempFile(temp_path(dir, name));
 
     // **`fs::write` ではなく `File::create` + `write_all` + `sync_all`。**
     // `verify` の読み戻しはページキャッシュ経由なので、それだけではディスクへの
@@ -181,6 +205,38 @@ mod tests {
     use img_parts::Bytes;
     use little_exif::filetype::FileExtension;
     use little_exif::metadata::Metadata;
+
+    /// **同一プロセス内で 2 回呼ぶと必ず異なるパスになる。**
+    ///
+    /// `write_image_metadata` が `spawn_blocking` 上で走ると、同じ写真への
+    /// `write_metadata` が同一プロセス内で並行しうる。PID だけの名前だと
+    /// 2 スレッドが同じ temp パスを使い、検証済みでないバイト列が rename されうる
+    /// （TOCTOU）。`dir` と `name`、プレフィックス `.` とサフィックス
+    /// `.picture-tool.tmp` は保たれることも見る。
+    #[test]
+    fn temp_path_is_unique_within_the_same_process() {
+        let dir = PathBuf::from("/tmp/picture-tool-test-dir");
+        let name = "photo.jpg";
+
+        let first = temp_path(&dir, name);
+        let second = temp_path(&dir, name);
+
+        assert_ne!(first, second, "同一プロセス内で同じパスが出た");
+        for path in [&first, &second] {
+            assert_eq!(path.parent(), Some(dir.as_path()), "dir が保たれていない");
+            let file_name = path.file_name().unwrap().to_str().unwrap();
+            assert!(
+                file_name.starts_with(&format!(".{}.", name)),
+                "プレフィックスが無い: {}",
+                file_name
+            );
+            assert!(
+                file_name.ends_with(".picture-tool.tmp"),
+                "サフィックスが無い: {}",
+                file_name
+            );
+        }
+    }
 
     /// テンポラリに複製したフィクスチャ。元のフィクスチャは書き換えない
     fn scratch() -> (tempfile::TempDir, PathBuf, Vec<u8>) {
