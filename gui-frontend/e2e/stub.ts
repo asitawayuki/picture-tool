@@ -146,7 +146,11 @@ export async function installTauriStub(page: Page, options: StubOptions = {}) {
     let nextCallbackId = 1;
 
     // どのコマンドが何で呼ばれたかを検査できるようにする。
-    // 「Rust へ通知した」型の配線は、画面に出ないので他に確かめようが無い
+    // 「Rust へ通知した」型の配線は、画面に出ないので他に確かめようが無い。
+    // **上限付きの記録**（裁定 V1）。無制限に積むと、`read_image_ratings` が
+    // 可視範囲のたびに呼ばれる scroll.spec.ts（3,000 枚）で数千要素になる。
+    // 直近だけ残せば、末尾を見る既存の検査（`set_unsaved_state` の最新値）は壊れない
+    const CALLS_LIMIT = 200;
     const calls: { cmd: string; args: unknown }[] = [];
     (window as unknown as Record<string, unknown>).__stubCalls = calls;
 
@@ -240,6 +244,11 @@ export async function installTauriStub(page: Page, options: StubOptions = {}) {
         return folder;
       },
       set_unsaved_state: () => null,
+      read_image_ratings: ({ paths }: { paths: string[] }) =>
+        paths.map((path) => ({
+          path,
+          rating: (stored.get(path) as { rating: number | null } | undefined)?.rating ?? null,
+        })),
       "plugin:event|listen": () => nextCallbackId++,
       "plugin:event|unlisten": () => null,
     };
@@ -252,6 +261,7 @@ export async function installTauriStub(page: Page, options: StubOptions = {}) {
       },
       async invoke(cmd: string, args: any) {
         calls.push({ cmd, args });
+        if (calls.length > CALLS_LIMIT) calls.shift();
         const handler = handlers[cmd];
         if (!handler) throw new Error(`stub: 未対応のコマンド ${cmd}`);
         return handler(args ?? {});

@@ -108,6 +108,7 @@ fn main() {
             commands::write_image_metadata,
             commands::grant_metadata_editing,
             commands::set_unsaved_state,
+            commands::read_image_ratings,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

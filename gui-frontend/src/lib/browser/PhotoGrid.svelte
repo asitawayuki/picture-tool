@@ -29,6 +29,10 @@
     onVisibleRangeChange: (start: number, end: number) => void;
     onToggleSelect: (image: ImageEntry) => void;
     onFocus: (image: ImageEntry) => void;
+    /** タイルに出す★。undefined は未取得 */
+    ratingFor: (path: string) => number | null | undefined;
+    /** 未保存の変更があるメタデータの編集対象 */
+    unsavedPath: string | null;
     selectedCount: number;
     rightPanelCollapsed: boolean;
     onToggleRightPanel: () => void;
@@ -52,6 +56,8 @@
     onVisibleRangeChange,
     onToggleSelect,
     onFocus,
+    ratingFor,
+    unsavedPath,
     selectedCount,
     rightPanelCollapsed,
     onToggleRightPanel,
@@ -318,6 +324,7 @@
       {#each visible as image, offset (image.path)}
         {@const index = range.startIndex + offset}
         {@const thumb = thumbnailFor(image.path, metrics.thumbnailSize)}
+        {@const stars = ratingFor(image.path)}
         <!-- キーボードは listbox（親）側の onkeydown が composite widget として
              一括で受ける。ARIA の listbox/option ではそれが正しい形で、
              option ごとに handler を重ねると同じキーが二重に走る。
@@ -357,6 +364,12 @@
             {/if}
           </div>
           <span class="filename">{image.name}</span>
+          {#if unsavedPath === image.path}
+            <span class="unsaved-mark" title="未保存の変更があります" aria-hidden="true">●</span>
+          {/if}
+          {#if stars}
+            <span class="stars" aria-hidden="true">{"★".repeat(stars)}</span>
+          {/if}
         </div>
       {/each}
     </div>
@@ -483,5 +496,14 @@
     white-space: nowrap;
     font: var(--md-sys-typescale-body-sm);
     color: var(--md-sys-color-on-surface-variant);
+  }
+
+  .stars {
+    color: var(--md-sys-color-primary);
+    font: var(--md-sys-typescale-body-sm);
+  }
+
+  .unsaved-mark {
+    color: var(--md-sys-color-error);
   }
 </style>

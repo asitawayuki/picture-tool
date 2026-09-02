@@ -400,4 +400,27 @@ test.describe("メタデータモード", () => {
     await page.getByRole("button", { name: "保存", exact: true }).click();
     await expect.poll(lastUnsaved).toBe(false);
   });
+
+  test("保存した★がグリッドのタイルにも出る（刷新 spec §4-3）", async ({ page }) => {
+    const tile = page.getByRole("option").first();
+    // 前提条件: いまは★が出ていない
+    await expect(tile.getByText("★", { exact: false })).toBeHidden();
+
+    await page.getByRole("button", { name: "このフォルダーへの書き込みを許可..." }).click();
+    const rating = page.getByRole("slider", { name: "レーティング" });
+    await rating.focus();
+    await rating.press("ArrowRight");
+    await rating.press("ArrowRight");
+    await rating.press("ArrowRight");
+    await page.getByRole("button", { name: "保存", exact: true }).click();
+
+    await expect(tile.getByText("★★★")).toBeVisible();
+  });
+
+  test("未保存の写真にタイル上の印が出る", async ({ page }) => {
+    const tile = page.getByRole("option").first();
+    await expect(tile.getByTitle("未保存の変更があります")).toBeHidden(); // 前提条件
+    await page.getByLabel("タイトル").fill("書きかけ");
+    await expect(tile.getByTitle("未保存の変更があります")).toBeVisible();
+  });
 });

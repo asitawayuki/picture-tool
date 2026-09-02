@@ -304,3 +304,33 @@ fn generate_lightroom_xmp_fixture() {
     std::fs::write(fixture_path("lightroom-xmp.jpg"), &bytes).unwrap();
     println!("lightroom-xmp.jpg: {} bytes", bytes.len());
 }
+
+#[test]
+#[ignore = "実測。PICTURE_TOOL_SPIKE_FOLDER に写真フォルダーを渡す"]
+fn measure_read_metadata_cost() {
+    let folder = std::env::var("PICTURE_TOOL_SPIKE_FOLDER")
+        .expect("PICTURE_TOOL_SPIKE_FOLDER に写真フォルダーのパスを渡すこと");
+    let files: Vec<_> = std::fs::read_dir(&folder)
+        .unwrap()
+        .filter_map(|e| e.ok().map(|e| e.path()))
+        .filter(|p| {
+            p.extension()
+                .and_then(|e| e.to_str())
+                .is_some_and(|e| e.eq_ignore_ascii_case("jpg") || e.eq_ignore_ascii_case("jpeg"))
+        })
+        .take(60)
+        .collect();
+    assert!(!files.is_empty(), "JPEG が 1 枚も無い: {}", folder);
+
+    let started = std::time::Instant::now();
+    for file in &files {
+        let _ = picture_tool_core::metadata::read_metadata(file);
+    }
+    let elapsed = started.elapsed();
+    println!(
+        "{} 枚 / {:?} → 1 枚あたり {:?}",
+        files.len(),
+        elapsed,
+        elapsed / files.len() as u32
+    );
+}

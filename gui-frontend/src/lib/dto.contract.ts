@@ -25,6 +25,7 @@ import type {
   ProcessResult,
   ProcessingConfig,
   ProgressPayload,
+  RatingEntry,
 } from "./types";
 
 /** フォルダーツリーの 1 行 */
@@ -42,6 +43,12 @@ export const imageEntry: ImageEntry = {
   path: "/home/user/photos/photo.jpg",
   size_bytes: 4500000,
   width: 4000,
+};
+
+/** グリッドの★1 件（読めなかった写真は rating: null） */
+export const ratingEntry: RatingEntry = {
+  path: "/home/user/photos/photo.jpg",
+  rating: 3,
 };
 
 /** 出力幅の上限あり（4 の倍数で送る） */

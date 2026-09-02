@@ -20,6 +20,7 @@
   import { toast, describeError } from "./lib/toasts.svelte";
   import { listImages, setUnsavedState } from "./lib/api";
   import { createThumbnailQueue } from "./lib/browser/thumbnailQueue.svelte";
+  import { createRatingStore } from "./lib/browser/ratings.svelte";
   import { createPresetStore } from "./lib/panels/presets.svelte";
   import { createConvertRun } from "./lib/panels/convertRun.svelte";
   import { createFrameDraft } from "./lib/panels/frameDraft.svelte";
@@ -60,8 +61,14 @@
   /** `revealPath` を呼ぶための PhotoGrid インスタンス（Step 6b） */
   let grid = $state<ReturnType<typeof PhotoGrid> | undefined>();
 
+  // 可視範囲を App にも持たせる。**モードの切替では可視範囲が変わらない**ので、
+  // onVisibleRangeChange だけを起点にすると、変換モードから情報モードへ入って
+  // スクロールするまで★が 1 つも出ない（PhotoGrid の $effect は range 依存）
+  let visibleRange = $state({ start: 0, end: -1 });
+
   const layout = createLayout();
   const thumbnails = createThumbnailQueue();
+  const ratings = createRatingStore();
   const presets = createPresetStore();
   const convert = createConvertRun();
   // 下書きは一覧を読み書きするのでプリセットストアを渡す
@@ -116,6 +123,13 @@
         console.error("未保存状態の通知に失敗", e);
       });
     });
+  });
+
+  // 可視範囲・モード・写真一覧のどれが動いても、情報モードなら★を取りに行く
+  $effect(() => {
+    if (mode !== "metadata") return;
+    const paths = images.slice(visibleRange.start, visibleRange.end + 1).map((img) => img.path);
+    untrack(() => ratings.request(paths));
   });
 
   // --- イベントリスナー ---
@@ -174,6 +188,7 @@
     // 選択は常に現在のフォルダー内に閉じる。SelectionList を廃止したので
     // 画面外の選択を可視化・解除する窓口がもう無い（spec §3-2 / §5-1）
     selectedPaths.clear();
+    ratings.forget();
     // 初回 1 画面分の目安。正確な可視枚数は PhotoGrid が出すが、
     // ここでは「上から順に流す枚数」の見積もりで足りる
     thumbnails.resetForFolder(30);
@@ -191,6 +206,11 @@
 
   function handleSelectFolder(path: string) {
     guarded(() => void loadFolder(path));
+  }
+
+  function handleVisibleRangeChange(start: number, end: number) {
+    thumbnails.setVisibleRange(start, end);
+    visibleRange = { start, end };
   }
 
   // クリックは「選択のトグル ＋ focusedPath の移動」を同時に行う（spec §3-2）
@@ -256,7 +276,15 @@
   async function handleSaveMetadata(): Promise<boolean> {
     try {
       const didSave = await metadata.save();
-      if (didSave) toast.success("保存しました。");
+      if (didSave) {
+        toast.success("保存しました。");
+        // invalidate だけでは、可視範囲・モード・一覧のどれも変わらないので
+        // ratings の request エフェクトが再実行されず、★が消えたまま戻ってこない。
+        // 保存した 1 枚だけはその場で取り直す（ブリーフからの逸脱。実施メモに記載）
+        const savedPath = metadata.path!;
+        ratings.invalidate(savedPath);
+        ratings.request([savedPath]);
+      }
       return didSave;
     } catch (e) {
       toast.error(`保存できませんでした: ${describeError(e)}`);
@@ -312,10 +340,12 @@
         {focusedPath}
         thumbnailFor={thumbnails.get}
         onRequestThumbnail={thumbnails.request}
-        onVisibleRangeChange={thumbnails.setVisibleRange}
+        onVisibleRangeChange={handleVisibleRangeChange}
         bind:scrollTop={gridScrollTop}
         onToggleSelect={handleToggleSelect}
         onFocus={handleFocus}
+        ratingFor={ratings.get}
+        unsavedPath={metadata.isDirty ? editingPath : null}
         selectedCount={selectedPaths.size}
         rightPanelCollapsed={layout.rightPanelCollapsed}
         onToggleRightPanel={() =>
