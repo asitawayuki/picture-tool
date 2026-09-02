@@ -131,6 +131,122 @@ fn verify(temp: &Path, original: &Path, expected: &EditableMetadata) -> Result<(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use img_parts::jpeg::{markers, Jpeg};
+    use img_parts::{Bytes, ImageEXIF};
+
+    /// テンポラリに複製したフィクスチャ。元のフィクスチャは書き換えない
+    fn scratch() -> (tempfile::TempDir, PathBuf, Vec<u8>) {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("exif-only.jpg");
+        std::fs::copy(
+            PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/exif-only.jpg"),
+            &path,
+        )
+        .unwrap();
+        let original = std::fs::read(&path).unwrap();
+        (dir, path, original)
+    }
+
+    /// 関門が拒んだあと、**元ファイルが 1 バイトも変わっておらず、一時ファイルも
+    /// 残っていない**こと。3 つの関門で同じことを確かめる
+    fn assert_untouched(dir: &tempfile::TempDir, path: &Path, original: &[u8]) {
+        assert_eq!(
+            std::fs::read(path).unwrap(),
+            original,
+            "元ファイルが変わった"
+        );
+        let leftovers: Vec<String> = std::fs::read_dir(dir.path())
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
+            .filter(|name| name != "exif-only.jpg")
+            .collect();
+        assert!(leftovers.is_empty(), "残骸: {:?}", leftovers);
+    }
+
+    /// **ピクセル不変の関門そのものを動かす。**
+    ///
+    /// `write_metadata` 経由のピクセル不変テストは「実装が実際には画素を触らない」
+    /// ことしか見ておらず、この `if` を丸ごと外しても緑のままになる（実測済み）。
+    /// 関門は他所が壊れたときにだけ火を噴くので、直接ここで火を点ける
+    #[test]
+    fn replace_verified_refuses_a_buffer_whose_scan_changed() {
+        let (dir, path, original) = scratch();
+        let scan = scan_offset(&original).unwrap();
+        let mut tampered = original.clone();
+        // 前提条件: 変えるのは SOS 以降（＝画素データ）であること
+        let at = scan + 8;
+        assert!(at > scan && at < tampered.len());
+        tampered[at] ^= 0xFF;
+        assert_eq!(
+            scan_offset(&tampered).unwrap(),
+            scan,
+            "前提条件: SOS の位置は動いていない"
+        );
+
+        let error =
+            replace_verified(&path, &original, tampered, &EditableMetadata::default()).unwrap_err();
+        assert!(
+            error.to_string().contains("画素データが変化した"),
+            "{error:#}"
+        );
+        assert_untouched(&dir, &path, &original);
+    }
+
+    /// **読み戻し検証の関門そのものを動かす。**
+    /// 書いたはずの値が読み戻せないバイト列は、置き換えずに Err で返る
+    #[test]
+    fn replace_verified_refuses_a_buffer_whose_values_do_not_read_back() {
+        let (dir, path, original) = scratch();
+        // 前提条件: このフィクスチャは★を持っていない（＝期待値と食い違う）
+        assert_eq!(
+            super::super::read_metadata(&path).unwrap().metadata.rating,
+            None
+        );
+
+        let expected = EditableMetadata {
+            rating: Some(5),
+            ..Default::default()
+        };
+        let error = replace_verified(&path, &original, original.clone(), &expected).unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("書き込んだ値を読み戻せませんでした"),
+            "{error:#}"
+        );
+        assert_untouched(&dir, &path, &original);
+    }
+
+    /// **既存 Exif が消えたら置き換えない。**
+    /// little_exif が Exif APP1 を丸ごと落とす事故（spec の issue #93）は、
+    /// 「本ツールの 3 タグは読み戻せる」ので値の一致だけでは捕まらない。
+    /// 独立実装（kamadak-exif）で撮影情報を突き合わせて初めて見える
+    #[test]
+    fn replace_verified_refuses_a_buffer_that_lost_the_existing_exif() {
+        let (dir, path, original) = scratch();
+        // 前提条件: フィクスチャは撮影情報を持っている
+        assert!(crate::read_exif_info(&path).unwrap().camera_make.is_some());
+
+        let mut jpeg = Jpeg::from_bytes(Bytes::from(original.clone())).unwrap();
+        jpeg.set_exif(None);
+        // 前提条件: Exif の APP1 だけが消え、画素は動いていない
+        assert!(!jpeg
+            .segments_by_marker(markers::APP1)
+            .any(|s| s.contents().starts_with(b"Exif\0\0")));
+        let stripped = jpeg.encoder().bytes().to_vec();
+        assert_eq!(
+            stripped[scan_offset(&stripped).unwrap()..],
+            original[scan_offset(&original).unwrap()..]
+        );
+
+        let error =
+            replace_verified(&path, &original, stripped, &EditableMetadata::default()).unwrap_err();
+        assert!(
+            error.to_string().contains("既存の Exif が壊れました"),
+            "{error:#}"
+        );
+        assert_untouched(&dir, &path, &original);
+    }
 
     /// SOI(2) + APP0 長さ 4 + SOS
     #[test]

@@ -295,6 +295,9 @@ fn write_inner(path: &Path, values: &EditableMetadata) -> Result<()> {
 /// XMP パケットは **`little_exif` を通す前の原本から**取り出す。順序を逆にすると、
 /// EXIF の書き込みが XMP セグメントに何をするかに依存してしまう。
 fn build(original: &[u8], values: &EditableMetadata) -> Result<Vec<u8>> {
+    // 写真 1 枚が数十 MB になりうるので、原本の複製は 2 つに抑える
+    // （`buffer` は Exif の書き込み先を兼ねる）
+    let mut buffer = original.to_vec();
     let jpeg = Jpeg::from_bytes(Bytes::from(original.to_vec())).context("JPEG として読めません")?;
     let packet = match xmp::extract(&jpeg) {
         Some(existing) => xmp::patch(&existing, values)?,
@@ -307,7 +310,7 @@ fn build(original: &[u8], values: &EditableMetadata) -> Result<Vec<u8>> {
     // しかも `read_exif_info` は解析失敗時も `Ok(ExifInfo::default())` を返すので、
     // 前後とも default で一致し、`atomic::verify` を素通りする ── これは spec が
     // 「クレート選定ごと見直す」と決めた issue #93 の症状そのものの経路である。
-    let mut meta = match Metadata::new_from_vec(&original.to_vec(), FileExtension::JPEG) {
+    let mut meta = match Metadata::new_from_vec(&buffer, FileExtension::JPEG) {
         Ok(meta) => meta,
         Err(error) if has_exif_segment(&jpeg) => {
             return Err(anyhow::anyhow!(
@@ -319,7 +322,6 @@ fn build(original: &[u8], values: &EditableMetadata) -> Result<Vec<u8>> {
         Err(_) => Metadata::new(),
     };
     exif::apply(&mut meta, values);
-    let mut buffer = original.to_vec();
     meta.write_to_vec(&mut buffer, FileExtension::JPEG)
         .context("Exif を書き込めません")?;
 
