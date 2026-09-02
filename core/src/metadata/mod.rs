@@ -10,6 +10,7 @@
 //! `docs/superpowers/specs/2026-08-18-metadata-editing-design.md`。
 
 mod exif;
+mod xmp;
 
 use serde::{Deserialize, Serialize};
 
