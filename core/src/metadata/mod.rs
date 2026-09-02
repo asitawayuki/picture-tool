@@ -621,6 +621,44 @@ mod tests {
         assert!(read_metadata(&path).unwrap().warnings.is_empty());
     }
 
+    /// **★の全5段階で、往復（`stars_to_percent` → `percent_to_stars`）が誤発火を
+    /// 起こさないこと。** `matching_values_produce_no_warning` は★3しか見ておらず、
+    /// 特定の段階（例: 端数が生じる percent）でだけ丸めが非対称になる回帰は見逃す。
+    /// `atomic::verify` に足した食い違い警告 gate（K2）は、この非対称を実際の書き込みで
+    /// 誤検知する形で顕在化するので、5段階すべてを実際に保存して確かめる
+    #[test]
+    fn every_star_rating_round_trips_without_warnings() {
+        for stars in 1..=5u8 {
+            let (_dir, path) = scratch("exif-only.jpg");
+            write_metadata(
+                &path,
+                &EditableMetadata {
+                    rating: Some(stars),
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+
+            // 前提条件: EXIF 側（MicrosoftPhoto:Rating の percent）と XMP 側
+            // （xmp:Rating の★そのもの）の両方に実際に値が入っていること
+            let (exif_side, xmp_side) = sides(&path);
+            assert_eq!(
+                exif_side.rating_percent,
+                Some(stars_to_percent(stars)),
+                "★{stars}"
+            );
+            assert_eq!(xmp_side.rating, Some(stars), "★{stars}");
+
+            let read = read_metadata(&path).unwrap();
+            assert_eq!(read.metadata.rating, Some(stars), "★{stars}");
+            assert!(
+                read.warnings.is_empty(),
+                "★{stars}: 誤発火した警告 {:?}",
+                read.warnings
+            );
+        }
+    }
+
     /// XMP 側だけを差し替えるテスト用ヘルパー。
     /// `write_metadata` は両方に書くので、食い違いは作れない
     fn overwrite_xmp_only(path: &std::path::Path, values: &EditableMetadata) {
