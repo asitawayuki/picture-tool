@@ -27,6 +27,9 @@ fn main() {
             commands::save_preset,
             commands::delete_preset,
             commands::list_available_fonts,
+            commands::read_image_metadata,
+            commands::write_image_metadata,
+            commands::grant_metadata_editing,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

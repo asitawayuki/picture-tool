@@ -108,3 +108,22 @@ export interface FontInfo {
   path: string | null;
   is_bundled: boolean;
 }
+
+/**
+ * 人が編集するメタデータ。
+ *
+ * `null` は「タグが無い」、`""` は「空文字のタグがある」を意味し、Rust 側は**区別する**。
+ * 空欄で保存したら `null` を送る（＝タグを削除する）。
+ */
+export interface EditableMetadata {
+  title: string | null;
+  comment: string | null;
+  /** 1〜5。null は未評価。**0 は存在しない**（RatingPercent に表現できないため） */
+  rating: number | null;
+}
+
+/** 読み取り結果。warnings には箇所ごとの値の食い違いが載る */
+export interface MetadataRead {
+  metadata: EditableMetadata;
+  warnings: string[];
+}

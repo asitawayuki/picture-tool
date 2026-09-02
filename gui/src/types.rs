@@ -80,6 +80,7 @@ mod contract {
     use picture_tool_core::exif_frame::{
         DisplayItems, ExifFrameConfig, ExifPosition, FontConfig, FontInfo,
     };
+    use picture_tool_core::metadata::{EditableMetadata, MetadataRead};
     use picture_tool_core::{BackgroundColor, ConversionMode, ExifInfo, ProcessingConfig};
     use serde::Serialize;
     use serde_json::Value;
@@ -411,6 +412,37 @@ mod contract {
                     is_bundled: true,
                 },
             ),
+            entry(
+                "editableMetadataFilled",
+                "EditableMetadata",
+                "3 項目とも入っている",
+                EditableMetadata {
+                    title: Some("夕暮れの港".to_string()),
+                    comment: Some("順光。もう少し寄れた".to_string()),
+                    rating: Some(4),
+                },
+            ),
+            entry(
+                "editableMetadataEmpty",
+                "EditableMetadata",
+                "タグが 1 つも無い（null と空文字は別物）",
+                EditableMetadata::default(),
+            ),
+            entry(
+                "metadataRead",
+                "MetadataRead",
+                "他のアプリが書いた別の値を検出した場合",
+                MetadataRead {
+                    metadata: EditableMetadata {
+                        title: Some("夕暮れの港".to_string()),
+                        comment: None,
+                        rating: Some(4),
+                    },
+                    warnings: vec![
+                        "コメントに、他のアプリが書いた別の値があります（XMP dc:description を採用。ほかに Exif XPComment = 「古い注」）。保存すると揃います".to_string(),
+                    ],
+                },
+            ),
             // enum の綴り。`#[serde(rename_all = ...)]` を外すと "Crop" になり、
             // TS の union に無いので typecheck が落ちる
             Entry {
@@ -446,12 +478,14 @@ mod contract {
         render(
             &entries,
             &[
+                "EditableMetadata",
                 "ExifFrameConfig",
                 "ExifInfo",
                 "ExifPosition",
                 "FileEntry",
                 "FontInfo",
                 "ImageEntry",
+                "MetadataRead",
                 "PreviewImage",
                 "ProcessBatchResponse",
                 "ProcessFailure",

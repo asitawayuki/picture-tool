@@ -11,12 +11,14 @@
 // 生成し直したら、`types.ts` の側も同じ変更を入れること。
 
 import type {
+  EditableMetadata,
   ExifFrameConfig,
   ExifInfo,
   ExifPosition,
   FileEntry,
   FontInfo,
   ImageEntry,
+  MetadataRead,
   PreviewImage,
   ProcessBatchResponse,
   ProcessFailure,
@@ -215,6 +217,30 @@ export const fontInfoBundled: FontInfo = {
   display_name: "Noto Sans JP (bundled)",
   is_bundled: true,
   path: null,
+};
+
+/** 3 項目とも入っている */
+export const editableMetadataFilled: EditableMetadata = {
+  comment: "順光。もう少し寄れた",
+  rating: 4,
+  title: "夕暮れの港",
+};
+
+/** タグが 1 つも無い（null と空文字は別物） */
+export const editableMetadataEmpty: EditableMetadata = {
+  comment: null,
+  rating: null,
+  title: null,
+};
+
+/** 他のアプリが書いた別の値を検出した場合 */
+export const metadataRead: MetadataRead = {
+  metadata: {
+    comment: null,
+    rating: 4,
+    title: "夕暮れの港",
+  },
+  warnings: ["コメントに、他のアプリが書いた別の値があります（XMP dc:description を採用。ほかに Exif XPComment = 「古い注」）。保存すると揃います"],
 };
 
 /** 変換モードの綴り（serde の rename_all を固定する） */

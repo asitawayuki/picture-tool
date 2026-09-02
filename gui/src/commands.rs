@@ -654,6 +654,80 @@ fn scan_user_fonts(dir: &Path) -> Vec<FontInfo> {
     fonts
 }
 
+/// 編集対象の現在値と、箇所ごとの値の食い違いを返す
+#[tauri::command]
+pub async fn read_image_metadata(path: String) -> Result<core::metadata::MetadataRead, String> {
+    let file = security::readable_jpeg(&path)?;
+    tokio::task::spawn_blocking(move || {
+        core::metadata::read_metadata(&file).map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+/// 検証付き原子的置換で書き込み、**保存直後の実際の中身を返す**
+///
+/// 戻り値を保存済みの値としてそのまま使えるので、フロント側が
+/// 「送った値」と「ファイルの中身」を取り違えることが無い。
+/// 食い違いの警告も、書き込みで揃った結果が返る。
+#[tauri::command]
+pub async fn write_image_metadata(
+    state: tauri::State<'_, ProcessingState>,
+    path: String,
+    metadata: core::metadata::EditableMetadata,
+) -> Result<core::metadata::MetadataRead, String> {
+    let file = security::writable_image(&state.writable_roots, &path)?;
+    tokio::task::spawn_blocking(move || {
+        core::metadata::write_metadata(&file, &metadata).map_err(|e| e.to_string())?;
+        core::metadata::read_metadata(&file).map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+/// フォルダー単位でメタデータの書き込みを承認させる
+///
+/// **確認を OS ネイティブのダイアログで出すことが本質。** webview 内の確認は
+/// 乗っ取られた状態では素通りする（`confirm_delete_originals` と同型）。
+/// `folder` は webview から来るが、承認されるのは `existing_dir` が解決した実体パスで、
+/// その実体パスをダイアログの文面に出すので、利用者は「見覚えのない場所」に気づける。
+/// 戻り値も**解決後の実体パス**にして、フロントの表示と境界の判定を一致させる。
+#[tauri::command]
+pub async fn grant_metadata_editing(
+    app_handle: tauri::AppHandle,
+    state: tauri::State<'_, ProcessingState>,
+    folder: String,
+) -> Result<Option<String>, String> {
+    let dir = security::existing_dir(&folder)?;
+
+    let mut builder = app_handle
+        .dialog()
+        .message(format!(
+            "このフォルダーの写真に、タイトル・コメント・評価を書き込めるようにします。\n\n{}\n\n書き換えるのはメタデータだけで、写真そのもの（画素）は変わりません。\n許可はアプリを終了すると消えます。",
+            dir.display()
+        ))
+        .title("このフォルダーへの書き込みを許可しますか？")
+        .kind(MessageDialogKind::Warning)
+        .buttons(MessageDialogButtons::OkCancelCustom(
+            "許可する".to_string(),
+            "許可しない".to_string(),
+        ));
+
+    if let Some(window) = app_handle.get_webview_window("main") {
+        builder = builder.parent(&window);
+    }
+
+    if !builder.blocking_show() {
+        return Ok(None);
+    }
+    // **返すのは解決後の実体パス。** 呼び出し側が送った生の文字列を保持すると、
+    // シンボリックリンク越しなどで境界とフロントの表示がずれ、
+    // 「承認済みと出ているのに保存が弾かれる」になる
+    let granted = dir.to_string_lossy().to_string();
+    state.writable_roots.grant(dir);
+    Ok(Some(granted))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
