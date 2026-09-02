@@ -1,13 +1,4 @@
-export interface MetadataValues {
-  title: string;
-  comment: string;
-  /** 0〜5。0 は未設定 */
-  rating: number;
-}
-
-function empty(): MetadataValues {
-  return { title: "", comment: "", rating: 0 };
-}
+import { emptyValues, sameValues, type MetadataValues } from "./metadataValues";
 
 /**
  * メタデータの下書き。
@@ -22,8 +13,8 @@ function empty(): MetadataValues {
  */
 export function createMetadataDraft() {
   let path = $state<string | null>(null);
-  let values = $state<MetadataValues>(empty());
-  let saved = $state<MetadataValues>(empty());
+  let values = $state<MetadataValues>(emptyValues());
+  let saved = $state<MetadataValues>(emptyValues());
 
   return {
     get path() {
@@ -33,18 +24,14 @@ export function createMetadataDraft() {
       return values;
     },
     get isDirty(): boolean {
-      return (
-        values.title !== saved.title ||
-        values.comment !== saved.comment ||
-        values.rating !== saved.rating
-      );
+      return !sameValues(values, saved);
     },
 
     /** 次工程で read_image_metadata の結果を saved に入れる */
     load(next: string | null) {
       path = next;
-      saved = empty();
-      values = empty();
+      saved = emptyValues();
+      values = emptyValues();
     },
 
     discard() {
