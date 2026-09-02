@@ -608,6 +608,30 @@ mod tests {
         assert!(writable_image(&roots, &as_str(&link)).is_err());
     }
 
+    /// 上のテストはリンク名・リンク先とも拡張子が `.jpg` なので、`roots.allows` による
+    /// 棄却と拡張子チェックによる棄却を区別できない。ここではリンクとリンク先を
+    /// **同じ承認フォルダーの中**に置き、リンク先の実体を PNG にすることで
+    /// `roots.allows` を必ず通す。これにより拒否の理由が「拡張子はリンク解決後の
+    /// 実体で判定している」ことだけに分離される
+    #[cfg(unix)]
+    #[test]
+    fn writable_image_rejects_a_jpeg_named_symlink_whose_target_is_not_a_jpeg() {
+        let approved = TempDir::new().unwrap();
+        let png = approved.path().join("real.png");
+        image::DynamicImage::ImageRgb8(image::RgbImage::from_pixel(4, 4, image::Rgb([1, 2, 3])))
+            .save(&png)
+            .unwrap();
+        let link = approved.path().join("innocent.jpg");
+        std::os::unix::fs::symlink(&png, &link).unwrap();
+
+        let roots = WritableRoots::default();
+        roots.grant(fs::canonicalize(approved.path()).unwrap());
+        // 前提条件: リンクは辿れて画像として読める（＝リンク切れ等の別理由で
+        // 落ちているのではない）
+        assert!(readable_image(&as_str(&link)).is_ok());
+        assert!(writable_image(&roots, &as_str(&link)).is_err());
+    }
+
     // --- 一覧の境界: 実在ディレクトリのみ ---
 
     #[test]
