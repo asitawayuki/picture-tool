@@ -230,16 +230,25 @@ const MAX_APP1_CONTENTS: usize = 65_533;
 /// `xmpMM:Ingredients` で現実に踏む）。それは「この画像のタイトル」ではない
 #[derive(Debug, PartialEq, Eq)]
 enum Frame {
-    /// `rdf:RDF`
+    /// パケットの最外殻。`x:xmpmeta` のようなラッパを名前で決め打ちしないための枠
+    /// （古い `x:xapmeta` や、ラッパを持たないパケットも同じ規則で扱える）
+    PacketRoot,
+    /// **パケットの最外殻か、その直下**にある `rdf:RDF`。
+    /// 深さを見ないと、`xmpMM:Pantry` が抱える**入れ子の `rdf:RDF`** まで
+    /// 「本体」とみなしてしまう（その中の `dc:title` は派生元素材の題であって
+    /// この画像の題ではない）
     RdfRoot,
-    /// `rdf:RDF` 直下の `rdf:Description`。本ツールのプロパティが載る唯一の場所
+    /// `RdfRoot` 直下の `rdf:Description`。本ツールのプロパティが載る唯一の場所
     TopDescription,
     Other,
 }
 
 fn frame_of(ns: &ResolveResult<'_>, local: &[u8], parent: Option<&Frame>) -> Frame {
-    if matches(ns, local, NS_RDF, "RDF") {
+    let at_packet_top = matches!(parent, None | Some(Frame::PacketRoot));
+    if at_packet_top && matches(ns, local, NS_RDF, "RDF") {
         Frame::RdfRoot
+    } else if parent.is_none() {
+        Frame::PacketRoot
     } else if parent == Some(&Frame::RdfRoot) && matches(ns, local, NS_RDF, "Description") {
         Frame::TopDescription
     } else {
@@ -412,10 +421,15 @@ fn properties_xml(values: &EditableMetadata) -> String {
             stars_to_percent(stars)
         ));
     }
-    if let Some(title) = values.title.as_deref().filter(|t| !t.is_empty()) {
+    // **フィルタしてから空判定する。** 逆にすると `"\u{0b}"` のような入力で
+    // EXIF 側（`exif::apply` は フィルタ → 空判定）はタグを削除し、XMP 側は
+    // 空の `dc:title` 要素を書く ── 「空欄ならプロパティごと消す」規則が片側で破れる
+    let title = values.title.as_deref().map(without_forbidden_controls);
+    let comment = values.comment.as_deref().map(without_forbidden_controls);
+    if let Some(title) = title.as_deref().filter(|t| !t.is_empty()) {
         out.push_str(&lang_alt("dc:title", title));
     }
-    if let Some(comment) = values.comment.as_deref().filter(|c| !c.is_empty()) {
+    if let Some(comment) = comment.as_deref().filter(|c| !c.is_empty()) {
         out.push_str(&lang_alt("dc:description", comment));
     }
     out
@@ -431,10 +445,9 @@ fn properties_xml(values: &EditableMetadata) -> String {
 /// この 4 プロパティは本ツールが所有する（UI が 1 言語しか編集できない）ため
 /// 意図した挙動だが、他言語を持つ利用者にとっては損失である
 fn lang_alt(name: &str, text: &str) -> String {
-    // **XML 1.0 が許さない制御文字をここで落とす。** エスケープしても入れられず、
-    // 残すとパケット全体が Adobe/expat 系のリーダーから読めなくなる。
-    // EXIF 側（`exif::apply`）も同じヘルパを通しており、両者で同じ文字列になる
-    let escaped = quick_xml::escape::escape(without_forbidden_controls(text));
+    // `text` は呼び出し側で `without_forbidden_controls` を通してある
+    // （XML 1.0 が許さない文字はエスケープしても入れられないため）
+    let escaped = quick_xml::escape::escape(text);
     format!(
         r#"<{name} xmlns:dc="{NS_DC}" xmlns:rdf="{NS_RDF}"><rdf:Alt><rdf:li xml:lang="x-default">{escaped}</rdf:li></rdf:Alt></{name}>"#
     )
@@ -553,6 +566,30 @@ mod tests {
  </rdf:RDF>
 </x:xmpmeta>"#;
 
+    /// 他名前空間の構造化値の中に**入れ子の `rdf:RDF`** がある形。
+    /// `xmpMM:Pantry` は派生元素材のメタデータを丸ごと抱えるので現実に起きる。
+    /// その中の `dc:title` は**素材の題**であって、この画像の題ではない
+    const NESTED_RDF_ROOT: &str = r#"<x:xmpmeta xmlns:x="adobe:ns:meta/">
+ <rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
+  <rdf:Description rdf:about=""
+    xmlns:dc="http://purl.org/dc/elements/1.1/"
+    xmlns:xmpMM="http://ns.adobe.com/xap/1.0/mm/">
+   <dc:title><rdf:Alt><rdf:li xml:lang="x-default">この画像の題</rdf:li></rdf:Alt></dc:title>
+   <xmpMM:Pantry>
+    <rdf:Bag>
+     <rdf:li>
+      <rdf:RDF>
+       <rdf:Description rdf:about="">
+        <dc:title><rdf:Alt><rdf:li xml:lang="x-default">素材の題</rdf:li></rdf:Alt></dc:title>
+       </rdf:Description>
+      </rdf:RDF>
+     </rdf:li>
+    </rdf:Bag>
+   </xmpMM:Pantry>
+  </rdf:Description>
+ </rdf:RDF>
+</x:xmpmeta>"#;
+
     #[test]
     fn reads_properties_written_as_elements() {
         let side = read(ELEMENT_FORM).unwrap();
@@ -622,6 +659,42 @@ mod tests {
     }
     use crate::metadata::EditableMetadata;
 
+    /// 検査器（オラクル）だけが使う定数。**実装の `OWNED` / `NS_*` をあえて参照しない。**
+    ///
+    /// 検査器が実装と同じ判定を共有すると、**規則そのものの誤りは before / after の
+    /// 両方で同じように skip され、原理的に差分に出ない**（`frame_of` が入れ子の
+    /// `rdf:RDF` を本体と誤認していたときが、まさにそれで検出できなかった）。
+    /// ここでの重複は意図的である ── 「重複だから」と実装側へ寄せないこと
+    const ORACLE_RDF: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#";
+    const ORACLE_OWNED: [(&str, &str); 4] = [
+        ("http://ns.adobe.com/xap/1.0/", "Rating"),
+        ("http://ns.microsoft.com/photo/1.0/", "Rating"),
+        ("http://purl.org/dc/elements/1.1/", "title"),
+        ("http://purl.org/dc/elements/1.1/", "description"),
+    ];
+
+    /// 解決済みの (名前空間 URI, ローカル名)
+    type Name = (Option<String>, String);
+
+    fn show(name: &Name) -> String {
+        format!("{:?}:{}", name.0, name.1)
+    }
+
+    /// パスの末尾が「本ツールのプロパティが載る唯一の場所」＝
+    /// トップレベルの `rdf:Description` か。
+    ///
+    /// **`frame_of` を使わず、親のパスをリテラルに綴る**（上の定数のコメントを参照）。
+    /// 認めるのは `<rdf:RDF><rdf:Description>` と
+    /// `<ラッパ><rdf:RDF><rdf:Description>` の 2 形だけで、
+    /// `xmpMM:Pantry` が抱える入れ子の `rdf:RDF` の下は当てはまらない
+    fn ends_at_top_description(path: &[Name]) -> bool {
+        let rdf =
+            |name: &Name, local: &str| name.0.as_deref() == Some(ORACLE_RDF) && name.1 == local;
+        matches!(path.len(), 2 | 3)
+            && rdf(&path[path.len() - 1], "Description")
+            && rdf(&path[path.len() - 2], "RDF")
+    }
+
     /// 名前空間つきで、本ツールの 4 プロパティ**以外**をすべて列挙する。
     /// 検査対象を、読み取り（`read`）とは別の経路で取り出すための道具。
     ///
@@ -630,25 +703,17 @@ mod tests {
     ///   URI が変わって差分に出る
     /// - **要素形式の値（テキスト）も親の名前付きで拾う。** これが無いと
     ///   `<crs:UUID>…</crs:UUID>` の中身の書き換えを検出できない
-    /// - 本ツールの 4 プロパティは**部分木ごと**対象外にする。ただし `patch` と
-    ///   同じ深さの規則（トップレベル `rdf:Description` の直接の子だけ）で判定する
-    ///   ので、`xmpMM:DerivedFrom` の中の `dc:title` は**他名前空間の値として
-    ///   検査対象に残る**
+    /// - 本ツールの 4 プロパティは**部分木ごと**対象外にする。位置の判定は
+    ///   `ends_at_top_description`（実装から独立）で行うので、入れ子の
+    ///   `rdf:Description` や入れ子の `rdf:RDF` の下にある同名プロパティは
+    ///   **他名前空間の値として検査対象に残る**
     fn foreign_content(packet: &str) -> Vec<String> {
         let mut reader = NsReader::from_str(packet);
         let mut out = Vec::new();
-        // (表示名, 枠)。テキストを親の名前とともに記録するために名前も持つ
-        let mut stack: Vec<(String, Frame)> = Vec::new();
+        // いま開いている要素のパス（テキストを親の名前とともに記録するのにも使う）
+        let mut path: Vec<Name> = Vec::new();
         // 本ツールのプロパティの部分木を飛ばしている間、その開始深さを持つ
         let mut skip_at: Option<usize> = None;
-
-        let show = |uri: Option<&[u8]>, local: &[u8]| {
-            format!(
-                "{:?}:{}",
-                uri.map(|u| String::from_utf8_lossy(u).into_owned()),
-                String::from_utf8_lossy(local)
-            )
-        };
 
         loop {
             let (ns, event) = reader.read_resolved_event().unwrap();
@@ -656,42 +721,55 @@ mod tests {
             match event {
                 Event::Eof => break,
                 Event::Start(ref s) | Event::Empty(ref s) => {
-                    let parent = stack.last().map(|(_, frame)| frame);
-                    let name = show(uri_of(&ns), s.local_name().as_ref());
-                    let frame = frame_of(&ns, s.local_name().as_ref(), parent);
-                    let in_top = parent == Some(&Frame::TopDescription);
-                    let owned_here = in_top && is_owned_name(&ns, s.local_name().as_ref());
+                    path.push((
+                        uri_of(&ns).map(|u| String::from_utf8_lossy(u).into_owned()),
+                        String::from_utf8_lossy(s.local_name().as_ref()).into_owned(),
+                    ));
+                    let self_is_top = ends_at_top_description(&path);
+                    let parent_is_top = ends_at_top_description(&path[..path.len() - 1]);
+                    let name = &path[path.len() - 1];
+                    let owned_here = parent_is_top
+                        && ORACLE_OWNED.iter().any(|(uri, local)| {
+                            name.0.as_deref() == Some(*uri) && name.1 == *local
+                        });
 
                     if skip_at.is_none() && !owned_here {
-                        out.push(format!("<{name}>"));
+                        out.push(format!("<{}>", show(name)));
                         for attribute in s.attributes() {
                             let attribute = attribute.unwrap();
                             let (a_ns, a_local) = reader.resolve_attribute(attribute.key);
+                            let a_name: Name = (
+                                uri_of(&a_ns).map(|u| String::from_utf8_lossy(u).into_owned()),
+                                String::from_utf8_lossy(a_local.as_ref()).into_owned(),
+                            );
                             // 圧縮形式（トップレベル `rdf:Description` の属性）に
                             // 書かれた本ツールのプロパティだけを対象外にする。
                             // 入れ子の `rdf:Description` の同名属性は他名前空間の値
-                            if frame == Frame::TopDescription
-                                && is_owned_name(&a_ns, a_local.as_ref())
-                            {
+                            let owned_attribute = self_is_top
+                                && ORACLE_OWNED.iter().any(|(uri, local)| {
+                                    a_name.0.as_deref() == Some(*uri) && a_name.1 == *local
+                                });
+                            if owned_attribute {
                                 continue;
                             }
                             out.push(format!(
                                 "@{}={}",
-                                show(uri_of(&a_ns), a_local.as_ref()),
+                                show(&a_name),
                                 attribute.unescape_value().unwrap()
                             ));
                         }
                     }
                     if is_start {
                         if skip_at.is_none() && owned_here {
-                            skip_at = Some(stack.len());
+                            skip_at = Some(path.len() - 1);
                         }
-                        stack.push((name, frame));
+                    } else {
+                        path.pop();
                     }
                 }
                 Event::End(_) => {
-                    stack.pop();
-                    if skip_at == Some(stack.len()) {
+                    path.pop();
+                    if skip_at == Some(path.len()) {
                         skip_at = None;
                     }
                 }
@@ -703,7 +781,7 @@ mod tests {
                     if text.is_empty() {
                         continue;
                     }
-                    let parent = stack.last().map_or("", |(name, _)| name.as_str());
+                    let parent = path.last().map_or(String::new(), show);
                     out.push(format!("#{parent}={text}"));
                 }
                 _ => {}
@@ -962,8 +1040,15 @@ mod tests {
             patched
         );
         // 値そのものは変わっていない（表現が `&quot;` になるのは可）
-        let lost = missing(&before, &foreign_content(&patched));
+        let after = foreign_content(&patched);
+        let lost = missing(&before, &after);
         assert!(lost.is_empty(), "他名前空間の値が失われた: {:?}", lost);
+        let added = missing(&after, &before);
+        assert!(
+            added.is_empty(),
+            "他名前空間に余計なものが増えた: {:?}",
+            added
+        );
     }
 
     /// **書き込み先が見つからないパケットは作り直さず `Err`。**
@@ -1026,8 +1111,15 @@ mod tests {
         )
         .unwrap();
 
-        let lost = missing(&before, &foreign_content(&patched));
+        let after = foreign_content(&patched);
+        let lost = missing(&before, &after);
         assert!(lost.is_empty(), "他名前空間のデータが失われた: {:?}", lost);
+        let added = missing(&after, &before);
+        assert!(
+            added.is_empty(),
+            "他名前空間に余計なものが増えた: {:?}",
+            added
+        );
         assert!(
             patched.contains("元画像の題"),
             "入れ子の値が消えた: {}",
@@ -1078,5 +1170,88 @@ mod tests {
         let side = read(&packet).unwrap();
         assert_eq!(side.title.as_deref(), Some("港の朝"));
         assert_eq!(side.description.as_deref(), Some("順光"));
+    }
+    /// **入れ子の `rdf:RDF` は「本体」ではない。**
+    /// `xmpMM:Pantry` が抱える派生元素材の `dc:title` を、この画像の題として
+    /// 読んだり消したりしないこと
+    #[test]
+    fn an_rdf_root_nested_in_another_namespaces_value_is_not_the_top_level_one() {
+        let before = foreign_content(NESTED_RDF_ROOT);
+        // 前提条件: 入れ子側の題が検査対象に入っていること。
+        // ここが漏れていると「壊れていない」は自明に通る
+        assert!(
+            before.iter().any(|item| item.contains("素材の題")),
+            "入れ子の rdf:RDF の中の値が検査対象に入っていない: {:?}",
+            before
+        );
+        // 前提条件: 読み取りもトップレベル側を返している
+        assert_eq!(
+            read(NESTED_RDF_ROOT).unwrap().title.as_deref(),
+            Some("この画像の題")
+        );
+
+        let patched = patch(
+            NESTED_RDF_ROOT,
+            &EditableMetadata {
+                title: Some("新しい題".into()),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+
+        let after = foreign_content(&patched);
+        let lost = missing(&before, &after);
+        assert!(lost.is_empty(), "他名前空間のデータが失われた: {:?}", lost);
+        let added = missing(&after, &before);
+        assert!(
+            added.is_empty(),
+            "他名前空間に余計なものが増えた: {:?}",
+            added
+        );
+        assert!(
+            patched.contains("素材の題"),
+            "素材の題が消えた: {}",
+            patched
+        );
+        assert!(!patched.contains("この画像の題"));
+        assert_eq!(read(&patched).unwrap().title.as_deref(), Some("新しい題"));
+    }
+
+    /// **U+FFFE / U+FFFF も XML 1.0 の文字ではない。**
+    /// C0 制御文字と同じ失敗モード（全リーダーから読めないパケットが、
+    /// 自前の読み戻し検証だけをすり抜ける）
+    #[test]
+    fn noncharacters_never_reach_the_packet() {
+        let packet = new_packet(&EditableMetadata {
+            title: Some("a\u{ffff}b\u{fffe}c".into()),
+            comment: None,
+            rating: None,
+        });
+        assert!(
+            !packet.contains(['\u{fffe}', '\u{ffff}']),
+            "非文字が残った: {:?}",
+            packet
+        );
+        assert_eq!(read(&packet).unwrap().title.as_deref(), Some("abc"));
+    }
+
+    /// 制御文字だけのタイトルは**空欄と同じ**。プロパティごと消える
+    /// （EXIF 側と順序を揃えていないと、空の `dc:title` が書かれる）
+    #[test]
+    fn a_title_made_only_of_forbidden_characters_removes_the_property() {
+        let patched = patch(
+            ELEMENT_FORM,
+            &EditableMetadata {
+                title: Some("\u{0b}".into()),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        assert!(
+            !patched.contains("dc:title"),
+            "空の題が書かれた: {}",
+            patched
+        );
+        assert_eq!(read(&patched).unwrap().title, None);
     }
 }

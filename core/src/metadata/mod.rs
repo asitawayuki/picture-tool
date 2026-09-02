@@ -26,7 +26,12 @@ pub(crate) fn cleaned(text: &str) -> Option<String> {
     (!trimmed.is_empty()).then(|| trimmed.to_string())
 }
 
-/// **XML 1.0 が許さない C0 制御文字（TAB/LF/CR 以外）を落とす。**
+/// **XML 1.0 が文字として許さないものを落とす。**
+///
+/// 対象は「TAB/LF/CR 以外の C0 制御文字」と **U+FFFE / U+FFFF**
+/// （`Char` 生成規則が両方とも除外している）。**C1 制御文字（U+0080–U+009F）と
+/// DEL（U+007F）は合法なので落とさない。** 不正サロゲートは Rust の `char` に
+/// 入らないので対象外。
 ///
 /// XMP パケットは XML なので、エスケープしてもこれらの文字は入れられない
 /// （`&#11;` と書いても非整形式）。webview 由来の JSON は `\u{0b}` のような文字を
@@ -40,7 +45,7 @@ pub(crate) fn cleaned(text: &str) -> Option<String> {
 /// このヘルパを使うこと。
 pub(crate) fn without_forbidden_controls(text: &str) -> std::borrow::Cow<'_, str> {
     fn forbidden(c: char) -> bool {
-        c.is_control() && c < '\u{20}' && !matches!(c, '\t' | '\n' | '\r')
+        (c < '\u{20}' && !matches!(c, '\t' | '\n' | '\r')) || matches!(c, '\u{fffe}' | '\u{ffff}')
     }
     if text.contains(forbidden) {
         std::borrow::Cow::Owned(text.chars().filter(|c| !forbidden(*c)).collect())
@@ -148,7 +153,14 @@ mod tests {
             without_forbidden_controls("a\u{0b}b\u{0c}c\u{0}d\u{7}e"),
             "abcde"
         );
+        // XML 1.0 の Char 生成規則は U+FFFE / U+FFFF も除外する
+        assert_eq!(without_forbidden_controls("a\u{fffe}b\u{ffff}c"), "abc");
         assert_eq!(without_forbidden_controls("a\tb\nc\rd"), "a\tb\nc\rd");
+        // C1 制御文字と DEL は XML 1.0 で合法。落とさない
+        assert_eq!(
+            without_forbidden_controls("a\u{7f}b\u{85}c"),
+            "a\u{7f}b\u{85}c"
+        );
         // 落とすものが無ければ借用のまま（余計な確保をしない）
         assert!(matches!(
             without_forbidden_controls("港"),
