@@ -113,3 +113,27 @@ export function computeVisibleRange(
     paddingBottom: (totalRows - 1 - lastRow) * rowHeight,
   };
 }
+
+/**
+ * `index` の 1 枚が見えるのに必要な `scrollTop`。すでに見えているなら現在値のまま。
+ *
+ * 「保存して次の写真へ」で送り続けたときに、編集対象が可視範囲の外へ出ないようにする。
+ * 計算をここに置くのは、`PhotoGrid` の runes を通さずに検査できるようにするため。
+ */
+export function scrollTopToReveal(
+  metrics: GridMetrics,
+  index: number,
+  scrollTop: number,
+  viewportHeight: number
+): number {
+  const { columns, rowHeight, totalRows } = metrics;
+  if (index < 0 || columns <= 0 || !Number.isFinite(rowHeight) || rowHeight <= 0) {
+    return scrollTop;
+  }
+  const top = Math.floor(index / columns) * rowHeight;
+  const bottom = top + rowHeight;
+  const max = Math.max(0, totalRows * rowHeight - viewportHeight);
+  if (top < scrollTop) return Math.min(top, max);
+  if (bottom > scrollTop + viewportHeight) return Math.min(bottom - viewportHeight, max);
+  return scrollTop;
+}

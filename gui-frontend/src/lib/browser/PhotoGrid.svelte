@@ -8,6 +8,7 @@
     GRID_PADDING,
     computeGridMetrics,
     computeVisibleRange,
+    scrollTopToReveal,
   } from "./gridMetrics";
   import type { RequestKind } from "./requestQueue";
   import type { ImageEntry } from "../types";
@@ -188,15 +189,24 @@
     scrollIndexIntoView(next);
   }
 
+  // scrollTopToReveal（gridMetrics.ts）と同一算術。moveFocus はキーボード操作の
+  // たびに scroller.scrollTop を直接書き、revealPath は $bindable な scrollTop に
+  // 代入する ── 経路は 2 つだが計算はここ 1 箇所に寄せる（裁定 C4）
   function scrollIndexIntoView(index: number) {
     if (!scroller || metrics.rowHeight <= 0) return;
-    const row = Math.floor(index / metrics.columns);
-    const top = row * metrics.rowHeight;
-    const bottom = top + metrics.rowHeight;
-    if (top < scroller.scrollTop) scroller.scrollTop = top;
-    else if (bottom > scroller.scrollTop + viewportHeight) {
-      scroller.scrollTop = bottom - viewportHeight;
-    }
+    scroller.scrollTop = scrollTopToReveal(metrics, index, scroller.scrollTop, viewportHeight);
+  }
+
+  /**
+   * 指定の 1 枚を可視範囲へ入れる。呼ぶのは「保存して次の写真へ」だけ
+   * （`focusedPath` の変化を見て自動でスクロールする案は退けた ──
+   * 利用者自身のクリックでも動いてしまい、クリックした位置がずれる）。
+   * `scrollTop` は $bindable なので、代入は親と `scroller` の両方へ伝わる
+   */
+  export function revealPath(path: string) {
+    const index = images.findIndex((image) => image.path === path);
+    if (index < 0) return;
+    scrollTop = scrollTopToReveal(metrics, index, scrollTop, viewportHeight);
   }
 
   function handleKeydown(event: KeyboardEvent) {

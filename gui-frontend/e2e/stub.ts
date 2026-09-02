@@ -21,6 +21,8 @@ const TEMPLATE = {
   result: dto.processResultCompressed,
   preview: dto.previewImage,
   font: dto.fontInfoBundled,
+  metadata: dto.metadataRead,
+  emptyMetadata: dto.editableMetadataEmpty,
 };
 type Template = typeof TEMPLATE;
 
@@ -43,6 +45,10 @@ export interface StubOptions {
    * **画面が動いている状態での失敗**が一度も検査されない。
    */
   failThumbnails?: boolean;
+  /** read_image_metadata が返す食い違いの警告 */
+  metadataWarnings?: string[];
+  /** grant_metadata_editing が「許可しない」を返す */
+  denyGrant?: boolean;
 }
 
 /**
@@ -58,9 +64,12 @@ export async function installTauriStub(page: Page, options: StubOptions = {}) {
       imageCount: number;
       frameWarnings: string[];
       failThumbnails: boolean;
+      metadataWarnings: string[];
+      denyGrant: boolean;
       template: Template;
     }) => {
-    const { imageCount, frameWarnings, failThumbnails, template } = opts;
+    const { imageCount, frameWarnings, failThumbnails, metadataWarnings, denyGrant, template } =
+      opts;
     /** サムネイルは 24 種類だけ作って使い回す。
      *  全部同じにするとデコードが 1 回で済んでしまい、スクロール計測の
      *  負荷が実際より軽く出る。全部別にすると生成自体が計測を汚す。 */
@@ -108,6 +117,9 @@ export async function installTauriStub(page: Page, options: StubOptions = {}) {
     }
 
     const presets = [template.preset];
+    /** 保存済みメタデータ。パスごとに保持し、保存 → 読み直しを繋げる */
+    const stored = new Map<string, unknown>();
+    let granted = false;
 
     const callbacks = new Map<number, (payload: unknown) => void>();
     let nextCallbackId = 1;
@@ -178,6 +190,20 @@ export async function installTauriStub(page: Page, options: StubOptions = {}) {
         return null;
       },
       list_available_fonts: () => [template.font],
+      read_image_metadata: ({ path }: { path: string }) => ({
+        metadata: stored.get(path) ?? template.emptyMetadata,
+        warnings: stored.has(path) ? [] : metadataWarnings,
+      }),
+      write_image_metadata: ({ path, metadata }: { path: string; metadata: unknown }) => {
+        if (!granted) throw "This folder has not been approved for metadata editing";
+        stored.set(path, metadata);
+        return { metadata, warnings: [] };
+      },
+      grant_metadata_editing: ({ folder }: { folder: string }) => {
+        if (denyGrant) return null;
+        granted = true;
+        return folder;
+      },
       "plugin:event|listen": () => nextCallbackId++,
       "plugin:event|unlisten": () => null,
     };
@@ -199,6 +225,8 @@ export async function installTauriStub(page: Page, options: StubOptions = {}) {
       imageCount: options.imageCount ?? 24,
       frameWarnings: options.frameWarnings ?? [],
       failThumbnails: options.failThumbnails ?? false,
+      metadataWarnings: options.metadataWarnings ?? [],
+      denyGrant: options.denyGrant ?? false,
       template: TEMPLATE,
     }
   );

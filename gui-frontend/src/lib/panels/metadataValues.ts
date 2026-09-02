@@ -37,3 +37,8 @@ export function toMetadata(values: MetadataValues): EditableMetadata {
 export function sameValues(a: MetadataValues, b: MetadataValues): boolean {
   return a.title === b.title && a.comment === b.comment && a.rating === b.rating;
 }
+
+/** メタデータを編集できるのは JPEG だけ（Rust 側 `security.rs` の `readable_jpeg` と同条件） */
+export function isEditableImage(name: string): boolean {
+  return /\.jpe?g$/i.test(name);
+}

@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { emptyValues, sameValues, toMetadata, toValues } from "./metadataValues";
+import { emptyValues, isEditableImage, sameValues, toMetadata, toValues } from "./metadataValues";
 
 describe("フォーム値 ⇄ EditableMetadata", () => {
   test("null は空欄・未評価として見せる", () => {
@@ -40,5 +40,18 @@ describe("フォーム値 ⇄ EditableMetadata", () => {
     expect(sameValues(base, { ...base, title: "z" })).toBe(false);
     expect(sameValues(base, { ...base, comment: "z" })).toBe(false);
     expect(sameValues(base, { ...base, rating: 5 })).toBe(false);
+  });
+});
+
+describe("編集できるファイルの判定", () => {
+  // Rust 側（security.rs の readable_jpeg）と同じ条件。
+  // ここが緩いと「編集できる顔をして保存で弾かれる」になる
+  test("JPEG だけを編集できる", () => {
+    for (const name of ["a.jpg", "a.JPG", "a.jpeg", "a.JPEG"]) {
+      expect(isEditableImage(name)).toBe(true);
+    }
+    for (const name of ["a.png", "a.webp", "a.jpg.png", "a"]) {
+      expect(isEditableImage(name)).toBe(false);
+    }
   });
 });

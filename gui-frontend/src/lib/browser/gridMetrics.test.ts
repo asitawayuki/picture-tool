@@ -17,6 +17,7 @@ import {
   OVERSCAN_ROWS,
   computeGridMetrics,
   computeVisibleRange,
+  scrollTopToReveal,
 } from "./gridMetrics";
 
 describe("computeGridMetrics", () => {
@@ -161,5 +162,43 @@ describe("computeVisibleRange", () => {
     expect(Number.isFinite(r.startIndex)).toBe(true);
     expect(Number.isFinite(r.endIndex)).toBe(true);
     expect(r.endIndex).toBeGreaterThanOrEqual(-1);
+  });
+});
+
+describe("指定の1枚を可視範囲に入れる", () => {
+  // 幅 800 / タイル 200 → 3 列、行高は (tileWidth*5/4 + 18 + 8)
+  const metrics = computeGridMetrics(800, 200, 60);
+
+  test("すでに見えているなら動かさない", () => {
+    expect(scrollTopToReveal(metrics, 0, 0, 600)).toBe(0);
+  });
+
+  test("下に隠れているぶんだけ下げる", () => {
+    const row = 8;
+    const index = row * metrics.columns;
+    const scrolled = scrollTopToReveal(metrics, index, 0, 600);
+    expect(scrolled).toBeCloseTo((row + 1) * metrics.rowHeight - 600);
+  });
+
+  test("上に隠れているなら行の先頭まで戻す", () => {
+    expect(scrollTopToReveal(metrics, 0, 2000, 600)).toBe(0);
+  });
+
+  // 末尾を超えて飛ぶと paddingTop が総高を超えて画面が壊れる
+  test("末尾より下へは行かない", () => {
+    const max = metrics.totalRows * metrics.rowHeight - 600;
+    expect(scrollTopToReveal(metrics, 59, 0, 600)).toBeLessThanOrEqual(max);
+  });
+
+  // 上の「末尾より下へは行かない」は bottom 分岐（bottom は totalRows*rowHeight を
+  // 超えないので、実は max クランプが無くても数学的に通ってしまう）。
+  // クランプが効くのは「大きくスクロールし過ぎた状態から末尾付近の行へ戻す」
+  // top 分岐の方 ── ここを検査しないと欠陥注入で 1 本も落ちない
+  test("末尾付近の行へ、スクロールし過ぎた状態から戻しても末尾を超えない", () => {
+    const row = metrics.totalRows - 1;
+    const index = row * metrics.columns;
+    const overScrolled = metrics.totalRows * metrics.rowHeight + 10_000;
+    const max = metrics.totalRows * metrics.rowHeight - 600;
+    expect(scrollTopToReveal(metrics, index, overScrolled, 600)).toBeLessThanOrEqual(max);
   });
 });

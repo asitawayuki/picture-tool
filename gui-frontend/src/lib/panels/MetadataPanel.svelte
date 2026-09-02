@@ -11,6 +11,15 @@
   interface Props {
     image: ImageEntry | null;
     draft: ReturnType<typeof createMetadataDraft>;
+    /** このフォルダーへの書き込みが承認済みか */
+    canWrite: boolean;
+    /** JPEG 以外は編集できない（Rust 側が弾く） */
+    editable: boolean;
+    /** 「保存して次の写真へ」で送る先があるか */
+    hasNext: boolean;
+    onGrant: () => void;
+    onSave: () => void;
+    onSaveAndNext: () => void;
     thumbnailFor: (path: string, size: number) => string | undefined;
     onRequestThumbnail: (
       path: string,
@@ -20,7 +29,21 @@
     ) => void;
   }
 
-  let { image, draft, thumbnailFor, onRequestThumbnail }: Props = $props();
+  let {
+    image,
+    draft,
+    canWrite,
+    editable,
+    hasNext,
+    onGrant,
+    onSave,
+    onSaveAndNext,
+    thumbnailFor,
+    onRequestThumbnail,
+  }: Props = $props();
+
+  // 保存できるのは「JPEG で、承認済みで、変更があって、保存中でない」とき
+  let canSave = $derived(editable && canWrite && draft.isDirty && !draft.saving);
 
   const THUMB = 160;
 
@@ -88,7 +111,12 @@
 
       <!-- 2. タイトル / 3. コメント -->
       <Card level={1} title="タイトルとコメント">
-        <TextField bind:value={draft.values.title} label="タイトル" placeholder="未設定" />
+        <TextField
+          bind:value={draft.values.title}
+          label="タイトル"
+          placeholder="未設定"
+          disabled={!editable || draft.loading}
+        />
         <div class="sub">
           <TextField
             bind:value={draft.values.comment}
@@ -96,15 +124,19 @@
             multiline
             rows={4}
             placeholder="未設定"
+            disabled={!editable || draft.loading}
           />
         </div>
-        <!-- 食い違い警告の表示領域（次工程で XPToolkit / MWG の不一致を出す） -->
-        <div class="mismatch" aria-live="polite"></div>
+        <div class="mismatch" aria-live="polite">
+          {#each draft.warnings as warning (warning)}
+            <p class="warning">{warning}</p>
+          {/each}
+        </div>
       </Card>
 
       <!-- 4. レーティング -->
       <Card level={1} title="レーティング">
-        <Rating bind:value={draft.values.rating} />
+        <Rating bind:value={draft.values.rating} disabled={!editable || draft.loading} />
       </Card>
 
       <!-- 5. 撮影情報（読み取り専用） -->
@@ -121,23 +153,34 @@
         {/if}
       </Card>
 
-      <!-- 6. 書き込み承認の状態表示。
-           本刷新では disabled のまま場所だけ確保する（spec §5-2）。
-           ここを作っておかないと「刷新後に部品を継ぎ足す事故を避ける」という
-           本 spec の目的に穴が開く -->
+      {#if !editable}
+        <Card level={1} title="編集できない形式">
+          <p class="empty">タイトル・コメント・評価を書き込めるのは JPEG だけです。</p>
+        </Card>
+      {/if}
+
+      <!-- 6. 書き込み承認の状態表示 -->
       <Card level={1} title="書き込みの許可">
-        <p class="empty">このフォルダーへの書き込みはまだ許可されていません。</p>
-        <div class="sub">
-          <Button variant="outlined" disabled>このフォルダーへの書き込みを許可...</Button>
-        </div>
+        {#if canWrite}
+          <p class="empty">このフォルダーへ書き込めます（アプリを終了すると解除されます）。</p>
+        {:else}
+          <p class="empty">このフォルダーへの書き込みはまだ許可されていません。</p>
+          <div class="sub">
+            <Button variant="outlined" onclick={onGrant}>このフォルダーへの書き込みを許可...</Button>
+          </div>
+        {/if}
       </Card>
     {/if}
   </div>
 
   <!-- 7. 連続して付けていく作業が主なので、次へ送りを主ボタンに置く（spec §5-2） -->
   <div class="action">
-    <Button variant="filled" full disabled>保存して次の写真へ</Button>
-    <Button variant="outlined" full disabled>保存</Button>
+    <Button
+      variant="filled"
+      full
+      disabled={!canSave || !hasNext}
+      onclick={onSaveAndNext}>保存して次の写真へ</Button>
+    <Button variant="outlined" full disabled={!canSave} onclick={onSave}>保存</Button>
   </div>
 </div>
 
@@ -221,6 +264,12 @@
 
   .mismatch:empty {
     display: none;
+  }
+
+  .warning {
+    margin: var(--space-2) 0 0;
+    font: var(--md-sys-typescale-body-sm);
+    color: var(--md-sys-color-on-surface-variant);
   }
 
   dl {

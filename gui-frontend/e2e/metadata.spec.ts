@@ -4,9 +4,9 @@ import { clearStorageOnce, installTauriStub } from "./stub";
 /**
  * spec §5-2（メタデータパネル）と §3-2（editingPath と focusedPath の分離）。
  *
- * 本刷新で作るのは静的なレイアウトまで。`read_image_metadata` /
- * `write_image_metadata` / `grant_metadata_editing` は次工程で追加される
- * Tauri コマンドなので、実データは撮影情報（`get_exif_info`）だけである。
+ * `read_image_metadata` / `write_image_metadata` / `grant_metadata_editing`
+ * はスタブ（`stub.ts`）が受ける。実データは撮影情報（`get_exif_info`）と同様、
+ * スタブが返す形を dto.contract.ts から取っている。
  *
  * ファイル名はグリッドのタイルにも出るので、パネル側の表示を見るときは
  * 右カラム（`[data-region="right"]`）に絞る。絞らないと strict mode で
@@ -39,12 +39,60 @@ test.describe("メタデータモード（レイアウトのみ）", () => {
     await expect(page.getByRole("button", { name: "保存", exact: true })).toBeVisible();
   });
 
-  test("保存ボタンは disabled（データ接続は次工程。spec §5-2）", async ({ page }) => {
-    await expect(page.getByRole("button", { name: "保存して次の写真へ" })).toBeDisabled();
-    await expect(page.getByRole("button", { name: "保存", exact: true })).toBeDisabled();
+  test("承認前は保存できない（spec §衝突2）", async ({ page }) => {
+    await page.getByLabel("タイトル").fill("夕暮れの港");
+    // 前提条件: 未保存の変更はある（＝「変更が無いから disabled」ではない）
     await expect(
-      page.getByRole("button", { name: "このフォルダーへの書き込みを許可..." })
-    ).toBeDisabled();
+      page.locator('[data-region="right"]').getByText("未保存の変更があります")
+    ).toBeVisible();
+    await expect(page.getByRole("button", { name: "保存", exact: true })).toBeDisabled();
+  });
+
+  test("承認すると保存でき、値がファイルに残る", async ({ page }) => {
+    await page.getByRole("button", { name: "このフォルダーへの書き込みを許可..." }).click();
+    await expect(page.getByText("このフォルダーへ書き込めます", { exact: false })).toBeVisible();
+
+    await page.getByLabel("タイトル").fill("夕暮れの港");
+    await page.getByRole("button", { name: "保存", exact: true }).click();
+
+    const panel = page.locator('[data-region="right"]');
+    await expect(panel.getByText("未保存の変更があります")).toBeHidden();
+
+    // 別の写真へ移って戻ると、保存した値が読み直される
+    await page.getByRole("option").nth(1).click();
+    await expect(page.getByLabel("タイトル")).toHaveValue("");
+    await page.getByRole("option").nth(0).click();
+    await expect(page.getByLabel("タイトル")).toHaveValue("夕暮れの港");
+  });
+
+  test("食い違い警告が編集欄の脇に出る（spec §食い違いは警告として返す）", async ({
+    page,
+  }) => {
+    // beforeEach とは別条件なのでこのテスト内で貼り直す
+    await installTauriStub(page, {
+      imageCount: 4,
+      metadataWarnings: ["コメントに、他のアプリが書いた別の値があります"],
+    });
+    await page.goto("/");
+    await page.getByRole("button", { name: "photos", exact: false }).first().click();
+    await page.getByRole("option").first().click();
+    await page
+      .getByRole("navigation", { name: "モード" })
+      .getByRole("button", { name: "情報" })
+      .click();
+
+    await expect(
+      page.locator('[data-region="right"]').getByText("他のアプリが書いた別の値", { exact: false })
+    ).toBeVisible();
+  });
+
+  test("「保存して次の写真へ」は編集対象を 1 つ進める", async ({ page }) => {
+    await page.getByRole("button", { name: "このフォルダーへの書き込みを許可..." }).click();
+    await page.getByLabel("タイトル").fill("一枚目");
+    await page.getByRole("button", { name: "保存して次の写真へ" }).click();
+    await expect(
+      page.locator('[data-region="right"]').getByText("photo-0001.jpg")
+    ).toBeVisible();
   });
 
   test("タイトル・コメント・★は編集でき、未保存として見える（spec §5-2）", async ({
@@ -107,5 +155,30 @@ test.describe("メタデータモード（レイアウトのみ）", () => {
 
     // 変換モードでの選択は focusedPath しか動かさないので、編集対象は 1 枚目のまま
     await expect(panel.getByText("photo-0000.jpg")).toBeVisible();
+  });
+
+  test("送り続けても編集対象がグリッドの外へ出ない", async ({ page }) => {
+    await installTauriStub(page, { imageCount: 120 });
+    await page.goto("/");
+    await page.getByRole("button", { name: "photos", exact: false }).first().click();
+    await page.getByRole("option").first().click();
+    await page
+      .getByRole("navigation", { name: "モード" })
+      .getByRole("button", { name: "情報" })
+      .click();
+    await page.getByRole("button", { name: "このフォルダーへの書き込みを許可..." }).click();
+
+    for (let i = 0; i < 30; i++) {
+      // 「保存して次の写真へ」は isDirty を要求する（spec の disabled 判定どおり）。
+      // 変更が無いままでは 1 回目以降ずっと disabled のままになるので、毎回 1 文字
+      // 変える。この検査の主眼は canSave の判定ではなくスクロール追従なので、
+      // dirty を保つのが目的で内容そのものに意味は無い
+      await page.getByLabel("タイトル").fill(`t${i}`);
+      await page.getByRole("button", { name: "保存して次の写真へ" }).click();
+    }
+    // 選択中のタイルが描画されていて、画面内に見えていること
+    const selected = page.getByRole("option").and(page.locator('[aria-selected="true"]'));
+    await expect(selected).toHaveCount(1);
+    await expect(selected).toBeInViewport();
   });
 });

@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { onMount } from "svelte";
+  import { onMount, untrack } from "svelte";
   import { SvelteSet } from "svelte/reactivity";
   import AppShell from "./lib/shell/AppShell.svelte";
   import { createLayout } from "./lib/shell/layout.svelte";
@@ -23,6 +23,9 @@
   import { createConvertRun } from "./lib/panels/convertRun.svelte";
   import { createFrameDraft } from "./lib/panels/frameDraft.svelte";
   import { createMetadataDraft } from "./lib/panels/metadataDraft.svelte";
+  import { createGrantStore } from "./lib/panels/grants.svelte";
+  import { isEditableImage } from "./lib/panels/metadataValues";
+  import { parentFolder } from "./lib/panels/grants";
   import type { ImageEntry } from "./lib/types";
 
   // --- 状態 ---
@@ -38,7 +41,6 @@
   let focusedPath = $state<string | null>(null);
 
   // メタデータの編集対象。未保存ガードはこれの変更にだけ掛かる。
-  // 本刷新では読むだけで、ガードの配線は次工程（spec §5-2）
   let editingPath = $state<string | null>(null);
 
   // 変換モード専用の選択。フォルダーを変えたらクリアする（spec §3-2）
@@ -50,6 +52,8 @@
    * グリッド内部の state に置くと戻ったときに先頭へ飛ぶ。
    */
   let gridScrollTop = $state(0);
+  /** `revealPath` を呼ぶための PhotoGrid インスタンス（Step 6b） */
+  let grid = $state<ReturnType<typeof PhotoGrid> | undefined>();
 
   const layout = createLayout();
   const thumbnails = createThumbnailQueue();
@@ -58,6 +62,7 @@
   // 下書きは一覧を読み書きするのでプリセットストアを渡す
   const frame = createFrameDraft(presets);
   const metadata = createMetadataDraft();
+  const grants = createGrantStore();
 
   // --- 派生状態 ---
   let selectedImages = $derived(images.filter((img) => selectedPaths.has(img.path)));
@@ -69,10 +74,28 @@
     selectedImages.length > 0 && !convert.processing && convert.outputFolder !== ""
   );
 
-  // 編集対象が変わったら下書きを入れ替える。次工程ではここが
-  // read_image_metadata の呼び出し口になる（spec §5-2）
+  let editingFolder = $derived(editingPath === null ? "" : parentFolder(editingPath));
+  let canWriteEditing = $derived(editingPath !== null && grants.allows(editingPath));
+  let editingIsJpeg = $derived(editingImage !== null && isEditableImage(editingImage.name));
+  let nextImagePath = $derived.by(() => {
+    if (editingPath === null) return null;
+    const index = images.findIndex((img) => img.path === editingPath);
+    return index >= 0 && index + 1 < images.length ? images[index + 1].path : null;
+  });
+
+  // 編集対象が変わったら読み込む
   $effect(() => {
-    metadata.load(editingPath);
+    // 非 JPEG では読みに行かない。read_image_metadata は readable_jpeg で
+    // PNG / WebP を弾くので、無条件に呼ぶと情報モードで PNG をクリックするたびに
+    // エラートーストが出る（グリッドは PNG / WebP も並べる）
+    const target = editingPath !== null && editingIsJpeg ? editingPath : null;
+    // `untrack` で囲む ── `load` はストアの $state を書くので、
+    // 囲まないと自分の書き込みで再実行されうる
+    untrack(() => {
+      metadata.load(target).catch((e) => {
+        toast.error(`メタデータを読めませんでした: ${describeError(e)}`);
+      });
+    });
   });
 
   // --- イベントリスナー ---
@@ -142,6 +165,42 @@
   function handleProcess() {
     if (canProcess) convert.request(selectedImages, presets.active);
   }
+
+  async function handleGrant() {
+    if (editingFolder === "") return;
+    try {
+      const approved = await grants.request(editingFolder);
+      if (!approved) toast.warning("書き込みは許可されませんでした。");
+    } catch (e) {
+      toast.error(`許可を求められませんでした: ${describeError(e)}`);
+    }
+  }
+
+  async function handleSaveMetadata(): Promise<boolean> {
+    try {
+      await metadata.save();
+      toast.success("保存しました。");
+      return true;
+    } catch (e) {
+      toast.error(`保存できませんでした: ${describeError(e)}`);
+      return false;
+    }
+  }
+
+  async function handleSaveAndNext() {
+    const next = nextImagePath;
+    if (!(await handleSaveMetadata())) return;
+    editingPath = next;
+    // **グリッドの選択も動かし、スクロールも追従させる。**
+    // 単一選択モードの `aria-selected` と太枠は `focusedPath` で決まる
+    // （`PhotoGrid.svelte` の `isSelected`）ので、落とすと
+    // 「パネルは次の写真・グリッドの枠は前の写真」になる。
+    // 送り続けると可視範囲の外へ出るので `revealPath` も呼ぶ（Step 6b）
+    if (next !== null) {
+      focusedPath = next;
+      grid?.revealPath(next);
+    }
+  }
 </script>
 
 <AppShell {mode} onModeChange={handleModeChange} {layout}>
@@ -169,6 +228,7 @@
       />
     {:else}
       <PhotoGrid
+        bind:this={grid}
         {images}
         selectionMode={mode === "convert" ? "multi" : "single"}
         {selectedPaths}
@@ -211,6 +271,12 @@
       <MetadataPanel
         image={editingImage}
         draft={metadata}
+        canWrite={canWriteEditing}
+        editable={editingIsJpeg}
+        hasNext={nextImagePath !== null}
+        onGrant={handleGrant}
+        onSave={handleSaveMetadata}
+        onSaveAndNext={handleSaveAndNext}
         thumbnailFor={thumbnails.get}
         onRequestThumbnail={thumbnails.request}
       />
@@ -247,9 +313,10 @@
       {selectedPaths.size} 枚を変換
     </Button>
   {:else if mode === "metadata"}
-    <!-- メタデータの保存は次工程で配線する（spec §5-2）。
-         畳んでいる間に主導線が消えないよう、場所だけ先に確保しておく -->
-    <Button variant="filled" disabled>保存</Button>
+    <Button
+      variant="filled"
+      disabled={!canWriteEditing || !editingIsJpeg || !metadata.isDirty || metadata.saving}
+      onclick={handleSaveMetadata}>保存</Button>
   {/if}
 {/snippet}
 
