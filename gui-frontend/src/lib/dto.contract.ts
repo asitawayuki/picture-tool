@@ -11,18 +11,21 @@
 // 生成し直したら、`types.ts` の側も同じ変更を入れること。
 
 import type {
+  EditableMetadata,
   ExifFrameConfig,
   ExifInfo,
   ExifPosition,
   FileEntry,
   FontInfo,
   ImageEntry,
+  MetadataRead,
   PreviewImage,
   ProcessBatchResponse,
   ProcessFailure,
   ProcessResult,
   ProcessingConfig,
   ProgressPayload,
+  RatingEntry,
 } from "./types";
 
 /** フォルダーツリーの 1 行 */
@@ -40,6 +43,18 @@ export const imageEntry: ImageEntry = {
   path: "/home/user/photos/photo.jpg",
   size_bytes: 4500000,
   width: 4000,
+};
+
+/** グリッドの★1 件（読めなかった写真は rating: null） */
+export const ratingEntry: RatingEntry = {
+  path: "/home/user/photos/photo.jpg",
+  rating: 3,
+};
+
+/** 未評価（rating: None）の直列化を固定する。読めなかった場合と綴りが同じになる */
+export const ratingEntryUnrated: RatingEntry = {
+  path: "/home/user/photos/unrated.jpg",
+  rating: null,
 };
 
 /** 出力幅の上限あり（4 の倍数で送る） */
@@ -215,6 +230,30 @@ export const fontInfoBundled: FontInfo = {
   display_name: "Noto Sans JP (bundled)",
   is_bundled: true,
   path: null,
+};
+
+/** 3 項目とも入っている */
+export const editableMetadataFilled: EditableMetadata = {
+  comment: "順光。もう少し寄れた",
+  rating: 4,
+  title: "夕暮れの港",
+};
+
+/** タグが 1 つも無い（null と空文字は別物） */
+export const editableMetadataEmpty: EditableMetadata = {
+  comment: null,
+  rating: null,
+  title: null,
+};
+
+/** 他のアプリが書いた別の値を検出した場合 */
+export const metadataRead: MetadataRead = {
+  metadata: {
+    comment: null,
+    rating: 4,
+    title: "夕暮れの港",
+  },
+  warnings: ["コメントに、他のアプリが書いた別の値があります（XMP dc:description を採用。ほかに Exif XPComment = 「古い注」）。保存すると揃います"],
 };
 
 /** 変換モードの綴り（serde の rename_all を固定する） */

@@ -654,6 +654,154 @@ fn scan_user_fonts(dir: &Path) -> Vec<FontInfo> {
     fonts
 }
 
+/// 編集対象の現在値と、箇所ごとの値の食い違いを返す
+#[tauri::command]
+pub async fn read_image_metadata(path: String) -> Result<core::metadata::MetadataRead, String> {
+    let file = security::readable_jpeg(&path)?;
+    tokio::task::spawn_blocking(move || {
+        core::metadata::read_metadata(&file).map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+/// メタデータの書き込み先を検証する。
+///
+/// **見るのは `metadata_roots` だけ。** 変換の出力先の承認（`pick_output_folder`）は
+/// ここでは効かない ── 「出力先フォルダーを選択」のダイアログは既存写真の書き換えに
+/// ついて何も言っていないので、それを書き込みの同意として使ってはならない。
+///
+/// コマンド本体（`#[tauri::command]` かつ `tauri::State` を取る）は単体テストから
+/// 呼べないので、**どちらの集合を見るかという判断だけ**をここへ出してテスト可能にしている。
+fn metadata_target(state: &ProcessingState, path: &str) -> Result<PathBuf, String> {
+    security::writable_image(&state.metadata_roots, path)
+}
+
+/// メタデータ編集の承認を記録する。**足すのは `metadata_roots` だけ。**
+///
+/// 承認ダイアログ（`grant_metadata_editing`）は「タイトル・コメント・評価を
+/// 書き込めるようにします」としか言っておらず、変換の出力先になることには触れていない。
+/// `metadata_target` と対にしてここへ出してあるのは、同じ理由（コマンド本体を
+/// 単体テストから呼べない）でテスト可能にするため。
+fn approve_metadata_root(state: &ProcessingState, dir: PathBuf) {
+    state.metadata_roots.grant(dir);
+}
+
+/// 検証付き原子的置換で書き込み、**保存直後の実際の中身を返す**
+///
+/// 戻り値を保存済みの値としてそのまま使えるので、フロント側が
+/// 「送った値」と「ファイルの中身」を取り違えることが無い。
+/// 食い違いの警告も、書き込みで揃った結果が返る。
+#[tauri::command]
+pub async fn write_image_metadata(
+    state: tauri::State<'_, ProcessingState>,
+    path: String,
+    metadata: core::metadata::EditableMetadata,
+) -> Result<core::metadata::MetadataRead, String> {
+    let file = metadata_target(&state, &path)?;
+    tokio::task::spawn_blocking(move || {
+        core::metadata::write_metadata(&file, &metadata).map_err(|e| e.to_string())?;
+        core::metadata::read_metadata(&file).map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+/// フォルダー単位でメタデータの書き込みを承認させる
+///
+/// **確認を OS ネイティブのダイアログで出すことが本質。** webview 内の確認は
+/// 乗っ取られた状態では素通りする（`confirm_delete_originals` と同型）。
+/// `folder` は webview から来るが、承認されるのは `existing_dir` が解決した実体パスで、
+/// その実体パスをダイアログの文面に出すので、利用者は「見覚えのない場所」に気づける。
+/// 戻り値も**解決後の実体パス**にして、フロントの表示と境界の判定を一致させる。
+#[tauri::command]
+pub async fn grant_metadata_editing(
+    app_handle: tauri::AppHandle,
+    state: tauri::State<'_, ProcessingState>,
+    folder: String,
+) -> Result<Option<String>, String> {
+    let dir = security::existing_dir(&folder)?;
+
+    let mut builder = app_handle
+        .dialog()
+        .message(format!(
+            "このフォルダーの写真に、タイトル・コメント・評価を書き込めるようにします。\n\n{}\n\n書き換えるのはメタデータだけで、写真そのもの（画素）は変わりません。\n許可はアプリを終了すると消えます。",
+            dir.display()
+        ))
+        .title("このフォルダーへの書き込みを許可しますか？")
+        .kind(MessageDialogKind::Warning)
+        .buttons(MessageDialogButtons::OkCancelCustom(
+            "許可する".to_string(),
+            "許可しない".to_string(),
+        ));
+
+    if let Some(window) = app_handle.get_webview_window("main") {
+        builder = builder.parent(&window);
+    }
+
+    if !builder.blocking_show() {
+        return Ok(None);
+    }
+    // **返すのは解決後の実体パス。** 呼び出し側が送った生の文字列を保持すると、
+    // シンボリックリンク越しなどで境界とフロントの表示がずれ、
+    // 「承認済みと出ているのに保存が弾かれる」になる
+    let granted = dir.to_string_lossy().to_string();
+    approve_metadata_root(&state, dir);
+    Ok(Some(granted))
+}
+
+/// 未保存の有無を Rust 側へ通知する
+///
+/// フロントで `onCloseRequested` を使わないのは、`core:default` に
+/// `window:allow-destroy` が含まれず、webview に追加権限が要るため。
+/// 「webview にプラグイン権限を与えない」という既存の前提（`security.rs`）に反する。
+#[tauri::command]
+pub fn set_unsaved_state(state: tauri::State<'_, ProcessingState>, unsaved: bool) {
+    state.unsaved.store(unsaved, Ordering::SeqCst);
+}
+
+/// 可視範囲ぶんの★をまとめて読む
+///
+/// 読めなかった写真（JPEG 以外・壊れている・消えた）は `rating: None` で返す。
+/// **1 枚の失敗で全件を落とさない** ── グリッドの飾りであって、
+/// 出なくても操作は成立する。
+#[tauri::command]
+pub async fn read_image_ratings(paths: Vec<String>) -> Result<Vec<RatingEntry>, String> {
+    /// 1 回の要求で読む上限。可視範囲は多くても 40 枚程度で、
+    /// 乗っ取られた webview がライブラリ全体を投げてきても走査量が跳ねない
+    const MAX_BATCH: usize = 64;
+
+    // **黙って切らずに拒否する。** 超過分を捨てると、返ってこなかったパスは
+    // 呼び出し側の期待から静かに落ち、「一部の★が永遠に出ない」という
+    // 診断しにくい症状になる（フロントは `CHUNK = 64` で分割して送る）
+    if paths.len() > MAX_BATCH {
+        return Err(format!(
+            "Too many paths in one request: {} (max {})",
+            paths.len(),
+            MAX_BATCH
+        ));
+    }
+    tokio::task::spawn_blocking(move || {
+        use rayon::prelude::*;
+        let entries = paths
+            .par_iter()
+            .map(|raw| {
+                let rating = security::readable_jpeg(raw)
+                    .ok()
+                    .and_then(|file| core::metadata::read_metadata(&file).ok())
+                    .and_then(|read| read.metadata.rating);
+                RatingEntry {
+                    path: raw.clone(),
+                    rating,
+                }
+            })
+            .collect();
+        Ok(entries)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -819,5 +967,57 @@ mod tests {
         // 着手していないものは「失敗」ではない。要求リストとの差分で
         // 「未処理」として表示させるため、どちらにも載せない。
         assert!(failures.is_empty());
+    }
+
+    // --- 書き込みの承認: 変換の出力先とメタデータ編集は別の同意 ---
+
+    /// **出力先フォルダーの選択は、メタデータ書き込みの承認を兼ねない。**
+    ///
+    /// `pick_output_folder` のダイアログは「出力先フォルダーを選択」としか言っておらず、
+    /// 既存写真の書き換えについては何も述べていない。利用者が出力先に自分の写真
+    /// フォルダーを選ぶのは普通の操作なので、そこを兼ねてしまうと追加の同意なしに
+    /// 配下の全 JPEG が書き換え可能になる。
+    #[test]
+    fn approving_an_output_folder_does_not_approve_metadata_writing() {
+        let dir = TempDir::new().unwrap();
+        let photo = dir.path().join("a.jpg");
+        write_real_jpeg(&photo);
+        let root = fs::canonicalize(dir.path()).unwrap();
+
+        let state = ProcessingState::new();
+        // `pick_output_folder` が承認する側だけを埋める
+        state.writable_roots.grant(root.clone());
+
+        // 前提条件: 変換の出力先としては承認済みである
+        // （＝「何も承認していないから拒否された」ではない）
+        assert!(security::writable_dir(&state.writable_roots, &as_str(dir.path())).is_ok());
+
+        assert!(
+            metadata_target(&state, &as_str(&photo)).is_err(),
+            "出力先の承認だけでメタデータを書き換えられてはならない"
+        );
+
+        // 前提条件: `grant_metadata_editing` が承認する側を埋めれば通る
+        // （＝ファイルそのものが理由で落ちているのではない）
+        approve_metadata_root(&state, root);
+        assert!(metadata_target(&state, &as_str(&photo)).is_ok());
+    }
+
+    /// 逆向きも兼ねない。メタデータ編集の承認は変換の出力先にならない
+    #[test]
+    fn approving_metadata_editing_does_not_approve_an_output_folder() {
+        let dir = TempDir::new().unwrap();
+        let photo = dir.path().join("a.jpg");
+        write_real_jpeg(&photo);
+        let root = fs::canonicalize(dir.path()).unwrap();
+
+        let state = ProcessingState::new();
+        // `grant_metadata_editing` が承認する側だけを埋める
+        approve_metadata_root(&state, root);
+
+        // 前提条件: メタデータ編集としては承認済みである
+        assert!(metadata_target(&state, &as_str(&photo)).is_ok());
+
+        assert!(security::writable_dir(&state.writable_roots, &as_str(dir.path())).is_err());
     }
 }

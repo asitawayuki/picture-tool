@@ -21,6 +21,8 @@ const TEMPLATE = {
   result: dto.processResultCompressed,
   preview: dto.previewImage,
   font: dto.fontInfoBundled,
+  metadata: dto.metadataRead,
+  emptyMetadata: dto.editableMetadataEmpty,
 };
 type Template = typeof TEMPLATE;
 
@@ -43,6 +45,19 @@ export interface StubOptions {
    * **画面が動いている状態での失敗**が一度も検査されない。
    */
   failThumbnails?: boolean;
+  /** read_image_metadata が返す食い違いの警告 */
+  metadataWarnings?: string[];
+  /** grant_metadata_editing が「許可しない」を返す */
+  denyGrant?: boolean;
+  /**
+   * 情報モードへ入っただけ（保存を経由せず）で★が出ることを検査するための下ごしらえ。
+   * 画像のインデックス（`list_images` が返す 0 始まりの並び順）→ 評価値（1〜5）。
+   *
+   * `read_image_ratings` は `stored`（保存済みメタデータ）からしか値を引かない。
+   * 保存経路のテストしか無いと、`App.svelte` の可視範囲起点の `$effect` を丸ごと
+   * 消しても e2e が気づけない穴になる（裁定 X1）。
+   */
+  seedRatings?: Record<number, number>;
 }
 
 /**
@@ -58,9 +73,20 @@ export async function installTauriStub(page: Page, options: StubOptions = {}) {
       imageCount: number;
       frameWarnings: string[];
       failThumbnails: boolean;
+      metadataWarnings: string[];
+      denyGrant: boolean;
+      seedRatings: Record<number, number>;
       template: Template;
     }) => {
-    const { imageCount, frameWarnings, failThumbnails, template } = opts;
+    const {
+      imageCount,
+      frameWarnings,
+      failThumbnails,
+      metadataWarnings,
+      denyGrant,
+      seedRatings,
+      template,
+    } = opts;
     /** サムネイルは 24 種類だけ作って使い回す。
      *  全部同じにするとデコードが 1 回で済んでしまい、スクロール計測の
      *  負荷が実際より軽く出る。全部別にすると生成自体が計測を汚す。 */
@@ -96,21 +122,78 @@ export async function installTauriStub(page: Page, options: StubOptions = {}) {
       return m ? Number(m[1]) : 0;
     }
 
+    /**
+     * Rust 側の保存時正規化を模す（前後の空白を落とす）。
+     *
+     * `write_image_metadata` が送られた値をそのまま echo すると、
+     * 「`saved` は戻り値ではなく送った値で更新する」という退行を e2e が
+     * 検出できない（送った値と返す値が常に同じになるため）。ここで
+     * 実際に値を変えて返すことで、UI 側が戻り値を使っていることを検査できる形にする
+     */
+    function normalizeMetadata(metadata: any) {
+      const trim = (v: unknown) => {
+        if (typeof v !== "string") return null;
+        const t = v.trim();
+        return t === "" ? null : t;
+      };
+      return {
+        title: trim(metadata?.title),
+        comment: trim(metadata?.comment),
+        rating: metadata?.rating ?? null,
+      };
+    }
+
     /** フォルダーごとに別のパスを返す。同じパスを返すと、フォルダーを変えても
      *  キャッシュが当たってしまい「取り直している」ことを検査できない */
     function imagesFor(folder: string) {
       const dir = folder.replace(/\/+$/, "") || "/photos";
-      return Array.from({ length: imageCount }, (_, i) => ({
+      const images = Array.from({ length: imageCount }, (_, i) => ({
         ...template.image,
         name: `photo-${String(i).padStart(4, "0")}.jpg`,
         path: `${dir}/${i}.jpg`,
       }));
+      // 「読み込んだ時点で既に★が付いている」fixture。保存で上書き済みの分は
+      // 触らない（テスト内で保存 → 再訪した場合に、仕込みで書き戻さないため）
+      for (const [indexStr, rating] of Object.entries(seedRatings)) {
+        const image = images[Number(indexStr)];
+        if (image && !stored.has(image.path)) {
+          stored.set(image.path, { title: null, comment: null, rating });
+        }
+      }
+      return images;
     }
 
     const presets = [template.preset];
+    /** 保存済みメタデータ。パスごとに保持し、保存 → 読み直しを繋げる */
+    const stored = new Map<string, unknown>();
+    let granted = false;
 
     const callbacks = new Map<number, (payload: unknown) => void>();
     let nextCallbackId = 1;
+
+    // どのコマンドが何で呼ばれたかを検査できるようにする。
+    // 「Rust へ通知した」型の配線は、画面に出ないので他に確かめようが無い。
+    // **コマンドごとに直近 N 件だけ残す**（裁定 V1 / 裁定 X3 Minor#1）。
+    // 総件数で切ると、頻繁に呼ばれるコマンド（`get_thumbnail` 等）が
+    // `set_unsaved_state` のようなたまにしか呼ばれないコマンドを押し出し、
+    // 「最新の set_unsaved_state を見る」検査が理由不明に落ちうる。
+    // コマンドごとに分けて間引けば、そのコマンド自身の直近 N 件は必ず残る
+    const CALLS_LIMIT_PER_CMD = 50;
+    const callsByCmd = new Map<string, { cmd: string; args: unknown }[]>();
+    /** 検査用に公開する平坦な一覧。中身はコマンドごとの直近 N 件を連結したもの
+     *  （全コマンドをまたいだ呼び出し順は保証しない。既存の検査は cmd で絞ってから
+     *  末尾を見るだけなので、その範囲では影響しない） */
+    const calls: { cmd: string; args: unknown }[] = [];
+    (window as unknown as Record<string, unknown>).__stubCalls = calls;
+
+    function recordCall(cmd: string, args: unknown) {
+      const list = callsByCmd.get(cmd) ?? [];
+      list.push({ cmd, args });
+      if (list.length > CALLS_LIMIT_PER_CMD) list.shift();
+      callsByCmd.set(cmd, list);
+      calls.length = 0;
+      for (const l of callsByCmd.values()) calls.push(...l);
+    }
 
     const handlers: Record<string, (args: any) => unknown> = {
       list_drives: () => ["/"],
@@ -178,6 +261,35 @@ export async function installTauriStub(page: Page, options: StubOptions = {}) {
         return null;
       },
       list_available_fonts: () => [template.font],
+      // 形は契約（template.metadata = dto.metadataRead）から取り、値だけ上書きする。
+      // { metadata, warnings } と手で組むと境界の写しが3つ目に増える
+      read_image_metadata: ({ path }: { path: string }) => ({
+        ...template.metadata,
+        metadata: stored.get(path) ?? template.emptyMetadata,
+        warnings: stored.has(path) ? [] : metadataWarnings,
+      }),
+      // 呼ばれた回数を記録する。「連打しても実際の書き込みは1回だけ」を
+      // 検査するときの前提条件（本当に1回しか実行されていないか）に使う
+      // （Task 15 fix round 裁定 T4 Minor#4）
+      write_image_metadata: ({ path, metadata }: { path: string; metadata: unknown }) => {
+        const log = ((window as any).__writeMetadataRequests ??= []);
+        log.push({ path });
+        if (!granted) throw "This folder has not been approved for metadata editing";
+        const normalized = normalizeMetadata(metadata);
+        stored.set(path, normalized);
+        return { ...template.metadata, metadata: normalized, warnings: [] };
+      },
+      grant_metadata_editing: ({ folder }: { folder: string }) => {
+        if (denyGrant) return null;
+        granted = true;
+        return folder;
+      },
+      set_unsaved_state: () => null,
+      read_image_ratings: ({ paths }: { paths: string[] }) =>
+        paths.map((path) => ({
+          path,
+          rating: (stored.get(path) as { rating: number | null } | undefined)?.rating ?? null,
+        })),
       "plugin:event|listen": () => nextCallbackId++,
       "plugin:event|unlisten": () => null,
     };
@@ -189,6 +301,7 @@ export async function installTauriStub(page: Page, options: StubOptions = {}) {
         return id;
       },
       async invoke(cmd: string, args: any) {
+        recordCall(cmd, args);
         const handler = handlers[cmd];
         if (!handler) throw new Error(`stub: 未対応のコマンド ${cmd}`);
         return handler(args ?? {});
@@ -199,6 +312,9 @@ export async function installTauriStub(page: Page, options: StubOptions = {}) {
       imageCount: options.imageCount ?? 24,
       frameWarnings: options.frameWarnings ?? [],
       failThumbnails: options.failThumbnails ?? false,
+      metadataWarnings: options.metadataWarnings ?? [],
+      denyGrant: options.denyGrant ?? false,
+      seedRatings: options.seedRatings ?? {},
       template: TEMPLATE,
     }
   );

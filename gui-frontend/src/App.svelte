@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { onMount } from "svelte";
+  import { onMount, untrack } from "svelte";
   import { SvelteSet } from "svelte/reactivity";
   import AppShell from "./lib/shell/AppShell.svelte";
   import { createLayout } from "./lib/shell/layout.svelte";
@@ -14,15 +14,20 @@
   import Button from "./lib/ui/Button.svelte";
   import ProgressOverlay from "./lib/ProgressOverlay.svelte";
   import DeleteOriginalsDialog from "./lib/DeleteOriginalsDialog.svelte";
+  import UnsavedChangesDialog from "./lib/UnsavedChangesDialog.svelte";
   import ResultDialog from "./lib/ResultDialog.svelte";
   import Toast from "./lib/Toast.svelte";
   import { toast, describeError } from "./lib/toasts.svelte";
-  import { listImages } from "./lib/api";
+  import { listImages, setUnsavedState } from "./lib/api";
   import { createThumbnailQueue } from "./lib/browser/thumbnailQueue.svelte";
+  import { createRatingStore } from "./lib/browser/ratings.svelte";
   import { createPresetStore } from "./lib/panels/presets.svelte";
   import { createConvertRun } from "./lib/panels/convertRun.svelte";
   import { createFrameDraft } from "./lib/panels/frameDraft.svelte";
   import { createMetadataDraft } from "./lib/panels/metadataDraft.svelte";
+  import { createGrantStore } from "./lib/panels/grants.svelte";
+  import { isEditableImage } from "./lib/panels/metadataValues";
+  import { parentFolder } from "./lib/panels/grants";
   import type { ImageEntry } from "./lib/types";
 
   // --- 状態 ---
@@ -38,8 +43,11 @@
   let focusedPath = $state<string | null>(null);
 
   // メタデータの編集対象。未保存ガードはこれの変更にだけ掛かる。
-  // 本刷新では読むだけで、ガードの配線は次工程（spec §5-2）
   let editingPath = $state<string | null>(null);
+
+  // 未保存のまま離れようとしたときに保留する操作。
+  // 3 経路（写真の切替 / モードの移動 / フォルダーの変更）をここへ集める
+  let pendingLeave = $state<(() => void) | null>(null);
 
   // 変換モード専用の選択。フォルダーを変えたらクリアする（spec §3-2）
   const selectedPaths = new SvelteSet<string>();
@@ -50,14 +58,23 @@
    * グリッド内部の state に置くと戻ったときに先頭へ飛ぶ。
    */
   let gridScrollTop = $state(0);
+  /** `revealPath` を呼ぶための PhotoGrid インスタンス（Step 6b） */
+  let grid = $state<ReturnType<typeof PhotoGrid> | undefined>();
+
+  // 可視範囲を App にも持たせる。**モードの切替では可視範囲が変わらない**ので、
+  // onVisibleRangeChange だけを起点にすると、変換モードから情報モードへ入って
+  // スクロールするまで★が 1 つも出ない（PhotoGrid の $effect は range 依存）
+  let visibleRange = $state({ start: 0, end: -1 });
 
   const layout = createLayout();
   const thumbnails = createThumbnailQueue();
+  const ratings = createRatingStore();
   const presets = createPresetStore();
   const convert = createConvertRun();
   // 下書きは一覧を読み書きするのでプリセットストアを渡す
   const frame = createFrameDraft(presets);
   const metadata = createMetadataDraft();
+  const grants = createGrantStore();
 
   // --- 派生状態 ---
   let selectedImages = $derived(images.filter((img) => selectedPaths.has(img.path)));
@@ -69,10 +86,50 @@
     selectedImages.length > 0 && !convert.processing && convert.outputFolder !== ""
   );
 
-  // 編集対象が変わったら下書きを入れ替える。次工程ではここが
-  // read_image_metadata の呼び出し口になる（spec §5-2）
+  let editingFolder = $derived(editingPath === null ? "" : parentFolder(editingPath));
+  let canWriteEditing = $derived(editingPath !== null && grants.allows(editingPath));
+  let editingIsJpeg = $derived(editingImage !== null && isEditableImage(editingImage.name));
+  let nextImagePath = $derived.by(() => {
+    if (editingPath === null) return null;
+    const index = images.findIndex((img) => img.path === editingPath);
+    return index >= 0 && index + 1 < images.length ? images[index + 1].path : null;
+  });
+
+  // 編集対象が変わったら読み込む
   $effect(() => {
-    metadata.load(editingPath);
+    // 非 JPEG では読みに行かない。read_image_metadata は readable_jpeg で
+    // PNG / WebP を弾くので、無条件に呼ぶと情報モードで PNG をクリックするたびに
+    // エラートーストが出る（グリッドは PNG / WebP も並べる）
+    const target = editingPath !== null && editingIsJpeg ? editingPath : null;
+    // `untrack` で囲む ── `load` はストアの $state を書くので、
+    // 囲まないと自分の書き込みで再実行されうる
+    untrack(() => {
+      metadata.load(target).catch((e) => {
+        toast.error(`メタデータを読めませんでした: ${describeError(e)}`);
+      });
+    });
+  });
+
+  // 未保存の有無が変わるたびに Rust へ伝える。Tauri の外（vite dev）では
+  // invoke が必ず reject するので、そこだけ握りつぶす。本番で失敗すると
+  // Rust 側の unsaved が false のまま取り残され、終了時に未保存のまま
+  // 黙って閉じてしまう（このガードが防ぎたいことそのもの）ので、
+  // 本番では最低限コンソールに痕跡を残す（利用者に見せるほどではないので toast は出さない）
+  $effect(() => {
+    const dirty = metadata.isDirty;
+    untrack(() => {
+      void setUnsavedState(dirty).catch((e) => {
+        if (import.meta.env.DEV) return;
+        console.error("未保存状態の通知に失敗", e);
+      });
+    });
+  });
+
+  // 可視範囲・モード・写真一覧のどれが動いても、情報モードなら★を取りに行く
+  $effect(() => {
+    if (mode !== "metadata") return;
+    const paths = images.slice(visibleRange.start, visibleRange.end + 1).map((img) => img.path);
+    untrack(() => ratings.request(paths));
   });
 
   // --- イベントリスナー ---
@@ -91,14 +148,50 @@
   // フォルダー連打で古い listImages の応答が新しい一覧を上書きしないようトークンで守る
   let listImagesToken = 0;
 
-  async function handleSelectFolder(path: string) {
+  // 未保存のまま離れようとしたときに保留していた操作を実行する
+  function guarded(action: () => void) {
+    if (metadata.isDirty) {
+      pendingLeave = action;
+      return;
+    }
+    action();
+  }
+
+  function resumeLeave() {
+    const action = pendingLeave;
+    pendingLeave = null;
+    action?.();
+  }
+
+  function handleDiscardAndLeave() {
+    metadata.discard();
+    resumeLeave();
+  }
+
+  async function handleSaveAndLeave() {
+    // await をまたぐ前に「いま同意を取ろうとしている」保留アクションを固定する
+    // （Task 15 裁定 T3）。`resumeLeave()` のように await 後の pendingLeave を
+    // 読み直すと、保存が往復している間に別の pendingLeave へ差し替わっていた場合
+    // ユーザーが答えていない新しいダイアログを勝手に解決してしまう
+    const action = pendingLeave;
+    const didSave = await handleSaveMetadata();
+    // **失敗したらダイアログは閉じない。** 閉じてしまうと「移動しなかった」ことが
+    // トーストからしか分からず、未保存の変更を抱えたまま元の画面に戻される
+    if (!didSave) return;
+    pendingLeave = null;
+    action?.();
+  }
+
+  async function loadFolder(path: string) {
     currentFolder = path;
     gridScrollTop = 0;
-    // フォルダーを変えたら最後に触った写真は無効
+    // フォルダーを変えたら最後に触った写真・編集対象は無効
     focusedPath = null;
+    editingPath = null;
     // 選択は常に現在のフォルダー内に閉じる。SelectionList を廃止したので
     // 画面外の選択を可視化・解除する窓口がもう無い（spec §3-2 / §5-1）
     selectedPaths.clear();
+    ratings.forget();
     // 初回 1 画面分の目安。正確な可視枚数は PhotoGrid が出すが、
     // ここでは「上から順に流す枚数」の見積もりで足りる
     thumbnails.resetForFolder(30);
@@ -114,6 +207,15 @@
     }
   }
 
+  function handleSelectFolder(path: string) {
+    guarded(() => void loadFolder(path));
+  }
+
+  function handleVisibleRangeChange(start: number, end: number) {
+    thumbnails.setVisibleRange(start, end);
+    visibleRange = { start, end };
+  }
+
   // クリックは「選択のトグル ＋ focusedPath の移動」を同時に行う（spec §3-2）
   function handleToggleSelect(image: ImageEntry) {
     if (selectedPaths.has(image.path)) selectedPaths.delete(image.path);
@@ -122,15 +224,36 @@
   }
 
   function handleFocus(image: ImageEntry) {
-    focusedPath = image.path;
-    // 変換モードのクリックは focusedPath と selectedPaths にしか触らない。
+    if (mode === "metadata") {
+      // 編集中のタイルを再クリックしただけなら何も動かさない。保留する操作が
+      // 同じ値の再代入で無意味な上、未保存のまま再クリックするたびにダイアログが
+      // 出てしまう（Task 15 裁定 T4 Minor#1）
+      if (image.path === editingPath) return;
+      // **`focusedPath` の代入もガードの内側に入れる。** 外に出すと、
+      // ダイアログでキャンセルしてもグリッドの選択だけが移動する
+      guarded(() => {
+        focusedPath = image.path;
+        editingPath = image.path;
+      });
+      return;
+    }
+    // 変換モードのクリックは focusedPath と selectedPaths にしか触らない（spec §3-2）。
     // ここで editingPath を動かすと、変換モードで写真をチェックするたびに
     // 未保存ガードが誤発火する
-    if (mode === "metadata") editingPath = image.path;
+    focusedPath = image.path;
+  }
+
+  function handleModeChange(next: AppMode) {
+    // メタデータモードから出るときだけガードする。入るときは失うものが無い
+    if (mode === "metadata" && next !== "metadata") {
+      guarded(() => applyModeChange(next));
+      return;
+    }
+    applyModeChange(next);
   }
 
   // メタデータモードへ入ったとき、編集対象が空なら最後に触った 1 枚を採る（spec §3-2）
-  function handleModeChange(next: AppMode) {
+  function applyModeChange(next: AppMode) {
     mode = next;
     if (next === "metadata" && editingPath === null) editingPath = focusedPath;
     // 下書きはモードを跨いで保つ。null のときだけ、いま選ばれているプリセットから起こす
@@ -141,6 +264,50 @@
 
   function handleProcess() {
     if (canProcess) convert.request(selectedImages, presets.active);
+  }
+
+  async function handleGrant() {
+    if (editingFolder === "") return;
+    try {
+      const approved = await grants.request(editingFolder);
+      if (!approved) toast.warning("書き込みは許可されませんでした。");
+    } catch (e) {
+      toast.error(`許可を求められませんでした: ${describeError(e)}`);
+    }
+  }
+
+  async function handleSaveMetadata(): Promise<boolean> {
+    try {
+      const didSave = await metadata.save();
+      if (didSave) {
+        toast.success("保存しました。");
+        // invalidate だけでは、可視範囲・モード・一覧のどれも変わらないので
+        // ratings の request エフェクトが再実行されず、★が消えたまま戻ってこない。
+        // 保存した 1 枚だけはその場で取り直す（ブリーフからの逸脱。実施メモに記載）
+        const savedPath = metadata.path!;
+        ratings.invalidate(savedPath);
+        ratings.request([savedPath]);
+      }
+      return didSave;
+    } catch (e) {
+      toast.error(`保存できませんでした: ${describeError(e)}`);
+      return false;
+    }
+  }
+
+  async function handleSaveAndNext() {
+    const next = nextImagePath;
+    if (!(await handleSaveMetadata())) return;
+    editingPath = next;
+    // **グリッドの選択も動かし、スクロールも追従させる。**
+    // 単一選択モードの `aria-selected` と太枠は `focusedPath` で決まる
+    // （`PhotoGrid.svelte` の `isSelected`）ので、落とすと
+    // 「パネルは次の写真・グリッドの枠は前の写真」になる。
+    // 送り続けると可視範囲の外へ出るので `revealPath` も呼ぶ（Step 6b）
+    if (next !== null) {
+      focusedPath = next;
+      grid?.revealPath(next);
+    }
   }
 </script>
 
@@ -156,7 +323,7 @@
         onDelete={frame.remove}
       />
     {:else}
-      <FolderTree onSelectFolder={handleSelectFolder} />
+      <FolderTree {currentFolder} onSelectFolder={handleSelectFolder} />
     {/if}
   {/snippet}
 
@@ -169,16 +336,19 @@
       />
     {:else}
       <PhotoGrid
+        bind:this={grid}
         {images}
         selectionMode={mode === "convert" ? "multi" : "single"}
         {selectedPaths}
         {focusedPath}
         thumbnailFor={thumbnails.get}
         onRequestThumbnail={thumbnails.request}
-        onVisibleRangeChange={thumbnails.setVisibleRange}
+        onVisibleRangeChange={handleVisibleRangeChange}
         bind:scrollTop={gridScrollTop}
         onToggleSelect={handleToggleSelect}
         onFocus={handleFocus}
+        ratingFor={ratings.get}
+        unsavedPath={metadata.isDirty ? editingPath : null}
         selectedCount={selectedPaths.size}
         rightPanelCollapsed={layout.rightPanelCollapsed}
         onToggleRightPanel={() =>
@@ -211,6 +381,12 @@
       <MetadataPanel
         image={editingImage}
         draft={metadata}
+        canWrite={canWriteEditing}
+        editable={editingIsJpeg}
+        hasNext={nextImagePath !== null}
+        onGrant={handleGrant}
+        onSave={handleSaveMetadata}
+        onSaveAndNext={handleSaveAndNext}
         thumbnailFor={thumbnails.get}
         onRequestThumbnail={thumbnails.request}
       />
@@ -247,9 +423,10 @@
       {selectedPaths.size} 枚を変換
     </Button>
   {:else if mode === "metadata"}
-    <!-- メタデータの保存は次工程で配線する（spec §5-2）。
-         畳んでいる間に主導線が消えないよう、場所だけ先に確保しておく -->
-    <Button variant="filled" disabled>保存</Button>
+    <Button
+      variant="filled"
+      disabled={!canWriteEditing || !editingIsJpeg || !metadata.isDirty || metadata.saving}
+      onclick={handleSaveMetadata}>保存</Button>
   {/if}
 {/snippet}
 
@@ -269,6 +446,17 @@
     response={convert.result.response}
     cancelled={convert.result.cancelled}
     onClose={convert.dismissResult}
+  />
+{/if}
+
+{#if pendingLeave !== null}
+  <UnsavedChangesDialog
+    name={editingImage?.name ?? ""}
+    canSave={canWriteEditing && editingIsJpeg}
+    saving={metadata.saving}
+    onCancel={() => (pendingLeave = null)}
+    onDiscard={handleDiscardAndLeave}
+    onSave={handleSaveAndLeave}
   />
 {/if}
 

@@ -1,4 +1,5 @@
 pub mod exif_frame;
+pub mod metadata;
 pub mod model_map;
 
 use anyhow::{Context, Result};
@@ -78,7 +79,7 @@ pub struct ProcessResult {
     pub warnings: Vec<String>,
 }
 
-#[derive(Debug, Clone, Default, Serialize)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize)]
 pub struct ExifInfo {
     pub camera_make: Option<String>,
     pub camera_model: Option<String>,

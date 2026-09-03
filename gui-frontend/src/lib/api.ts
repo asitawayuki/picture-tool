@@ -8,6 +8,9 @@ import type {
   ExifInfo,
   ExifFrameConfig,
   FontInfo,
+  EditableMetadata,
+  MetadataRead,
+  RatingEntry,
 } from "./types";
 
 export async function listDirectory(path: string): Promise<FileEntry[]> {
@@ -106,4 +109,41 @@ export async function deletePreset(name: string): Promise<void> {
 
 export async function listAvailableFonts(): Promise<FontInfo[]> {
   return invoke("list_available_fonts");
+}
+
+export async function readImageMetadata(path: string): Promise<MetadataRead> {
+  return invoke("read_image_metadata", { path });
+}
+
+/** 保存し、**保存直後の実際の中身**を返す。戻り値をそのまま「保存済みの値」に使える */
+export async function writeImageMetadata(
+  path: string,
+  metadata: EditableMetadata
+): Promise<MetadataRead> {
+  return invoke("write_image_metadata", { path, metadata });
+}
+
+/**
+ * フォルダー単位で書き込みを承認させる。承認されたら承認済みルートの実体パス、
+ * 拒否なら `null` を返す。
+ *
+ * 確認ダイアログは Rust 側が OS ネイティブで出す。webview 内の確認は
+ * 乗っ取られた状態では素通りするため、不可逆な操作の根拠にならない（S6-H8）。
+ */
+export async function grantMetadataEditing(folder: string): Promise<string | null> {
+  return invoke("grant_metadata_editing", { folder });
+}
+
+/**
+ * 未保存の有無を Rust に伝える。終了時の確認は Rust 側が OS ネイティブで出す。
+ *
+ * webview で `onCloseRequested` を使うには `window:allow-destroy` が要り、
+ * capabilities を `core:default` に留める前提から外れる（S6-H8 / 刷新 spec §3-4）。
+ */
+export async function setUnsavedState(unsaved: boolean): Promise<void> {
+  return invoke("set_unsaved_state", { unsaved });
+}
+
+export async function readImageRatings(paths: string[]): Promise<RatingEntry[]> {
+  return invoke("read_image_ratings", { paths });
 }

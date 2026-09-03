@@ -46,6 +46,14 @@ pub struct ProcessBatchResponse {
     pub warnings: Vec<String>,
 }
 
+/// 写真グリッドに★を出すための最小の応答。
+/// `read_image_metadata` を 1 枚ずつ呼ぶと可視範囲だけで数十回の IPC になる
+#[derive(Debug, Clone, Serialize)]
+pub struct RatingEntry {
+    pub path: String,
+    pub rating: Option<u8>,
+}
+
 /// Exif フレームのプレビュー
 #[derive(Debug, Clone, Serialize)]
 pub struct PreviewImage {
@@ -80,6 +88,7 @@ mod contract {
     use picture_tool_core::exif_frame::{
         DisplayItems, ExifFrameConfig, ExifPosition, FontConfig, FontInfo,
     };
+    use picture_tool_core::metadata::{EditableMetadata, MetadataRead};
     use picture_tool_core::{BackgroundColor, ConversionMode, ExifInfo, ProcessingConfig};
     use serde::Serialize;
     use serde_json::Value;
@@ -221,6 +230,24 @@ mod contract {
                     width: 4000,
                     height: 3000,
                     size_bytes: 4_500_000,
+                },
+            ),
+            entry(
+                "ratingEntry",
+                "RatingEntry",
+                "グリッドの★1 件（読めなかった写真は rating: null）",
+                RatingEntry {
+                    path: "/home/user/photos/photo.jpg".to_string(),
+                    rating: Some(3),
+                },
+            ),
+            entry(
+                "ratingEntryUnrated",
+                "RatingEntry",
+                "未評価（rating: None）の直列化を固定する。読めなかった場合と綴りが同じになる",
+                RatingEntry {
+                    path: "/home/user/photos/unrated.jpg".to_string(),
+                    rating: None,
                 },
             ),
             entry(
@@ -411,6 +438,37 @@ mod contract {
                     is_bundled: true,
                 },
             ),
+            entry(
+                "editableMetadataFilled",
+                "EditableMetadata",
+                "3 項目とも入っている",
+                EditableMetadata {
+                    title: Some("夕暮れの港".to_string()),
+                    comment: Some("順光。もう少し寄れた".to_string()),
+                    rating: Some(4),
+                },
+            ),
+            entry(
+                "editableMetadataEmpty",
+                "EditableMetadata",
+                "タグが 1 つも無い（null と空文字は別物）",
+                EditableMetadata::default(),
+            ),
+            entry(
+                "metadataRead",
+                "MetadataRead",
+                "他のアプリが書いた別の値を検出した場合",
+                MetadataRead {
+                    metadata: EditableMetadata {
+                        title: Some("夕暮れの港".to_string()),
+                        comment: None,
+                        rating: Some(4),
+                    },
+                    warnings: vec![
+                        "コメントに、他のアプリが書いた別の値があります（XMP dc:description を採用。ほかに Exif XPComment = 「古い注」）。保存すると揃います".to_string(),
+                    ],
+                },
+            ),
             // enum の綴り。`#[serde(rename_all = ...)]` を外すと "Crop" になり、
             // TS の union に無いので typecheck が落ちる
             Entry {
@@ -446,18 +504,21 @@ mod contract {
         render(
             &entries,
             &[
+                "EditableMetadata",
                 "ExifFrameConfig",
                 "ExifInfo",
                 "ExifPosition",
                 "FileEntry",
                 "FontInfo",
                 "ImageEntry",
+                "MetadataRead",
                 "PreviewImage",
                 "ProcessBatchResponse",
                 "ProcessFailure",
                 "ProcessResult",
                 "ProcessingConfig",
                 "ProgressPayload",
+                "RatingEntry",
             ],
         )
     }

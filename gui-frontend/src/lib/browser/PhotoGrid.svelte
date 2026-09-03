@@ -8,6 +8,8 @@
     GRID_PADDING,
     computeGridMetrics,
     computeVisibleRange,
+    scrollTopToReveal,
+    tileLabel,
   } from "./gridMetrics";
   import type { RequestKind } from "./requestQueue";
   import type { ImageEntry } from "../types";
@@ -28,6 +30,10 @@
     onVisibleRangeChange: (start: number, end: number) => void;
     onToggleSelect: (image: ImageEntry) => void;
     onFocus: (image: ImageEntry) => void;
+    /** タイルに出す★。undefined は未取得 */
+    ratingFor: (path: string) => number | null | undefined;
+    /** 未保存の変更があるメタデータの編集対象 */
+    unsavedPath: string | null;
     selectedCount: number;
     rightPanelCollapsed: boolean;
     onToggleRightPanel: () => void;
@@ -51,6 +57,8 @@
     onVisibleRangeChange,
     onToggleSelect,
     onFocus,
+    ratingFor,
+    unsavedPath,
     selectedCount,
     rightPanelCollapsed,
     onToggleRightPanel,
@@ -188,15 +196,24 @@
     scrollIndexIntoView(next);
   }
 
+  // scrollTopToReveal（gridMetrics.ts）と同一算術。moveFocus はキーボード操作の
+  // たびに scroller.scrollTop を直接書き、revealPath は $bindable な scrollTop に
+  // 代入する ── 経路は 2 つだが計算はここ 1 箇所に寄せる（裁定 C4）
   function scrollIndexIntoView(index: number) {
     if (!scroller || metrics.rowHeight <= 0) return;
-    const row = Math.floor(index / metrics.columns);
-    const top = row * metrics.rowHeight;
-    const bottom = top + metrics.rowHeight;
-    if (top < scroller.scrollTop) scroller.scrollTop = top;
-    else if (bottom > scroller.scrollTop + viewportHeight) {
-      scroller.scrollTop = bottom - viewportHeight;
-    }
+    scroller.scrollTop = scrollTopToReveal(metrics, index, scroller.scrollTop, viewportHeight);
+  }
+
+  /**
+   * 指定の 1 枚を可視範囲へ入れる。呼ぶのは「保存して次の写真へ」だけ
+   * （`focusedPath` の変化を見て自動でスクロールする案は退けた ──
+   * 利用者自身のクリックでも動いてしまい、クリックした位置がずれる）。
+   * `scrollTop` は $bindable なので、代入は親と `scroller` の両方へ伝わる
+   */
+  export function revealPath(path: string) {
+    const index = images.findIndex((image) => image.path === path);
+    if (index < 0) return;
+    scrollTop = scrollTopToReveal(metrics, index, scrollTop, viewportHeight);
   }
 
   function handleKeydown(event: KeyboardEvent) {
@@ -308,6 +325,8 @@
       {#each visible as image, offset (image.path)}
         {@const index = range.startIndex + offset}
         {@const thumb = thumbnailFor(image.path, metrics.thumbnailSize)}
+        {@const stars = ratingFor(image.path)}
+        {@const unsaved = unsavedPath === image.path}
         <!-- キーボードは listbox（親）側の onkeydown が composite widget として
              一括で受ける。ARIA の listbox/option ではそれが正しい形で、
              option ごとに handler を重ねると同じキーが二重に走る。
@@ -321,7 +340,7 @@
           aria-selected={isSelected(image)}
           aria-setsize={images.length}
           aria-posinset={index + 1}
-          aria-label={image.name}
+          aria-label={tileLabel(image.name, stars, unsaved)}
           tabindex={index === rovingIndex ? 0 : -1}
           data-index={index}
           onclick={(e) => {
@@ -347,6 +366,12 @@
             {/if}
           </div>
           <span class="filename">{image.name}</span>
+          {#if unsaved}
+            <span class="unsaved-mark" title="未保存の変更があります" aria-hidden="true">●</span>
+          {/if}
+          {#if stars}
+            <span class="stars" aria-hidden="true">{"★".repeat(stars)}</span>
+          {/if}
         </div>
       {/each}
     </div>
@@ -473,5 +498,14 @@
     white-space: nowrap;
     font: var(--md-sys-typescale-body-sm);
     color: var(--md-sys-color-on-surface-variant);
+  }
+
+  .stars {
+    color: var(--md-sys-color-primary);
+    font: var(--md-sys-typescale-body-sm);
+  }
+
+  .unsaved-mark {
+    color: var(--md-sys-color-error);
   }
 </style>

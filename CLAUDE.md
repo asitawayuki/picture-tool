@@ -103,6 +103,7 @@ picture-tool --input ./photos --output ./out --mode crop --quality 90 --max-size
 | EXIF | `read_exif_info`, `apply_orientation`, `oriented_dimensions`, `open_image_oriented`, `image_dimensions_oriented` |
 | base64出力（GUI用） | `generate_thumbnail_base64`, `generate_full_image_base64`, `generate_exif_frame_preview_base64`（→ `ExifFramePreview { base64, warnings }`） |
 | Exifフレーム | `exif_frame::render_exif_frame`（→ `ExifFrameOutput { image, warnings }`）, `exif_frame::AssetDirs`, `exif_frame::ExifAssets`, `exif_frame::preset::{list_all_presets, save_preset, delete_preset}` |
+| メタデータ編集 | `metadata::read_metadata`（→ `MetadataRead { metadata, warnings }`）, `metadata::write_metadata`, `metadata::EditableMetadata` |
 | 定数 | `CANCELLED_ERROR`（着手前にキャンセルされた印）, `THUMBNAIL_MAX_DIMENSION` |
 
 `ExifAssets` は**バッチの前に1回だけ**構築して使い回す（画像ごとに作るとモデルマップを
@@ -126,7 +127,7 @@ navigation rail による 3 モード構成（変換 / 情報 / フレーム）�
 | モード | 左 | 中央 | 右 |
 |---|---|---|---|
 | 変換 | フォルダーツリー | 写真グリッド | 変換設定 |
-| 情報 | フォルダーツリー | 写真グリッド | メタデータ |
+| 情報 | フォルダーツリー | 写真グリッド | メタデータ（タイトル・コメント・★の読み書き。元ファイルへ保存する） |
 | フレーム | プリセット一覧 | フレームのプレビュー | フレーム設定 |
 
 カラム幅と右パネルの折りたたみは `localStorage` に永続化する
@@ -167,6 +168,8 @@ navigation rail による 3 モード構成（変換 / 情報 / フレーム）�
   フォルダー選択もお気に入りの保存も、パスを Rust 側に固定したコマンドで行う
 - 不可逆な操作（元ファイル削除）は OS ネイティブのダイアログで確認する。
   webview 内の確認ダイアログは乗っ取られた状態では素通りする
+- メタデータ編集の書き込み先は、**フォルダー単位で 1 度だけ** OS ネイティブの確認を
+  経て `WritableRoots` に足す（`grant_metadata_editing`）。承認はアプリ終了で消える
 
 詳細と脅威モデルは `gui/src/security.rs` のモジュールコメント、
 判断の経緯は `docs/superpowers/plans/2026-08-04-full-codebase-review-fixes.md` の S6 節。
@@ -186,9 +189,14 @@ navigation rail による 3 モード構成（変換 / 情報 / フレーム）�
 お気に入りフォルダーは Tauri のアプリデータ配下 `favorites.json`（`store` プラグイン、
 ただしアクセスは Rust 側の `load_favorites` / `save_favorites` コマンド経由に限定）。
 
+メタデータ編集だけは書き込み先がこの配下ではなく**利用者の写真そのもの**
+（`grant_metadata_editing` で承認したフォルダー配下の JPEG）である。
+
 ## 設計方針
 
-- 元の画像ファイルは上書きしない（`--delete-originals`で明示的に削除）
+- 変換処理は元の画像ファイルを上書きしない（`--delete-originals` で明示的に削除）。
+  メタデータ編集だけは元ファイルの**メタデータセグメントのみを差し替える**
+  （画素は再エンコードせずバイト単位で不変。読み戻し検証つきの原子的置換）
 - 画像読み込み失敗時はスキップして次へ進む
 - coreライブラリはTauri非依存（ProgressCallbackで疎結合）
 - core は `eprintln!` しない。利用者に伝える事象は `ProcessResult.warnings` に積み、

@@ -5,10 +5,17 @@
   import type { FileEntry } from "../types";
 
   interface Props {
+    /**
+     * いま実際に開いているフォルダー。ハイライトはここから導く（`$derived`）。
+     * クリック直後にローカルの `$state` へ書くと、`onSelectFolder` がガードに
+     * 阻まれてキャンセルされたときも、ツリーのハイライトだけ新しいフォルダーへ
+     * 移ったままになる（グリッドと `currentFolder` は元のまま ── Task 15 裁定 T2）
+     */
+    currentFolder: string;
     onSelectFolder: (path: string) => void;
   }
 
-  let { onSelectFolder }: Props = $props();
+  let { currentFolder, onSelectFolder }: Props = $props();
 
   interface TreeNode {
     entry: FileEntry;
@@ -24,7 +31,6 @@
   }
 
   let roots = $state<TreeNode[]>([]);
-  let selectedPath = $state("");
   let favorites = $state<string[]>([]);
 
   let favoriteNodes = $state<TreeNode[]>([]);
@@ -103,7 +109,9 @@
   }
 
   function selectFolder(node: TreeNode) {
-    selectedPath = node.entry.path;
+    // ハイライトは自分の state ではなく currentFolder（親から渡る、guarded 済みの
+    // 実際の選択結果）から導く。ここで先に自分の state を動かすと、
+    // onSelectFolder がガードでキャンセルされてもハイライトだけ移ってしまう
     onSelectFolder(node.entry.path);
     if (!node.expanded) toggleNode(node);
   }
@@ -141,7 +149,7 @@
 
 {#snippet treeNode(node: TreeNode, depth: number)}
   {@const isFavorite = favorites.includes(node.entry.path)}
-  <div class="tree-row state-layer" class:selected={selectedPath === node.entry.path}>
+  <div class="tree-row state-layer" class:selected={currentFolder === node.entry.path}>
     <button
       class="tree-item"
       style="padding-left: {12 + depth * 16}px"
