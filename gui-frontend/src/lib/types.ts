@@ -1,3 +1,10 @@
+// Rust の DTO（`gui/src/types.rs`）を**手で写したもの**。webview は JSON しか
+// 見ないので、片側だけ改名してもコンパイラは何も言わない。
+//
+// その食い違いを検知するのが `dto.contract.ts`（自動生成物）。Rust 側を変えると
+// `cargo test` が落ち、契約を再生成すると今度はこのファイルを直すまで
+// `bun run typecheck` が落ちる。手順は `dto.contract.ts` の冒頭を読むこと。
+
 export interface FileEntry {
   name: string;
   path: string;

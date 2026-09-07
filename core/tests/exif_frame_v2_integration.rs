@@ -1,7 +1,7 @@
 //! Exifフレーム v2 統合テスト
 //!
 //! 仕様の出所:
-//! - CLAUDE.md「4:5アスペクト比への変換」「元の画像ファイルは上書きしない」
+//! - README.md「動作仕様」（4:5 への変換、元の画像ファイルは上書きしない）
 //! - docs/superpowers/specs/2026-03-29-exif-frame-v2-design.md
 //! - 全体レビュー修正計画 S4（4:5 は厳密比較、crop/quality の無視は出力比率で検証）
 use picture_tool_core::exif_frame::*;

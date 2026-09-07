@@ -1,3 +1,36 @@
+//! 画像変換の共有ロジック。CLI（`picture-tool`）と GUI（`picture-tool-gui`）の
+//! 両方がこのクレートだけを通して画像を扱う。
+//!
+//! **Tauri に依存しない。** 進捗とキャンセルは [`ProgressCallback`] で受け渡し、
+//! 呼び出し元の UI とは疎に保つ。
+//!
+//! # 公開 API の地図
+//!
+//! | 分類 | API |
+//! |------|-----|
+//! | 検証・収集 | [`validate_config`], [`is_supported_image`], [`collect_image_files`] |
+//! | 変換 | [`process_image`], [`process_batch`]（[`ProgressCallback`] で進捗とキャンセル） |
+//! | EXIF | [`read_exif_info`], [`apply_orientation`], [`oriented_dimensions`], [`open_image_oriented`], [`image_dimensions_oriented`] |
+//! | base64 出力（GUI 用） | [`generate_thumbnail_base64`], [`generate_full_image_base64`], [`generate_exif_frame_preview_base64`] |
+//! | Exif フレーム | [`exif_frame::render_exif_frame`], [`exif_frame::AssetDirs`], [`exif_frame::ExifAssets`], [`exif_frame::preset`] |
+//! | メタデータ編集 | [`metadata::read_metadata`], [`metadata::write_metadata`], [`metadata::EditableMetadata`] |
+//! | 定数 | [`CANCELLED_ERROR`]（着手前にキャンセルされた印）, [`THUMBNAIL_MAX_DIMENSION`] |
+//!
+//! # 呼び出し側が守ること
+//!
+//! - **[`exif_frame::ExifAssets`] はバッチの前に 1 回だけ構築して使い回す。**
+//!   画像ごとに作るとモデルマップを毎回読み直す。
+//! - **このクレートは `eprintln!` しない。** 利用者に伝えるべき事象は
+//!   [`ProcessResult::warnings`] や `ExifFrameOutput::warnings` /
+//!   `ExifFramePreview::warnings` に積んで呼び出し元へ返す。出すか捨てるかは
+//!   境界（CLI は stderr、GUI は `gui/src/commands.rs`）が決める。
+//! - **変換は元の画像ファイルを上書きしない。** 削除は `delete_originals` を
+//!   立てたときだけ。唯一の例外が [`metadata::write_metadata`] で、これは
+//!   元ファイルのメタデータセグメントのみを差し替える（画素は再エンコード
+//!   せずバイト単位で不変。読み戻し検証つきの原子的置換）。
+//! - 画像の読み込みに失敗したらスキップして次へ進む。1 枚の失敗でバッチを
+//!   止めない。
+
 pub mod exif_frame;
 pub mod metadata;
 pub mod model_map;

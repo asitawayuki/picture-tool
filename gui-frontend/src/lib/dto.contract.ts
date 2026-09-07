@@ -9,6 +9,18 @@
 //   UPDATE_DTO_CONTRACT=1 cargo test -p picture-tool-gui contract
 //
 // 生成し直したら、`types.ts` の側も同じ変更を入れること。
+//
+// 載せる範囲は DTO の形だけではない。**画面に出ない綴り**（イベント名
+// `os-color-scheme-changed` と、その "light" / "dark" ペイロード）も
+// ここに置いてある。ずれても画面は普通に描画されるので、他に気づく
+// 手立てが無い。
+//
+// `e2e/stub.ts` の応答も**この契約から形を取る**。スタブに形を書き写すと
+// 写しが 3 つ目に増え、スタブだけが古い形のまま緑を出し続ける。
+//
+// 検知できないもの:
+//   - TS 側の型が Rust より広い場合（代入は通る。安全側なので許容）
+//   - `invoke` の引数名（`maxDimension` → `max_dimension`）。未対応
 
 import type {
   ColorSchemePayload,

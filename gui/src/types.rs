@@ -188,7 +188,19 @@ mod contract {
              // 再生成:\n\
              //   UPDATE_DTO_CONTRACT=1 cargo test -p picture-tool-gui contract\n\
              //\n\
-             // 生成し直したら、`types.ts` の側も同じ変更を入れること。\n\n",
+             // 生成し直したら、`types.ts` の側も同じ変更を入れること。\n\
+             //\n\
+             // 載せる範囲は DTO の形だけではない。**画面に出ない綴り**（イベント名\n\
+             // `os-color-scheme-changed` と、その \"light\" / \"dark\" ペイロード）も\n\
+             // ここに置いてある。ずれても画面は普通に描画されるので、他に気づく\n\
+             // 手立てが無い。\n\
+             //\n\
+             // `e2e/stub.ts` の応答も**この契約から形を取る**。スタブに形を書き写すと\n\
+             // 写しが 3 つ目に増え、スタブだけが古い形のまま緑を出し続ける。\n\
+             //\n\
+             // 検知できないもの:\n\
+             //   - TS 側の型が Rust より広い場合（代入は通る。安全側なので許容）\n\
+             //   - `invoke` の引数名（`maxDimension` → `max_dimension`）。未対応\n\n",
         );
         out.push_str("import type {\n");
         for name in imports {

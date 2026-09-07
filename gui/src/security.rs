@@ -50,6 +50,9 @@
 //! 占有させられるが、各要求は `readable_jpeg` を経由するので読める範囲は他のコマンドと同じ
 //! （承認していない場所は読めない）。影響は自己 DoS（応答が遅くなる）に留まり、
 //! データの流出には繋がらない。
+//!
+//! 本文の `S6-xx` は全体レビュー修正計画の指摘番号。判断の経緯は
+//! `docs/superpowers/plans/2026-08-04-full-codebase-review-fixes.md` の S6 節にある。
 
 use picture_tool_core as core;
 use picture_tool_core::exif_frame::AssetDirs;
