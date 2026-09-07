@@ -3,18 +3,20 @@
   import NavigationRail from "./NavigationRail.svelte";
   import { COLUMN_SPECS, type ColumnKey } from "./columns";
   import type { createLayout } from "./layout.svelte";
+  import type { createTheme } from "./theme.svelte";
   import type { AppMode } from "./modes";
 
   interface Props {
     mode: AppMode;
     onModeChange: (mode: AppMode) => void;
     layout: ReturnType<typeof createLayout>;
+    theme: ReturnType<typeof createTheme>;
     left: Snippet;
     center: Snippet;
     right: Snippet;
   }
 
-  let { mode, onModeChange, layout, left, center, right }: Props = $props();
+  let { mode, onModeChange, layout, theme, left, center, right }: Props = $props();
 
   /**
    * フレームモードだけ左 2 カラムが変わる（spec §3-1）。
@@ -70,7 +72,12 @@
 </script>
 
 <div class="shell" bind:this={shell} class:dragging={dragging !== null}>
-  <NavigationRail {mode} {onModeChange} />
+  <NavigationRail
+    {mode}
+    {onModeChange}
+    theme={theme.preference}
+    onThemeCycle={() => theme.cycle()}
+  />
 
   <!-- data-region は Tab 順の検査（spec §7-3）が「いまどの領域にフォーカスが
        あるか」を読むための目印。見た目には影響しない -->

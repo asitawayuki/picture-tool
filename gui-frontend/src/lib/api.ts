@@ -147,3 +147,22 @@ export async function setUnsavedState(unsaved: boolean): Promise<void> {
 export async function readImageRatings(paths: string[]): Promise<RatingEntry[]> {
   return invoke("read_image_ratings", { paths });
 }
+
+/**
+ * 起動時の OS の明暗（`"light"` / `"dark"`）。
+ *
+ * Linux では webview の `prefers-color-scheme` が OS の設定を映さないため、
+ * Rust が xdg-desktop-portal から読んだ値をここで受け取る。
+ * 起動後の変化は `os-color-scheme-changed` イベントで届く（`gui/src/theme.rs`）。
+ */
+export async function osColorScheme(): Promise<string> {
+  return invoke("os_color_scheme");
+}
+
+/**
+ * 解決後のテーマをウィンドウへ伝える。ネイティブのダイアログと窓枠を揃えるため。
+ * 実際に反映されるのは Linux だけで、他 OS では受け取って捨てる（`gui/src/theme.rs`）。
+ */
+export async function setWindowTheme(theme: "light" | "dark"): Promise<void> {
+  return invoke("set_window_theme", { theme });
+}

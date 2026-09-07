@@ -3,6 +3,7 @@
   import { SvelteSet } from "svelte/reactivity";
   import AppShell from "./lib/shell/AppShell.svelte";
   import { createLayout } from "./lib/shell/layout.svelte";
+  import { createTheme } from "./lib/shell/theme.svelte";
   import type { AppMode } from "./lib/shell/modes";
   import FolderTree from "./lib/browser/FolderTree.svelte";
   import PhotoGrid from "./lib/browser/PhotoGrid.svelte";
@@ -67,6 +68,7 @@
   let visibleRange = $state({ start: 0, end: -1 });
 
   const layout = createLayout();
+  const theme = createTheme();
   const thumbnails = createThumbnailQueue();
   const ratings = createRatingStore();
   const presets = createPresetStore();
@@ -135,13 +137,18 @@
   // --- イベントリスナー ---
   onMount(() => {
     const unsubscribe = convert.subscribeProgress();
+    // OS のテーマ追従。Linux では Rust が portal を見ている（gui/src/theme.rs）
+    const unwatchTheme = theme.start();
     presets.reload();
     // キャッシュ上限を実測で決める（Task 15 / spec §7-2）ための窓口。
     // import.meta.env.DEV で囲んであるので本番バンドルには残らない
     if (import.meta.env.DEV) {
       (window as unknown as Record<string, unknown>).__thumbnailStats = thumbnails.stats;
     }
-    return unsubscribe;
+    return () => {
+      unsubscribe();
+      unwatchTheme();
+    };
   });
 
   // --- ハンドラー ---
@@ -311,7 +318,7 @@
   }
 </script>
 
-<AppShell {mode} onModeChange={handleModeChange} {layout}>
+<AppShell {mode} onModeChange={handleModeChange} {layout} {theme}>
   {#snippet left()}
     {#if mode === "frame"}
       <PresetList

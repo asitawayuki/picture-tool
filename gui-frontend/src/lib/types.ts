@@ -133,3 +133,15 @@ export interface MetadataRead {
   metadata: EditableMetadata;
   warnings: string[];
 }
+
+/**
+ * OS のテーマ変更を流すイベント名。値は Rust の `theme.rs` が持つ定数と同じ綴り。
+ *
+ * 型として書いておくと、Rust 側だけ変えたときに `dto.contract.ts` の再生成で
+ * ここが食い違い、`bun run typecheck` が落ちる。**イベント名は画面に出ないので、
+ * ずれても誰も気づかないまま OS 追従だけが死ぬ** ── それを防ぐための線である。
+ */
+export type OsColorSchemeChangedEvent = "os-color-scheme-changed";
+
+/** そのイベントのペイロードと、`set_window_theme` が受け付ける綴り */
+export type ColorSchemePayload = "light" | "dark";

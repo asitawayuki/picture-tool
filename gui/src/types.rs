@@ -499,11 +499,24 @@ mod contract {
                     ExifPosition::Left,
                 ]),
             },
+            entry(
+                "osColorSchemeChangedEvent",
+                "OsColorSchemeChangedEvent",
+                "OS のテーマ変更を流すイベント名（gui/src/theme.rs）",
+                crate::theme::OS_SCHEME_CHANGED_EVENT,
+            ),
+            entry(
+                "colorSchemes",
+                "ColorSchemePayload[]",
+                "そのイベントのペイロードと set_window_theme が受け付ける綴り",
+                vec![crate::theme::LIGHT, crate::theme::DARK],
+            ),
         ];
 
         render(
             &entries,
             &[
+                "ColorSchemePayload",
                 "EditableMetadata",
                 "ExifFrameConfig",
                 "ExifInfo",
@@ -512,6 +525,7 @@ mod contract {
                 "FontInfo",
                 "ImageEntry",
                 "MetadataRead",
+                "OsColorSchemeChangedEvent",
                 "PreviewImage",
                 "ProcessBatchResponse",
                 "ProcessFailure",

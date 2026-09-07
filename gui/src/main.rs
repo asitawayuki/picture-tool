@@ -1,12 +1,14 @@
 mod commands;
 mod security;
 mod state;
+mod theme;
 mod types;
 
 use state::ProcessingState;
 use std::sync::atomic::{AtomicBool, Ordering};
 use tauri::Manager;
 use tauri_plugin_dialog::{DialogExt, MessageDialogButtons, MessageDialogKind};
+use theme::OsColorScheme;
 
 /// `close_prompt_open` を必ず降ろす RAII ガード（Task 9 の `TempFile` と同じ
 /// 「panic 経路も塞ぐ」型）。`blocking_show()` を含む一連の処理が途中で panic しても、
@@ -29,9 +31,23 @@ fn main() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_store::Builder::default().build())
         .manage(ProcessingState::new())
+        .manage(OsColorScheme::new())
+        // OS のテーマは Linux では自前で追う必要がある（theme.rs 冒頭の実測メモ）
+        .setup(|app| {
+            theme::init(app.handle());
+            Ok(())
+        })
         // 終了だけは webview に任せない。不可逆な操作は OS ネイティブで確認する
         // （元ファイル削除と同じ扱い）。刷新 spec §3-4
         .on_window_event(|window, event| {
+            // Linux ではこのイベントが発火しない（tao に実装が無い）。
+            // 追従は theme.rs が portal から直接読む
+            #[cfg(not(target_os = "linux"))]
+            if let tauri::WindowEvent::ThemeChanged(t) = event {
+                theme::on_theme_changed(window.app_handle(), *t);
+                return;
+            }
+
             let tauri::WindowEvent::CloseRequested { api, .. } = event else {
                 return;
             };
@@ -110,6 +126,8 @@ fn main() {
             commands::grant_metadata_editing,
             commands::set_unsaved_state,
             commands::read_image_ratings,
+            theme::os_color_scheme,
+            theme::set_window_theme,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

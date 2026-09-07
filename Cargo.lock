@@ -2854,6 +2854,7 @@ name = "picture-tool-gui"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "gio",
  "image",
  "lru",
  "picture-tool-core",

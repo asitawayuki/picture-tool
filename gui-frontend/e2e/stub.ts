@@ -58,6 +58,14 @@ export interface StubOptions {
    * 消しても e2e が気づけない穴になる（裁定 X1）。
    */
   seedRatings?: Record<number, number>;
+  /**
+   * `os_color_scheme` が返す起動時の OS の明暗。
+   *
+   * ここを差し替えられないと「システム追従で最初からダーク」が検査できない。
+   * webview の `prefers-color-scheme` とは別物である（Linux では OS の設定を
+   * 映さないので、Rust が portal から読んだ値をこのコマンドで渡している）。
+   */
+  osColorScheme?: "light" | "dark";
 }
 
 /**
@@ -76,6 +84,7 @@ export async function installTauriStub(page: Page, options: StubOptions = {}) {
       metadataWarnings: string[];
       denyGrant: boolean;
       seedRatings: Record<number, number>;
+      osColorScheme: "light" | "dark";
       template: Template;
     }) => {
     const {
@@ -85,6 +94,7 @@ export async function installTauriStub(page: Page, options: StubOptions = {}) {
       metadataWarnings,
       denyGrant,
       seedRatings,
+      osColorScheme,
       template,
     } = opts;
     /** サムネイルは 24 種類だけ作って使い回す。
@@ -170,6 +180,20 @@ export async function installTauriStub(page: Page, options: StubOptions = {}) {
 
     const callbacks = new Map<number, (payload: unknown) => void>();
     let nextCallbackId = 1;
+
+    /**
+     * `listen` された購読。イベント名 → コールバック。
+     *
+     * これが無いと「Rust から流れてくる」型の挙動（OS のテーマ変更）を
+     * 画面に届けられず、追従が一度も検査されない。
+     */
+    const eventListeners = new Map<string, (event: unknown) => void>();
+    (window as unknown as Record<string, unknown>).__emitTauriEvent = (
+      event: string,
+      payload: unknown
+    ) => {
+      eventListeners.get(event)?.({ event, id: 0, payload });
+    };
 
     // どのコマンドが何で呼ばれたかを検査できるようにする。
     // 「Rust へ通知した」型の配線は、画面に出ないので他に確かめようが無い。
@@ -285,13 +309,24 @@ export async function installTauriStub(page: Page, options: StubOptions = {}) {
         return folder;
       },
       set_unsaved_state: () => null,
+      os_color_scheme: () => osColorScheme,
+      set_window_theme: () => null,
       read_image_ratings: ({ paths }: { paths: string[] }) =>
         paths.map((path) => ({
           path,
           rating: (stored.get(path) as { rating: number | null } | undefined)?.rating ?? null,
         })),
-      "plugin:event|listen": () => nextCallbackId++,
-      "plugin:event|unlisten": () => null,
+      "plugin:event|listen": ({ event, handler }: { event: string; handler: number }) => {
+        const callback = callbacks.get(handler);
+        if (callback) eventListeners.set(event, callback);
+        return nextCallbackId++;
+      },
+      // **本物と同じく購読を外す。** no-op にすると、解除し忘れたコードが
+      // スタブの上では正しく見えてしまう
+      "plugin:event|unlisten": ({ event }: { event: string }) => {
+        eventListeners.delete(event);
+        return null;
+      },
     };
 
     (window as any).__TAURI_INTERNALS__ = {
@@ -315,6 +350,7 @@ export async function installTauriStub(page: Page, options: StubOptions = {}) {
       metadataWarnings: options.metadataWarnings ?? [],
       denyGrant: options.denyGrant ?? false,
       seedRatings: options.seedRatings ?? {},
+      osColorScheme: options.osColorScheme ?? "light",
       template: TEMPLATE,
     }
   );

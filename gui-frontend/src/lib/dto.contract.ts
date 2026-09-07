@@ -11,6 +11,7 @@
 // 生成し直したら、`types.ts` の側も同じ変更を入れること。
 
 import type {
+  ColorSchemePayload,
   EditableMetadata,
   ExifFrameConfig,
   ExifInfo,
@@ -19,6 +20,7 @@ import type {
   FontInfo,
   ImageEntry,
   MetadataRead,
+  OsColorSchemeChangedEvent,
   PreviewImage,
   ProcessBatchResponse,
   ProcessFailure,
@@ -264,3 +266,9 @@ export const backgroundColors: ProcessingConfig["bg_color"][] = ["white", "black
 
 /** Exif フレームの配置位置の綴り */
 export const exifPositions: ExifPosition[] = ["auto", "bottom", "top", "right", "left"];
+
+/** OS のテーマ変更を流すイベント名（gui/src/theme.rs） */
+export const osColorSchemeChangedEvent: OsColorSchemeChangedEvent = "os-color-scheme-changed";
+
+/** そのイベントのペイロードと set_window_theme が受け付ける綴り */
+export const colorSchemes: ColorSchemePayload[] = ["light", "dark"];

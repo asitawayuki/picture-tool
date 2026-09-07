@@ -131,7 +131,13 @@ navigation rail による 3 モード構成（変換 / 情報 / フレーム）�
 | フレーム | プリセット一覧 | フレームのプレビュー | フレーム設定 |
 
 カラム幅と右パネルの折りたたみは `localStorage` に永続化する
-（`gui-frontend/src/lib/shell/columns.ts`）。テーマは OS 追従のみ。
+（`gui-frontend/src/lib/shell/columns.ts`）。
+
+テーマは rail 下端のボタンで **システム追従 / ライト / ダーク** を巡る
+（`gui-frontend/src/lib/shell/theme.ts`。設定は `localStorage`）。
+`data-theme` は**常に明示的に書く** ── メディアクエリ任せにしないのは、
+**Linux では WebKitGTK の `prefers-color-scheme` が OS の設定を映さない**ため。
+OS の値は Rust が xdg-desktop-portal から読んで渡す（`gui/src/theme.rs` 冒頭に実測メモ）。
 
 フロントの検証は 2 系統:
 - `bun test` — runes を含まない純粋ロジック（幅のクランプ・グリッド寸法・LRU・キュー）
@@ -152,6 +158,10 @@ navigation rail による 3 モード構成（変換 / 情報 / フレーム）�
   今度は `types.ts` を直すまで `bun run typecheck` が落ちる
 - `e2e/stub.ts` の応答も**この契約から形を取る**。スタブに形を書き写すと写しが
   3 つ目に増え、スタブだけが古い形のまま緑を出し続ける
+
+DTO の形だけでなく、**画面に出ない綴り**（イベント名 `os-color-scheme-changed`、
+その `"light"` / `"dark"` ペイロード）も契約に載せてある。ずれても画面は普通に
+描画されるので、他に気づく手立てが無い。
 
 検知できないもの: TS 側の型が Rust より広い場合（安全側）と、`invoke` の引数名
 （`maxDimension` → `max_dimension`）。後者は未対応。

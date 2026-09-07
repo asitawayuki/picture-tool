@@ -16,6 +16,11 @@ tokio = { version = "1", features = ["rt"] }
 lru = "0.12"
 rayon.workspace = true
 
+# OS のテーマ追従で xdg-desktop-portal を読むためだけに使う。
+# tao 経由で既にビルド済みなので、依存木もビルド時間も増えない（theme.rs 参照）
+[target.'cfg(target_os = "linux")'.dependencies]
+gio = "0.18"
+
 [dev-dependencies]
 tempfile = "3"
 # パス検証のテストで「中身も本物の画像」を用意するためだけに使う（バイナリには入らない）
