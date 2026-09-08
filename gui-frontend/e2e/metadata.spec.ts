@@ -19,7 +19,7 @@ test.describe("メタデータモード", () => {
     await clearStorageOnce(page);
     await page.goto("/");
     await page.getByRole("button", { name: "photos", exact: false }).first().click();
-    await page.getByRole("option").first().click();
+    await page.getByRole("listbox", { name: "写真" }).getByRole("option").first().click();
     await page
       .getByRole("navigation", { name: "モード" })
       .getByRole("button", { name: "情報" })
@@ -62,9 +62,9 @@ test.describe("メタデータモード", () => {
     await expect(panel.getByText("未保存の変更があります")).toBeHidden();
 
     // 別の写真へ移って戻ると、保存した値が読み直される
-    await page.getByRole("option").nth(1).click();
+    await page.getByRole("listbox", { name: "写真" }).getByRole("option").nth(1).click();
     await expect(page.getByLabel("タイトル")).toHaveValue("");
-    await page.getByRole("option").nth(0).click();
+    await page.getByRole("listbox", { name: "写真" }).getByRole("option").nth(0).click();
     await expect(page.getByLabel("タイトル")).toHaveValue("夕暮れの港");
   });
 
@@ -75,7 +75,7 @@ test.describe("メタデータモード", () => {
     await installTauriStub(page, { imageCount: 4, denyGrant: true });
     await page.goto("/");
     await page.getByRole("button", { name: "photos", exact: false }).first().click();
-    await page.getByRole("option").first().click();
+    await page.getByRole("listbox", { name: "写真" }).getByRole("option").first().click();
     await page
       .getByRole("navigation", { name: "モード" })
       .getByRole("button", { name: "情報" })
@@ -129,7 +129,7 @@ test.describe("メタデータモード", () => {
     });
     await page.goto("/");
     await page.getByRole("button", { name: "photos", exact: false }).first().click();
-    await page.getByRole("option").first().click();
+    await page.getByRole("listbox", { name: "写真" }).getByRole("option").first().click();
     await page
       .getByRole("navigation", { name: "モード" })
       .getByRole("button", { name: "情報" })
@@ -204,7 +204,7 @@ test.describe("メタデータモード", () => {
     await expect(panel.getByText("photo-0000.jpg")).toBeVisible();
 
     await rail.getByRole("button", { name: "変換" }).click();
-    await page.getByRole("option").nth(5).click();
+    await page.getByRole("listbox", { name: "写真" }).getByRole("option").nth(5).click();
     await rail.getByRole("button", { name: "情報" }).click();
 
     // 変換モードでの選択は focusedPath しか動かさないので、編集対象は 1 枚目のまま
@@ -215,7 +215,7 @@ test.describe("メタデータモード", () => {
     await installTauriStub(page, { imageCount: 120 });
     await page.goto("/");
     await page.getByRole("button", { name: "photos", exact: false }).first().click();
-    await page.getByRole("option").first().click();
+    await page.getByRole("listbox", { name: "写真" }).getByRole("option").first().click();
     await page
       .getByRole("navigation", { name: "モード" })
       .getByRole("button", { name: "情報" })
@@ -231,14 +231,14 @@ test.describe("メタデータモード", () => {
       await page.getByRole("button", { name: "保存して次の写真へ" }).click();
     }
     // 選択中のタイルが描画されていて、画面内に見えていること
-    const selected = page.getByRole("option").and(page.locator('[aria-selected="true"]'));
+    const selected = page.getByRole("listbox", { name: "写真" }).getByRole("option").and(page.locator('[aria-selected="true"]'));
     await expect(selected).toHaveCount(1);
     await expect(selected).toBeInViewport();
   });
 
   test("未保存のまま別の写真へ移ろうとすると止められる（刷新 spec §3-4）", async ({ page }) => {
     await page.getByLabel("タイトル").fill("書きかけ");
-    await page.getByRole("option").nth(1).click();
+    await page.getByRole("listbox", { name: "写真" }).getByRole("option").nth(1).click();
 
     await expect(
       page.getByRole("alertdialog", { name: "保存していない変更があります" })
@@ -253,7 +253,7 @@ test.describe("メタデータモード", () => {
 
   test("キャンセルすると編集内容が残る", async ({ page }) => {
     await page.getByLabel("タイトル").fill("書きかけ");
-    await page.getByRole("option").nth(1).click();
+    await page.getByRole("listbox", { name: "写真" }).getByRole("option").nth(1).click();
     await page.getByRole("button", { name: "キャンセル" }).click();
 
     await expect(page.getByLabel("タイトル")).toHaveValue("書きかけ");
@@ -354,7 +354,7 @@ test.describe("メタデータモード", () => {
   }) => {
     await page.getByRole("button", { name: "このフォルダーへの書き込みを許可..." }).click();
     await page.getByLabel("タイトル").fill("書きかけ");
-    await page.getByRole("option").nth(1).click();
+    await page.getByRole("listbox", { name: "写真" }).getByRole("option").nth(1).click();
 
     const saveAndLeave = page.getByRole("button", { name: "保存して移動" });
     // 前提条件: 連打する対象のボタンが実在し、クリックできる状態にある
@@ -402,7 +402,7 @@ test.describe("メタデータモード", () => {
   });
 
   test("保存した★がグリッドのタイルにも出る（刷新 spec §4-3）", async ({ page }) => {
-    const tile = page.getByRole("option").first();
+    const tile = page.getByRole("listbox", { name: "写真" }).getByRole("option").first();
     // 前提条件: いまは★が出ていない
     await expect(tile.getByText("★", { exact: false })).toBeHidden();
 
@@ -418,7 +418,7 @@ test.describe("メタデータモード", () => {
   });
 
   test("未保存の写真にタイル上の印が出る", async ({ page }) => {
-    const tile = page.getByRole("option").first();
+    const tile = page.getByRole("listbox", { name: "写真" }).getByRole("option").first();
     await expect(tile.getByTitle("未保存の変更があります")).toBeHidden(); // 前提条件
     await page.getByLabel("タイトル").fill("書きかけ");
     await expect(tile.getByTitle("未保存の変更があります")).toBeVisible();
@@ -436,7 +436,7 @@ test.describe("メタデータモード", () => {
     await page.goto("/");
     await page.getByRole("button", { name: "photos", exact: false }).first().click();
 
-    const tile = page.getByRole("option").first();
+    const tile = page.getByRole("listbox", { name: "写真" }).getByRole("option").first();
     // 前提条件: フォルダーを開いた直後（まだ情報モードではない）は★が出ていない
     await expect(tile.getByText("★", { exact: false })).toBeHidden();
 

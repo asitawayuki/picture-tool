@@ -14,7 +14,7 @@ import { clearStorageOnce, installTauriStub, selectSegment } from "./stub";
 /** フォルダーを開いて 1 枚選び、見本写真を持たせた状態でフレームモードへ入る */
 async function enterFrameMode(page: Page) {
   await page.getByRole("button", { name: "photos", exact: false }).first().click();
-  await page.getByRole("option").first().click();
+  await page.getByRole("listbox", { name: "写真" }).getByRole("option").first().click();
   await page
     .getByRole("navigation", { name: "モード" })
     .getByRole("button", { name: "フレーム" })

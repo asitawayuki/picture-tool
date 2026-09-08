@@ -78,6 +78,17 @@ pub fn list_drives() -> Result<Vec<String>, String> {
     }
 }
 
+/// `SystemTime` を UNIX epoch からのミリ秒へ。
+///
+/// epoch より前の日時（時計が狂った機材で撮った写真に実在する）は `duration_since`
+/// が `Err` になるので `None` にする。並び順では `None` は末尾に送られるだけで、
+/// 一覧から消えることはない。
+fn epoch_ms(time: std::time::SystemTime) -> Option<i64> {
+    time.duration_since(std::time::UNIX_EPOCH)
+        .ok()
+        .and_then(|d| i64::try_from(d.as_millis()).ok())
+}
+
 #[tauri::command]
 pub async fn list_images(path: String) -> Result<Vec<ImageEntry>, String> {
     let dir = security::existing_dir(&path)?;
@@ -103,7 +114,18 @@ pub async fn list_images(path: String) -> Result<Vec<ImageEntry>, String> {
 
             // 生ピクセルの縦横は Orientation 5-8 で入れ替わるため、表示値も揃える。
             let (width, height) = core::image_dimensions_oriented(&file_path).unwrap_or_default();
-            let size_bytes = fs::metadata(&file_path).map(|m| m.len()).unwrap_or(0);
+            // 1 度の stat から大きさも日時も取る。並び順のために stat をもう 1 回
+            // 回すと、3,000 枚のフォルダーで走査量が倍になる
+            let meta = fs::metadata(&file_path).ok();
+            let size_bytes = meta.as_ref().map(|m| m.len()).unwrap_or(0);
+            let modified_ms = meta
+                .as_ref()
+                .and_then(|m| m.modified().ok())
+                .and_then(epoch_ms);
+            let created_ms = meta
+                .as_ref()
+                .and_then(|m| m.created().ok())
+                .and_then(epoch_ms);
 
             entries.push(ImageEntry {
                 name,
@@ -111,6 +133,8 @@ pub async fn list_images(path: String) -> Result<Vec<ImageEntry>, String> {
                 width,
                 height,
                 size_bytes,
+                modified_ms,
+                created_ms,
             });
         }
 

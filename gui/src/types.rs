@@ -16,6 +16,12 @@ pub struct ImageEntry {
     pub width: u32,
     pub height: u32,
     pub size_bytes: u64,
+    /// 更新日時（UNIX epoch からのミリ秒）。取れなければ `None`
+    pub modified_ms: Option<i64>,
+    /// 作成日時（UNIX epoch からのミリ秒）。**取れない環境がある** ──
+    /// Linux の btime は統計情報を持たないファイルシステムがあり、
+    /// `Metadata::created()` が `Err` を返す。並び順では `None` を末尾へ送る
+    pub created_ms: Option<i64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -236,12 +242,17 @@ mod contract {
                 "imageEntry",
                 "ImageEntry",
                 "写真グリッドの 1 枚",
+                // `created_ms` を `None` にしてあるのは、**取れない環境の綴りを
+                // 契約に残すため**。serde は Option::None をキーごと消さずに
+                // `null` と書く ── TS 側の `number | null` はこの事実に依存する
                 ImageEntry {
                     name: "photo.jpg".to_string(),
                     path: "/home/user/photos/photo.jpg".to_string(),
                     width: 4000,
                     height: 3000,
                     size_bytes: 4_500_000,
+                    modified_ms: Some(1_755_000_000_000),
+                    created_ms: None,
                 },
             ),
             entry(

@@ -22,6 +22,14 @@
   import { listImages, setUnsavedState } from "./lib/api";
   import { createThumbnailQueue } from "./lib/browser/thumbnailQueue.svelte";
   import { createRatingStore } from "./lib/browser/ratings.svelte";
+  import GridFilterBar from "./lib/browser/GridFilterBar.svelte";
+  import {
+    DEFAULT_SORT,
+    arrangeImages,
+    hiddenSelectedCount,
+    sortImages,
+    type GridSort,
+  } from "./lib/browser/gridFilter";
   import { createPresetStore } from "./lib/panels/presets.svelte";
   import { createConvertRun } from "./lib/panels/convertRun.svelte";
   import { createFrameDraft } from "./lib/panels/frameDraft.svelte";
@@ -54,6 +62,15 @@
   const selectedPaths = new SvelteSet<string>();
 
   /**
+   * グリッドの絞り込みと並び順。**フォルダーを変えても保つ** ── 「★を付けた
+   * 写真を探して回る」ような使い方では、フォルダーごとに打ち直すことになる。
+   * 選択は絞り込みで変えない（絞り込みは表示の話）。隠れた選択の枚数は
+   * ヘッダーに出す
+   */
+  let searchQuery = $state("");
+  let gridSort = $state<GridSort>({ ...DEFAULT_SORT });
+
+  /**
    * グリッドのスクロール位置。**App が持つ**（spec §3-2）。
    * フレームモードでは PhotoGrid が unmount されるので、
    * グリッド内部の state に置くと戻ったときに先頭へ飛ぶ。
@@ -79,7 +96,24 @@
   const grants = createGrantStore();
 
   // --- 派生状態 ---
-  let selectedImages = $derived(images.filter((img) => selectedPaths.has(img.path)));
+  /**
+   * 画面に出す一覧。**順序を決めるのはここ 1 箇所だけ。**
+   * 下の `nextImagePath`・★の要求・`PhotoGrid` は同じ配列を index で参照する。
+   * 2 箇所で順序を決めると index がずれ、そのまま「別の写真を処理する」になる
+   */
+  let visibleImages = $derived(arrangeImages(images, searchQuery, gridSort));
+  /**
+   * 変換対象。**絞り込みでは減らさない** ── 選択は表示と独立しているので、
+   * 隠れている分も含めて変換する（その枚数はヘッダーに出す）。
+   * 並び順だけは画面に合わせる。進捗に出るファイル名の順が画面と食い違わない
+   */
+  let selectedImages = $derived(
+    sortImages(
+      images.filter((img) => selectedPaths.has(img.path)),
+      gridSort
+    )
+  );
+  let hiddenSelected = $derived(hiddenSelectedCount(visibleImages, selectedPaths));
   let editingImage = $derived(
     editingPath === null ? null : (images.find((img) => img.path === editingPath) ?? null)
   );
@@ -91,10 +125,15 @@
   let editingFolder = $derived(editingPath === null ? "" : parentFolder(editingPath));
   let canWriteEditing = $derived(editingPath !== null && grants.allows(editingPath));
   let editingIsJpeg = $derived(editingImage !== null && isEditableImage(editingImage.name));
+  // 「次へ」は**画面に出ている並び**を辿る。絞り込みの外へ飛ぶと、送った先が
+  // グリッドに無い（選択枠も付かない）状態になる。編集中の写真が絞り込みで
+  // 隠れている場合は index が -1 になり、次が無い扱いになる
   let nextImagePath = $derived.by(() => {
     if (editingPath === null) return null;
-    const index = images.findIndex((img) => img.path === editingPath);
-    return index >= 0 && index + 1 < images.length ? images[index + 1].path : null;
+    const index = visibleImages.findIndex((img) => img.path === editingPath);
+    return index >= 0 && index + 1 < visibleImages.length
+      ? visibleImages[index + 1].path
+      : null;
   });
 
   // 編集対象が変わったら読み込む
@@ -130,8 +169,23 @@
   // 可視範囲・モード・写真一覧のどれが動いても、情報モードなら★を取りに行く
   $effect(() => {
     if (mode !== "metadata") return;
-    const paths = images.slice(visibleRange.start, visibleRange.end + 1).map((img) => img.path);
+    // **絞り込み後の配列から取る。** 可視範囲は PhotoGrid が渡す配列の index なので、
+    // ここで `images` を切ると別の写真の★を読みに行く
+    const paths = visibleImages
+      .slice(visibleRange.start, visibleRange.end + 1)
+      .map((img) => img.path);
     untrack(() => ratings.request(paths));
+  });
+
+  // 絞り込みと並び順が変わったら先頭へ戻す。前のスクロール位置は別の写真を
+  // 指しており、そのままだと「絞り込んだのに何も出ない」（一覧より下に居る）
+  $effect(() => {
+    searchQuery;
+    gridSort.key;
+    gridSort.desc;
+    untrack(() => {
+      gridScrollTop = 0;
+    });
   });
 
   // --- イベントリスナー ---
@@ -344,7 +398,10 @@
     {:else}
       <PhotoGrid
         bind:this={grid}
-        {images}
+        images={visibleImages}
+        unfilteredCount={images.length}
+        hiddenSelectedCount={hiddenSelected}
+        filters={gridFilters}
         selectionMode={mode === "convert" ? "multi" : "single"}
         {selectedPaths}
         {focusedPath}
@@ -424,6 +481,12 @@
 
 <!-- 右パネルを畳んでいる間、主導線はグリッドヘッダーへ移る（spec §3-1）。
      畳むボタンがパネルの中にあると、畳んだ瞬間に開くボタンごと消える -->
+<!-- 絞り込みと並び順。状態は App が持ち（`visibleImages` の出所）、
+     見た目は PhotoGrid → GridHeader へ snippet で降ろす -->
+{#snippet gridFilters()}
+  <GridFilterBar bind:query={searchQuery} sort={gridSort} />
+{/snippet}
+
 {#snippet collapsedPrimaryAction()}
   {#if mode === "convert"}
     <Button variant="filled" disabled={!canProcess} onclick={handleProcess}>

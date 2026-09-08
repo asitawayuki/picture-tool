@@ -18,6 +18,13 @@ export interface ImageEntry {
   width: number;
   height: number;
   size_bytes: number;
+  /** 更新日時（UNIX epoch からのミリ秒）。null は取れなかった */
+  modified_ms: number | null;
+  /**
+   * 作成日時（UNIX epoch からのミリ秒）。null は取れなかった。
+   * **Linux では取れないファイルシステムがある**（並び順では末尾へ送る）
+   */
+  created_ms: number | null;
 }
 
 export interface RatingEntry {

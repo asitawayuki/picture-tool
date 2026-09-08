@@ -33,13 +33,13 @@ test.describe("総点検（spec §7-3）", () => {
     await page.emulateMedia({ reducedMotion: "no-preference" });
     await page.goto("/");
     await page.getByRole("button", { name: "photos", exact: false }).first().click();
-    await expect(page.getByRole("option").first()).toBeVisible();
+    await expect(page.getByRole("listbox", { name: "写真" }).getByRole("option").first()).toBeVisible();
     expect(Math.max(...(await motionDurations(page)))).toBeGreaterThan(0.01);
 
     await page.emulateMedia({ reducedMotion: "reduce" });
     await page.goto("/");
     await page.getByRole("button", { name: "photos", exact: false }).first().click();
-    await expect(page.getByRole("option").first()).toBeVisible();
+    await expect(page.getByRole("listbox", { name: "写真" }).getByRole("option").first()).toBeVisible();
 
     // トークン側は 0.01ms（= 0.00001 秒）へ潰す。0 にしないのは
     // transitionend を前提にしたコードを壊さないため（tokens.css）
@@ -49,7 +49,7 @@ test.describe("総点検（spec §7-3）", () => {
   test("Tab 順が rail → 左カラム → グリッド → 右パネル", async ({ page }) => {
     await page.goto("/");
     await page.getByRole("button", { name: "photos", exact: false }).first().click();
-    await expect(page.getByRole("option").first()).toBeVisible();
+    await expect(page.getByRole("listbox", { name: "写真" }).getByRole("option").first()).toBeVisible();
 
     // フォルダーを開くのにツリーをクリックしているので、フォーカスは左カラムの
     // 中にある。そこから Tab を始めると rail を通らない ── 検査したいのは
@@ -95,7 +95,7 @@ test.describe("総点検（spec §7-3）", () => {
     // （成功 4 秒・エラー 8 秒）押せず、見えもしない
     await page.goto("/");
     await page.getByRole("button", { name: "photos", exact: false }).first().click();
-    await page.getByRole("option").first().click();
+    await page.getByRole("listbox", { name: "写真" }).getByRole("option").first().click();
     await page
       .getByRole("navigation", { name: "モード" })
       .getByRole("button", { name: "フレーム" })
@@ -122,10 +122,10 @@ test.describe("総点検（spec §7-3）", () => {
       await page.emulateMedia({ colorScheme: scheme });
       await page.goto("/");
       await page.getByRole("button", { name: "photos", exact: false }).first().click();
-      await expect(page.getByRole("option").first()).toBeVisible();
+      await expect(page.getByRole("listbox", { name: "写真" }).getByRole("option").first()).toBeVisible();
       // 1 枚選んでおく。選ばないとメタデータもフレームも「対象なし」の
       // 空表示になり、目視（Step 7）で見たいものが写らない
-      await page.getByRole("option").first().click();
+      await page.getByRole("listbox", { name: "写真" }).getByRole("option").first().click();
 
       const rail = page.getByRole("navigation", { name: "モード" });
       for (const [modeLabel, file] of [

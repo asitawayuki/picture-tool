@@ -52,7 +52,9 @@ export const fileEntry: FileEntry = {
 
 /** 写真グリッドの 1 枚 */
 export const imageEntry: ImageEntry = {
+  created_ms: null,
   height: 3000,
+  modified_ms: 1755000000000,
   name: "photo.jpg",
   path: "/home/user/photos/photo.jpg",
   size_bytes: 4500000,

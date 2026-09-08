@@ -1,0 +1,81 @@
+<!--
+  グリッドの絞り込みと並び順の操作。
+
+  状態そのものは `App.svelte` が持つ。ここに持たせられない ── 一覧の順序は
+  情報モードの「次の写真」・サムネイル要求・変換対象の 3 箇所が同じ配列を
+  index で参照する前提なので、決めるのは App の `$derived` 1 箇所だけである
+  （`gridFilter.ts` のモジュールコメント）。
+-->
+<script lang="ts">
+  import TextField from "../ui/TextField.svelte";
+  import Select from "../ui/Select.svelte";
+  import IconButton from "../ui/IconButton.svelte";
+  import { SORT_LABELS, type GridSort, type SortKey } from "./gridFilter";
+
+  interface Props {
+    query: string;
+    /**
+     * 並び順。**`bind:` ではなくプロパティを直接書き換える**
+     * （`$state` のプロキシなので親まで届く）。ConvertPanel の config と同じ扱い
+     */
+    sort: GridSort;
+  }
+
+  let { query = $bindable(), sort }: Props = $props();
+
+  const SORT_OPTIONS = (Object.keys(SORT_LABELS) as SortKey[]).map((value) => ({
+    value,
+    label: SORT_LABELS[value],
+  }));
+
+  // 日時は「新しい順」から見たいが名前は A→Z から見たい。キーを変えたときの
+  // 向きの既定をここで揃える（利用者が明示的に反転させた向きは、そのキーに
+  // 留まっている限り保つ）
+  function handleKeyChange() {
+    sort.desc = sort.key !== "name";
+  }
+</script>
+
+<div class="filters">
+  <div class="search">
+    <TextField label="検索" bind:value={query} placeholder="ファイル名" />
+  </div>
+  <div class="sort">
+    <Select
+      label="並び順"
+      bind:value={sort.key}
+      options={SORT_OPTIONS}
+      onchange={handleKeyChange}
+    />
+  </div>
+  <IconButton
+    label={sort.desc ? "降順（クリックで昇順）" : "昇順（クリックで降順）"}
+    icon={sort.desc ? "↓" : "↑"}
+    toggle
+    pressed={sort.desc}
+    onclick={() => (sort.desc = !sort.desc)}
+  />
+</div>
+
+<style>
+  .filters {
+    display: flex;
+    /* ラベルが上に載る部品と、載らない IconButton の下端を揃える */
+    align-items: flex-end;
+    gap: var(--space-2);
+    /* ヘッダーが狭いときに検索欄を縮ませる。min-width を 0 にしないと
+       flex アイテムは内容幅より縮まず、ヘッダーごと溢れる */
+    min-width: 0;
+  }
+
+  .search {
+    flex: 1 1 auto;
+    min-width: 72px;
+    max-width: 200px;
+  }
+
+  .sort {
+    flex: 0 0 auto;
+    width: 104px;
+  }
+</style>

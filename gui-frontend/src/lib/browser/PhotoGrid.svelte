@@ -15,7 +15,14 @@
   import type { ImageEntry } from "../types";
 
   interface Props {
+    /** 絞り込み・並び替えの済んだ一覧。**順序を決めるのは App の `$derived` だけ** */
     images: ImageEntry[];
+    /** フォルダーにある枚数（絞り込み前）。ヘッダーの「N / M 枚」に使う */
+    unfilteredCount: number;
+    /** 選択済みだが絞り込みで隠れている枚数 */
+    hiddenSelectedCount: number;
+    /** 絞り込みと並び順の操作。状態は App が持つ */
+    filters?: Snippet;
     /** multi: 変換モード（複数チェック） / single: メタデータモード（単一フォーカス） */
     selectionMode: "multi" | "single";
     selectedPaths: Set<string>;
@@ -49,6 +56,9 @@
 
   let {
     images,
+    unfilteredCount,
+    hiddenSelectedCount,
+    filters,
     selectionMode,
     selectedPaths,
     focusedPath,
@@ -266,11 +276,14 @@
 <div class="photo-grid">
   <GridHeader
     totalCount={images.length}
+    {unfilteredCount}
     {selectedCount}
+    {hiddenSelectedCount}
     {selectionMode}
     {rightPanelCollapsed}
     {onToggleRightPanel}
     {onClearSelection}
+    {filters}
     {primaryAction}
   >
     {#snippet controls()}

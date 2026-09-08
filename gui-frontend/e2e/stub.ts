@@ -161,6 +161,12 @@ export async function installTauriStub(page: Page, options: StubOptions = {}) {
         ...template.image,
         name: `photo-${String(i).padStart(4, "0")}.jpg`,
         path: `${dir}/${i}.jpg`,
+        // 更新日は**隣り合う 2 枚を入れ替えた順**に振る（0↔1, 2↔3, ...）。
+        // 名前順・その逆順のどちらとも一致しない並びなので、
+        // 「名前で並べたまま向きだけ変えている」実装が更新日順のテストを
+        // すり抜けられない。
+        // 作成日は取れない環境（Linux の一部 FS）を再現して null のまま
+        modified_ms: ((i ^ 1) + 1) * 60_000,
       }));
       // 「読み込んだ時点で既に★が付いている」fixture。保存で上書き済みの分は
       // 触らない（テスト内で保存 → 再訪した場合に、仕込みで書き戻さないため）

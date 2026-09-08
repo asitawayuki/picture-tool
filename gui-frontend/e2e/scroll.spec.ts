@@ -57,7 +57,9 @@ async function openPhotos(page: import("@playwright/test").Page, imageCount: num
   await installTauriStub(page, { imageCount });
   await page.goto("/");
   await page.getByRole("button", { name: "photos", exact: false }).first().click();
-  await expect(page.getByRole("option").first()).toBeVisible();
+  await expect(
+    page.getByRole("listbox", { name: "写真" }).getByRole("option").first()
+  ).toBeVisible();
 }
 
 test.describe("スクロール性能（spec §7-2）", () => {
@@ -112,7 +114,7 @@ test.describe("スクロール性能（spec §7-2）", () => {
     // Task 14 でストリップの仮想化を見送った判断の裏付け（要素数は写真の枚数分）。
     // グリッドのスクロールはプレビューの裏でも動くので、同じ指標で比べられる
     await openPhotos(page, 3000);
-    await page.getByRole("option").first().dblclick();
+    await page.getByRole("listbox", { name: "写真" }).getByRole("option").first().dblclick();
     await expect(page.getByRole("dialog", { name: "画像プレビュー" })).toBeVisible();
     // 前提条件: 枚数分の枠が実際に DOM に出ていること（仮想化していない証拠）
     const frames = await page.locator(".strip button").count();
