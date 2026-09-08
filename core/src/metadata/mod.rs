@@ -150,7 +150,13 @@ fn pick(label: &str, candidates: Vec<Candidate>, warnings: &mut Vec<String>) -> 
 pub fn read_metadata(path: &Path) -> Result<MetadataRead> {
     let raw =
         std::fs::read(path).with_context(|| format!("ファイルを読めません: {}", path.display()))?;
+    read_metadata_bytes(raw, path)
+}
 
+/// **spike 用（暫定）**: 読み込み済みのバイト列から同じ 3 項目を読む。
+/// `path` はエラーメッセージのためだけに使う。
+#[doc(hidden)]
+pub fn read_metadata_bytes(raw: Vec<u8>, path: &Path) -> Result<MetadataRead> {
     let mut warnings = Vec::new();
 
     // 解析は先に試すが、**警告にするかどうかは JPEG の構造を見てから決める**

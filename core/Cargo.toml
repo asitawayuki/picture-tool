@@ -39,5 +39,8 @@ quick-xml = "0.37"
 
 [dev-dependencies]
 tempfile = "3"
+# spike（tests/rating_scan_spike.rs）でページキャッシュを落とすための posix_fadvise。
+# **dev-dependency 限定**で、配布物には入らない
+libc = "0.2"
 # 統合テストから base64 のプレビュー出力をデコードして検証するため
 base64 = "0.22"

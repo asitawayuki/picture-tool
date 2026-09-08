@@ -2837,6 +2837,7 @@ dependencies = [
  "image",
  "img-parts",
  "kamadak-exif",
+ "libc",
  "little_exif",
  "quick-xml 0.37.5",
  "rayon",
