@@ -150,7 +150,8 @@ test.describe("グリッドの絞り込みと並び順", () => {
   /**
    * スタブの `RATING_PATTERN`（`stub.ts`）を 20 枚に当てたときの内訳。
    * **選択肢のラベルではなく `RATING_PRESETS` を回す** ── 対応表の写しを
-   * ここにもう 1 つ作ると、写し間違えても緑になる
+   * ここにもう 1 つ作ると、写し間違えても緑になる。
+   * 20 も 12 の倍数ではないので、**`imageCount` を変えるとこの 7 値は黙って変わる**
    */
   const EXPECTED_COUNTS: Record<RatingPresetId, number> = {
     all: 20,
@@ -386,6 +387,16 @@ test.describe("グリッドヘッダーの段組み", () => {
       expect(filters.scrollWidth, ".filters-area が溢れた").toBeLessThanOrEqual(
         filters.clientWidth
       );
+
+      // グループの内側だけでなく、**ヘッダー自身**が溢れていないこと。
+      // `.status` と `.tools` は nowrap で逃げ場が無いので、ここは溢れとして現れる
+      // （Task 7 で置き換えた旧検査が見ていたのはこの層。内側の検査と両方要る）
+      const header = await page
+        .locator(".grid-header")
+        .evaluate((el) => ({ scrollWidth: el.scrollWidth, clientWidth: el.clientWidth }));
+      // 前提条件: 実際に測れる幅がある（0 同士の比較で通らないように）
+      expect(header.clientWidth, ".grid-header の実幅").toBeGreaterThan(0);
+      expect(header.scrollWidth, ".grid-header が溢れた").toBeLessThanOrEqual(header.clientWidth);
     });
   }
 

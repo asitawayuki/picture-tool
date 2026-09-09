@@ -151,7 +151,13 @@ function timeOf(image: ImageEntry, key: SortKey): number | null {
  */
 export function sortImages(images: readonly ImageEntry[], sort: GridSort): ImageEntry[] {
   const direction = sort.desc ? -1 : 1;
-  // Rust 側の `sort_by_key(|a| a.name.to_lowercase())` と同じ比較にする。
+  // Rust 側（`gui/src/commands.rs` の `sort_entries`）は「小文字化した名前 → 元の名前」の
+  // 2 段比較で、同じ小文字名を持つ `A.jpg` と `a.jpg` の間にも決定的な順序をつける。
+  // ここは 1 段目（小文字）だけを見て同値なら 0 を返す ── tie の相対順は
+  // `Array.sort` の安定性（ES2019 以降で仕様保証）に委ね、入力順＝ Rust が決めた
+  // 順序をそのまま残す。昇順は 0 * 1 = 0 なので Rust の順序と一致し、降順も
+  // 0 * -1 = 0 で tie の相対順だけは反転しない（他の値は反転する）。
+  // どちらの向きも決定的なので、spec §4 の「順序の決定性・3 参照元の index 一致」は保たれる。
   // `localeCompare` にすると既定の並び順を選び直した瞬間に一覧が並び替わる
   const byName = (a: ImageEntry, b: ImageEntry) => {
     const left = a.name.toLowerCase();

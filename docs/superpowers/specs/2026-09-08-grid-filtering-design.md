@@ -300,6 +300,12 @@ JPEG については、フォールバックがあるので
 失敗すれば `read_metadata` そのものを呼ぶ）。壊れた JPEG は両方が `Err` になり、
 `list_images` の側で `None` に落とす（一覧を失敗させない）。
 
+この「つねに一致」は **APP1 が SOS より前にある**という、JPEG として一般的な
+構成が前提である。SOS より後ろに APP1 を置いた非標準ファイルでは、先頭走査は
+（APP1 を素通りしたまま）SOS に達して**成功**してしまい、フォールバックせずに
+APP1 抜きの値を返す ── つまり `read_metadata` 側と食い違いうる。`img_parts` も
+通常は SOS で走査を止めるため実害は考えにくいが、無条件の保証ではない。
+
 ### 3. 絞り込みの意味論
 
 `gui-frontend/src/lib/browser/gridFilter.ts` に足す。**Phase 1 と同じく IPC を
