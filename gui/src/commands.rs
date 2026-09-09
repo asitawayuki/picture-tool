@@ -683,7 +683,7 @@ fn scan_user_fonts(dir: &Path) -> Vec<FontInfo> {
 pub async fn read_image_metadata(path: String) -> Result<core::metadata::MetadataRead, String> {
     let file = security::readable_jpeg(&path)?;
     tokio::task::spawn_blocking(move || {
-        core::metadata::read_metadata(&file).map_err(|e| e.to_string())
+        core::metadata::read_metadata_fast(&file).map_err(|e| e.to_string())
     })
     .await
     .map_err(|e| e.to_string())?
@@ -725,7 +725,9 @@ pub async fn write_image_metadata(
     let file = metadata_target(&state, &path)?;
     tokio::task::spawn_blocking(move || {
         core::metadata::write_metadata(&file, &metadata).map_err(|e| e.to_string())?;
-        core::metadata::read_metadata(&file).map_err(|e| e.to_string())
+        // **読み戻しも入口を通す。** ここだけ経路が違うと、★の書き戻しの
+        // 「値の出所」（絞り込み spec §5）がグリッドの★と別経路になる
+        core::metadata::read_metadata_fast(&file).map_err(|e| e.to_string())
     })
     .await
     .map_err(|e| e.to_string())?
