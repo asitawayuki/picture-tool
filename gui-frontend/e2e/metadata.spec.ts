@@ -403,7 +403,8 @@ test.describe("メタデータモード", () => {
 
   test("保存した★がグリッドのタイルにも出る（刷新 spec §4-3）", async ({ page }) => {
     const tile = page.getByRole("listbox", { name: "写真" }).getByRole("option").first();
-    // 前提条件: いまは★が出ていない
+    // 前提条件: この写真はスタブの既定パターンで未評価（＝★が出ていない）。
+    // ★は list_images が返すので、付いていれば開いた瞬間から出ている
     await expect(tile.getByText("★", { exact: false })).toBeHidden();
 
     await page.getByRole("button", { name: "このフォルダーへの書き込みを許可..." }).click();
@@ -424,28 +425,24 @@ test.describe("メタデータモード", () => {
     await expect(tile.getByTitle("未保存の変更があります")).toBeVisible();
   });
 
-  test("情報モードへ入っただけで、読み込み時点の★がタイルに出る（保存を経由しない・裁定 X1）", async ({
+  test("フォルダーを開いた瞬間に★がタイルに出る（保存もモード切替も経由しない）", async ({
     page,
   }) => {
-    // beforeEach とは別条件（seedRatings 付き）なのでこのテスト内で貼り直す。
-    // `read_image_ratings` は保存済み（`stored`）からしか値を引かないので、
-    // 「保存を一度もせずに、情報モードへ入っただけで★が出る」経路は
-    // この仕込みが無いと検査しようが無い（可視範囲起点の $effect を丸ごと消しても
-    // 保存経由のテストだけでは気づけない、という指摘への対応）
+    // beforeEach とは別条件（index 0 に★を仕込む）なのでこのテスト内で貼り直す。
+    // ★は `list_images` が返すので、情報モードへ入る必要も保存する必要も無い ──
+    // 絞り込み spec §1 の「裁定 X1 の反転」。可視範囲起点の $effect は消えており、
+    // この検査はその経路が戻ってこないことの歯止めでもある
     await installTauriStub(page, { imageCount: 12, seedRatings: { 0: 3 } });
     await page.goto("/");
-    await page.getByRole("button", { name: "photos", exact: false }).first().click();
 
     const tile = page.getByRole("listbox", { name: "写真" }).getByRole("option").first();
-    // 前提条件: フォルダーを開いた直後（まだ情報モードではない）は★が出ていない
-    await expect(tile.getByText("★", { exact: false })).toBeHidden();
+    // 前提条件: フォルダーを開く前はタイルそのものが無い
+    // （「最初から出ていた」で緑にならないようにする）
+    await expect(tile).toHaveCount(0);
 
-    // 保存は一切していない。モード切替だけで★が出るはず
-    await page
-      .getByRole("navigation", { name: "モード" })
-      .getByRole("button", { name: "情報" })
-      .click();
+    await page.getByRole("button", { name: "photos", exact: false }).first().click();
 
+    // 変換モードのまま。モードは一度も切り替えていない
     await expect(tile.getByText("★★★")).toBeVisible();
   });
 });

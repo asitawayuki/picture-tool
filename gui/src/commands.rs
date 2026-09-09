@@ -825,48 +825,6 @@ pub fn set_unsaved_state(state: tauri::State<'_, ProcessingState>, unsaved: bool
     state.unsaved.store(unsaved, Ordering::SeqCst);
 }
 
-/// 可視範囲ぶんの★をまとめて読む
-///
-/// 読めなかった写真（JPEG 以外・壊れている・消えた）は `rating: None` で返す。
-/// **1 枚の失敗で全件を落とさない** ── グリッドの飾りであって、
-/// 出なくても操作は成立する。
-#[tauri::command]
-pub async fn read_image_ratings(paths: Vec<String>) -> Result<Vec<RatingEntry>, String> {
-    /// 1 回の要求で読む上限。可視範囲は多くても 40 枚程度で、
-    /// 乗っ取られた webview がライブラリ全体を投げてきても走査量が跳ねない
-    const MAX_BATCH: usize = 64;
-
-    // **黙って切らずに拒否する。** 超過分を捨てると、返ってこなかったパスは
-    // 呼び出し側の期待から静かに落ち、「一部の★が永遠に出ない」という
-    // 診断しにくい症状になる（フロントは `CHUNK = 64` で分割して送る）
-    if paths.len() > MAX_BATCH {
-        return Err(format!(
-            "Too many paths in one request: {} (max {})",
-            paths.len(),
-            MAX_BATCH
-        ));
-    }
-    tokio::task::spawn_blocking(move || {
-        use rayon::prelude::*;
-        let entries = paths
-            .par_iter()
-            .map(|raw| {
-                let rating = security::readable_jpeg(raw)
-                    .ok()
-                    .and_then(|file| core::metadata::read_metadata(&file).ok())
-                    .and_then(|read| read.metadata.rating);
-                RatingEntry {
-                    path: raw.clone(),
-                    rating,
-                }
-            })
-            .collect();
-        Ok(entries)
-    })
-    .await
-    .map_err(|e| e.to_string())?
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;

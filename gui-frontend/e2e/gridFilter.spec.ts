@@ -16,11 +16,19 @@ import { clearStorageOnce, installTauriStub } from "./stub";
 const gridOf = (page: import("@playwright/test").Page) =>
   page.getByRole("listbox", { name: "写真" });
 
+/**
+ * 並び順の検査用にタイルの**名前だけ**を取り出す。
+ *
+ * `tileLabel()`（`gridMetrics.ts`）は★と未保存印を aria-label に連結するので、
+ * 生の aria-label と完全一致させると、スタブの★が変わるたびに並び順のテストが
+ * 巻き添えで落ちる。ここで見たいのは順序であって★ではない
+ */
 const tileNames = async (page: import("@playwright/test").Page, count: number) => {
   const options = gridOf(page).getByRole("option");
   const names: string[] = [];
   for (let at = 0; at < count; at += 1) {
-    names.push((await options.nth(at).getAttribute("aria-label")) ?? "");
+    const label = (await options.nth(at).getAttribute("aria-label")) ?? "";
+    names.push(label.split(" ")[0]);
   }
   return names;
 };

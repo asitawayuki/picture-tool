@@ -34,12 +34,6 @@ export interface ImageEntry {
   rating: number | null;
 }
 
-export interface RatingEntry {
-  path: string;
-  /** 1〜5。null は未評価、または読めなかった */
-  rating: number | null;
-}
-
 export interface ProcessingConfig {
   mode: "crop" | "pad" | "quality";
   bg_color: "white" | "black";

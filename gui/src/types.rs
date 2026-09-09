@@ -60,14 +60,6 @@ pub struct ProcessBatchResponse {
     pub warnings: Vec<String>,
 }
 
-/// 写真グリッドに★を出すための最小の応答。
-/// `read_image_metadata` を 1 枚ずつ呼ぶと可視範囲だけで数十回の IPC になる
-#[derive(Debug, Clone, Serialize)]
-pub struct RatingEntry {
-    pub path: String,
-    pub rating: Option<u8>,
-}
-
 /// Exif フレームのプレビュー
 #[derive(Debug, Clone, Serialize)]
 pub struct PreviewImage {
@@ -262,24 +254,6 @@ mod contract {
                     modified_ms: Some(1_755_000_000_000),
                     created_ms: None,
                     rating: Some(3),
-                },
-            ),
-            entry(
-                "ratingEntry",
-                "RatingEntry",
-                "グリッドの★1 件（読めなかった写真は rating: null）",
-                RatingEntry {
-                    path: "/home/user/photos/photo.jpg".to_string(),
-                    rating: Some(3),
-                },
-            ),
-            entry(
-                "ratingEntryUnrated",
-                "RatingEntry",
-                "未評価（rating: None）の直列化を固定する。読めなかった場合と綴りが同じになる",
-                RatingEntry {
-                    path: "/home/user/photos/unrated.jpg".to_string(),
-                    rating: None,
                 },
             ),
             entry(
@@ -564,7 +538,6 @@ mod contract {
                 "ProcessResult",
                 "ProcessingConfig",
                 "ProgressPayload",
-                "RatingEntry",
             ],
         )
     }

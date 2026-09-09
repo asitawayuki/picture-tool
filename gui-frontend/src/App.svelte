@@ -21,7 +21,6 @@
   import { toast, describeError } from "./lib/toasts.svelte";
   import { listImages, setUnsavedState } from "./lib/api";
   import { createThumbnailQueue } from "./lib/browser/thumbnailQueue.svelte";
-  import { createRatingStore } from "./lib/browser/ratings.svelte";
   import GridFilterBar from "./lib/browser/GridFilterBar.svelte";
   import {
     DEFAULT_SORT,
@@ -79,15 +78,9 @@
   /** `revealPath` を呼ぶための PhotoGrid インスタンス（Step 6b） */
   let grid = $state<ReturnType<typeof PhotoGrid> | undefined>();
 
-  // 可視範囲を App にも持たせる。**モードの切替では可視範囲が変わらない**ので、
-  // onVisibleRangeChange だけを起点にすると、変換モードから情報モードへ入って
-  // スクロールするまで★が 1 つも出ない（PhotoGrid の $effect は range 依存）
-  let visibleRange = $state({ start: 0, end: -1 });
-
   const layout = createLayout();
   const theme = createTheme();
   const thumbnails = createThumbnailQueue();
-  const ratings = createRatingStore();
   const presets = createPresetStore();
   const convert = createConvertRun();
   // 下書きは一覧を読み書きするのでプリセットストアを渡す
@@ -166,17 +159,6 @@
     });
   });
 
-  // 可視範囲・モード・写真一覧のどれが動いても、情報モードなら★を取りに行く
-  $effect(() => {
-    if (mode !== "metadata") return;
-    // **絞り込み後の配列から取る。** 可視範囲は PhotoGrid が渡す配列の index なので、
-    // ここで `images` を切ると別の写真の★を読みに行く
-    const paths = visibleImages
-      .slice(visibleRange.start, visibleRange.end + 1)
-      .map((img) => img.path);
-    untrack(() => ratings.request(paths));
-  });
-
   // 絞り込みと並び順が変わったら先頭へ戻す。前のスクロール位置は別の写真を
   // 指しており、そのままだと「絞り込んだのに何も出ない」（一覧より下に居る）
   $effect(() => {
@@ -252,7 +234,6 @@
     // 選択は常に現在のフォルダー内に閉じる。SelectionList を廃止したので
     // 画面外の選択を可視化・解除する窓口がもう無い（spec §3-2 / §5-1）
     selectedPaths.clear();
-    ratings.forget();
     // 初回 1 画面分の目安。正確な可視枚数は PhotoGrid が出すが、
     // ここでは「上から順に流す枚数」の見積もりで足りる
     thumbnails.resetForFolder(30);
@@ -274,7 +255,6 @@
 
   function handleVisibleRangeChange(start: number, end: number) {
     thumbnails.setVisibleRange(start, end);
-    visibleRange = { start, end };
   }
 
   // クリックは「選択のトグル ＋ focusedPath の移動」を同時に行う（spec §3-2）
@@ -342,12 +322,18 @@
       const didSave = await metadata.save();
       if (didSave) {
         toast.success("保存しました。");
-        // invalidate だけでは、可視範囲・モード・一覧のどれも変わらないので
-        // ratings の request エフェクトが再実行されず、★が消えたまま戻ってこない。
-        // 保存した 1 枚だけはその場で取り直す（ブリーフからの逸脱。実施メモに記載）
+        // ★の出所は `list_images` なので、**保存した 1 枚だけその場で書き換える**。
+        // `listImages` を呼び直すとスクロール位置と選択が飛ぶ。
+        //
+        // **値は保存の応答（＝書いた後のファイルの実際の中身）から採る。**
+        // `metadataDraft.save()` は応答を `values` に入れている。送信した下書きの
+        // 値を採ると Rust 側の正規化（★の範囲外 → None）と食い違い、
+        // グリッドの★がディスクに無い値になる
         const savedPath = metadata.path!;
-        ratings.invalidate(savedPath);
-        ratings.request([savedPath]);
+        const stars = metadata.values.rating === 0 ? null : metadata.values.rating;
+        images = images.map((img) =>
+          img.path === savedPath ? { ...img, rating: stars } : img
+        );
       }
       return didSave;
     } catch (e) {
@@ -411,7 +397,6 @@
         bind:scrollTop={gridScrollTop}
         onToggleSelect={handleToggleSelect}
         onFocus={handleFocus}
-        ratingFor={ratings.get}
         unsavedPath={metadata.isDirty ? editingPath : null}
         selectedCount={selectedPaths.size}
         rightPanelCollapsed={layout.rightPanelCollapsed}

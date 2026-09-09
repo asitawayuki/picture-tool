@@ -39,7 +39,6 @@ import type {
   ProcessResult,
   ProcessingConfig,
   ProgressPayload,
-  RatingEntry,
 } from "./types";
 
 /** フォルダーツリーの 1 行 */
@@ -60,18 +59,6 @@ export const imageEntry: ImageEntry = {
   rating: 3,
   size_bytes: 4500000,
   width: 4000,
-};
-
-/** グリッドの★1 件（読めなかった写真は rating: null） */
-export const ratingEntry: RatingEntry = {
-  path: "/home/user/photos/photo.jpg",
-  rating: 3,
-};
-
-/** 未評価（rating: None）の直列化を固定する。読めなかった場合と綴りが同じになる */
-export const ratingEntryUnrated: RatingEntry = {
-  path: "/home/user/photos/unrated.jpg",
-  rating: null,
 };
 
 /** 出力幅の上限あり（4 の倍数で送る） */
