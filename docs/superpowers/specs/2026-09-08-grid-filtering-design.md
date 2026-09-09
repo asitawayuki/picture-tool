@@ -459,6 +459,12 @@ let canSave = $derived(editable && canWrite && draft.isDirty && !draft.saving);
 
 #### 実測値（max-content。**用語を 1 つに揃える**）
 
+> **`.filters` は `GridFilterBar.svelte` のルート要素を指す**（検索 ＋ 並び順 ＋ 向き ＋ ★を
+> 数えているのはこちら）。`GridHeader.svelte` 側の**グループ容器は別名にすること** ──
+> 入れ子で同じクラス名にすると、Playwright の `page.locator(".filters")` が
+> 2 つに一致して strict mode violation になり、レイアウト検査が実行できない。
+> 実装計画は外側を `.filters-area` にしている。
+
 | ブロック | max-content | 1100px/開 での実幅 |
 |---|---|---|
 | `.count`（枚数） | 29px | 29px |
