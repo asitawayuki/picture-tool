@@ -199,7 +199,10 @@ test.describe("グリッドの絞り込みと並び順", () => {
 
     await page.getByLabel("評価").selectOption("min4");
     // 前提条件: 実際に絞り込まれている。これが無いと「絞り込み自体が効いていない」
-    // 壊れ方と「絞り込んだがスクロールが戻らない」壊れ方が同じ赤になる
+    // 壊れ方と「絞り込んだがスクロールが戻らない」壊れ方が同じ赤になる。
+    // 75 の導出: `stub.ts` の `RATING_PATTERN` は 12 周期で、★4 以上は 3 枚
+    // （★5, ★4, ★5）。300 = 12 × 25 なので 3 × 25 = 75。**`imageCount` を
+    // 12 の倍数から外すとこの数は変わる**
     await expect(page.getByText("75 / 300 枚")).toBeVisible();
 
     await expect.poll(() => scroller.evaluate((el) => el.scrollTop)).toBe(0);

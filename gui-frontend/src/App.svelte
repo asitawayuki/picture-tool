@@ -173,6 +173,12 @@
   // ブラウザーが先に scrollTop を新しい末尾へクランプして scroll イベントを撒き、
   // `PhotoGrid` の onscroll がそのクランプ値を書き戻して 0 を潰す
   // （実測: 全体実行の約 50% で「絞り込んだ結果の末尾」が出たまま固定された）
+  //
+  // **絞り込み設定（`searchQuery` / `gridSort` / `ratingPreset`）は、effect の中からでは
+  // なくハンドラーから書くこと。** この pre effect が余白の更新より先に走るのは
+  // 「ツリー順で `PhotoGrid` の template effect より前」かつ「フラッシュ開始時点で
+  // dirty」だから。effect の中から絞り込み設定を書く実装が入ると、この pre effect は
+  // 既に訪問済みで次フラッシュ送りになり、余白の縮みに負ける形が復活する
   $effect.pre(() => {
     searchQuery;
     gridSort.key;

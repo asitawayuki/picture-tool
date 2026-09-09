@@ -97,10 +97,13 @@
 
   // mount 時に親が持っている位置へ戻す。以降は onscroll が親へ書き戻す。
   //
-  // **`$effect.pre` でなければならない。** 仮想化余白の更新（render effect）より前に
-  // 位置を当てる。後に回すと、縮んだ総高でブラウザーがクランプした値が
-  // scroll イベント経由で onscroll から書き戻され、親が書いた 0 が潰れる
-  // （App の「絞り込みが変わったら先頭へ戻す」`$effect.pre` と対で効く）
+  // **`$effect.pre` にしてあるのは、state だけを書く経路の受け皿だから。**
+  // 仮想化余白の更新（render effect）より後に回すと、一覧が縮んだ総高で
+  // ブラウザーがクランプした値が scroll イベント経由で onscroll から書き戻され、
+  // 親が書いた位置が DOM へ届く前に潰れる。一覧が縮む turn は実在する
+  // （★で絞り込み中に「保存して次の写真へ」→ `revealPath` の doc を見よ）。
+  // `revealPath` / `scrollToTop` 自身は DOM も同じ turn で書くのでこの行に頼らないが、
+  // 「state だけ書けば DOM も追う」を期待する経路が増えたときはここが最後の砦になる
   $effect.pre(() => {
     if (scroller && scroller.scrollTop !== scrollTop) scroller.scrollTop = scrollTop;
   });
@@ -220,12 +223,21 @@
    * 指定の 1 枚を可視範囲へ入れる。呼ぶのは「保存して次の写真へ」だけ
    * （`focusedPath` の変化を見て自動でスクロールする案は退けた ──
    * 利用者自身のクリックでも動いてしまい、クリックした位置がずれる）。
-   * `scrollTop` は $bindable なので、代入は親と `scroller` の両方へ伝わる
+   *
+   * **state と DOM を同じ turn で揃える**（`scrollToTop` / `scrollIndexIntoView` と同じ規則）。
+   * この経路は「一覧が縮む turn」と重なる ── `handleSaveMetadata`（`App.svelte`）は
+   * 保存した 1 枚の `rating` をその場で書き換えるので、★で絞り込み中なら
+   * **保存した写真自身が絞り込みから外れて一覧が 1 枚縮む**。
+   * 「未評価だけ」で絞り込んで★を付けながら送る選別作業では毎回必ず起きる。
+   * state だけを書くと、余白が縮んだ瞬間にブラウザーが `scrollTop` を新しい末尾へ
+   * クランプし、その `scroll` を `onscroll` が書き戻して最大 1 行分ずれる
    */
   export function revealPath(path: string) {
     const index = images.findIndex((image) => image.path === path);
     if (index < 0) return;
-    scrollTop = scrollTopToReveal(metrics, index, scrollTop, viewportHeight);
+    const next = scrollTopToReveal(metrics, index, scrollTop, viewportHeight);
+    scrollTop = next;
+    if (scroller) scroller.scrollTop = next;
   }
 
   /**
