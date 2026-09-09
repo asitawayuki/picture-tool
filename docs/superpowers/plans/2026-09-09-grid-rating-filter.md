@@ -2837,10 +2837,17 @@ Windows での実機確認（未検証 5）は spike を介さず `make dev` で
 | 項目 | 内容 |
 |---|---|
 | ★の `<select>` の実幅（未検証 1） | 実測 166px（設計の見積もり 140px から確定）。175px 以下なのでラベルは詰めていない（`RATING_PRESETS` は変更なし）。**Chromium（Playwright）での実測値。WebKitGTK では未確認**（U-02。実機での再計測はしない方針） |
-| コンテナクエリ（未検証 2） | **未確認。** Task 7 Step 6（実機・WebKitGTK での目視確認、`make dev` が要る）は controller の裁定によりユーザーへ回されている。`@container (min-width: 952px)` は実装済みで、効かなかった場合の代替（`.grid-header` を常に 2 段にする）は採っていない。効くかどうかは実機確認待ち |
-| フォールバック率（未検証 3） | **（未実施 — ユーザーの実機確認待ち）。** `header_fallback_rate` を `core/tests/rating_scan_spike.rs` に追加した（コードのみ）。`PICTURE_TOOL_SPIKE_DIR` に実写真フォルダーを渡して実行する必要があり、この環境には機種の異なる実写真が無いため実行していない |
-| 並列化の実機確認（未検証 4） | **（未実施 — ユーザーの実機確認待ち）。** `drop_corpus_cache` を `core/tests/rating_scan_spike.rs` に追加した（コードのみ）。コーパス `/var/tmp/rating-spike`（1,000 枚 / 5.4GB、現存を確認済み）で `drop_corpus_cache` を叩いたのち `make dev` でフォルダーを開き、タイルが出るまでの体感と★の表示を目視確認する手順が残っている |
-| Windows（未検証 5） | **未確認。** この開発環境は Fedora / Linux で、Windows 機が手元に無いため確認していない。`seek_relative` の効きとページキャッシュの振る舞いは未計測だが、`read_metadata_fast` にフォールバックがあるため、Windows で軽量経路が遅い・失敗するとしても**正しさ（返る★の値）は担保される**（結果は変わらない） |
+| コンテナクエリ（未検証 2） | **未確認。** 実機（WebKitGTK）での目視は、ユーザーの判断で今回は実施を見送った。`@container (min-width: 952px)` は実装済みで、効かなかった場合の代替（`.grid-header` を常に 2 段にする）は採っていない。なお `@container` が WebKitGTK で無視された場合は、既定の 2 段レイアウトが残るだけで破綻はしない（spec の代替案「常に 2 段」と同じ状態に自然に落ちる）。これは CSS の構造から言えることで、実機の確認ではない |
+| フォールバック率（未検証 3） | **未実施。** ユーザーの判断で今回は実施を見送った。`header_fallback_rate` は `core/tests/rating_scan_spike.rs` に追加済みなので、後から単独で回せる: `PICTURE_TOOL_SPIKE_DIR=<実写真のフォルダー> cargo test -p picture-tool-core --release --test rating_scan_spike -- --ignored --nocapture header_fallback_rate` |
+| 並列化の実機確認（未検証 4） | **未実施。** コールド／ウォームの区別を付けた正式な測定は行っていない（ユーザーの判断で今回は実施を見送った）。ユーザーの所見: 「並列化ですが、さむね表示処理は重たかったですね。仕方ないと思いますが。」（ユーザー自身は「仕方ない」としている）。**この所見は★の読み取りの並列化とは別の経路の話である** ── ★は `list_images` に畳んだ `read_metadata_fast` が返すのに対し、サムネイルは別途デコードして生成する経路であり、**本計画の並列化が効いていないことの証拠にはならないし、効いていることの証拠にもならない**。サムネイル生成の重さは本計画のスコープ外であり、別途扱うべき課題として記録する。後から測る場合: `PICTURE_TOOL_SPIKE_DIR=/var/tmp/rating-spike cargo test -p picture-tool-core --release --test rating_scan_spike -- --ignored --nocapture drop_corpus_cache` のあと `make dev` で `/var/tmp/rating-spike` を開く。**コーパスは残してある**（未検証 4 を後から測れるようにするため）。不要になったら `rm -rf /var/tmp/rating-spike` |
+| Windows（未検証 5） | **未確認。** Windows 機が手元に無く、この開発環境では確認できないため |
 | 情報モードの段（U-04） | 1600px の窓でも 2 段になることを許容した。情報モードの `.photo-grid` 実効幅は窓幅 − 680px（rail 80 ＋ 左カラム既定 240 ＋ 右カラム既定 360）で、1600px → 920px。段の切り替え閾値 952px を下回るため常に 2 段になる（変換モードは右カラム 320px なので 1600px → 960px となり 1 段になる） |
 | 段の切り替え閾値 | 実測から出し直した **952px**（設計の見積もり 930px から確定）。内訳: `.status` の max-content 177.16px ＋ `.filters-area` の max-content 534.00px ＋ `.tools` の max-content 192.00px の合計に gap（`--space-3` × 2）と左右 padding を足した 951.16px を切り上げた値 |
-| spec と食い違った点 | Task 8 の範囲（Step 1・2・4）で新たに見つかった食い違いは無い。計画全体を通じて生じた食い違いは既に「未決だったものの決定」節の U-01〜U-04 として決定済み（U-04 は「情報モードの段」の行を参照） |
+| spec と食い違った点 | Task 8 の範囲（Step 1・2・4）で新たに見つかった食い違いは無い。計画全体を通じて生じた食い違いは既に「未決だったものの決定」節の U-01〜U-04 として決定済み（U-04 は「情報モードの段」の行を参照）。ただし実装中に spec に無いレースを見つけて潰した（下記「スクロール位置のレース」を参照） |
+
+### スクロール位置のレース（実装中に見つけて潰した。コミット `0553ae6` / `0c5f785`）
+
+- 症状: 全体 e2e の約 50% で、★の条件を変えてもスクロールが先頭へ戻らず「絞り込んだ結果の末尾」が出たまま固定された
+- 機序: 一覧が縮んで仮想化余白が縮む → ブラウザーが `scrollTop` をクランプして `scroll` イベントを撒く → `PhotoGrid` の `onscroll` がそのクランプ値を書き戻し、App が書いた `0` を DOM へ届く前に潰す
+- 対処: `PhotoGrid` に `scrollToTop()` を生やし、**器がまだ縮んでいないうちに DOM を 0 にする**。`scroller.scrollTop = 0` はどの `scrollHeight` でも有効なので、実行順に依存しない。`revealPath` も同じ規則（state と DOM を同じ turn で揃える）に統一した
+- 残渣: `scrollTopToReveal`（`gui-frontend/src/lib/browser/gridMetrics.ts`）の第 3 分岐が新しい max でクランプせず現在値を返すため、`revealPath` に最大 1 行分のずれが残りうる。`Math.min(scrollTop, max)` にして純関数テストで固定するのが確実だが、本計画のスコープ外なので別 PR とする
