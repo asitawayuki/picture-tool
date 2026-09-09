@@ -11,12 +11,21 @@
  */
 import { describe, expect, test } from "bun:test";
 import type { ImageEntry } from "../types";
-import { arrangeImages, filterImages, hiddenSelectedCount, sortImages } from "./gridFilter";
+import {
+  RATING_PRESETS,
+  arrangeImages,
+  filterByRating,
+  filterImages,
+  hiddenSelectedCount,
+  ratingFilterOf,
+  sortImages,
+  type RatingPresetId,
+} from "./gridFilter";
 
-/** 日時を持つ 1 枚。日時は「取れないことがある」ので既定は null にしておく */
+/** 日時と★を持つ 1 枚。どちらも「取れないことがある」ので既定は null にしておく */
 function image(
   name: string,
-  times: { modified?: number | null; created?: number | null } = {}
+  opts: { modified?: number | null; created?: number | null; rating?: number | null } = {}
 ): ImageEntry {
   return {
     name,
@@ -24,9 +33,9 @@ function image(
     width: 4000,
     height: 3000,
     size_bytes: 4_500_000,
-    modified_ms: times.modified ?? null,
-    created_ms: times.created ?? null,
-    rating: null,
+    modified_ms: opts.modified ?? null,
+    created_ms: opts.created ?? null,
+    rating: opts.rating ?? null,
   };
 }
 
@@ -216,10 +225,121 @@ describe("arrangeImages", () => {
       image("sunset-a.jpg", { modified: 2_000 }),
     ];
     // other.jpg は更新日が最も新しいが、絞り込みで落ちるので出てこない
-    expect(names(arrangeImages(images, "sunset", { key: "modified", desc: true }))).toEqual([
-      "sunset-a.jpg",
-      "sunset-b.jpg",
-    ]);
+    expect(
+      names(
+        arrangeImages(images, "sunset", ratingFilterOf("all"), {
+          key: "modified",
+          desc: true,
+        })
+      )
+    ).toEqual(["sunset-a.jpg", "sunset-b.jpg"]);
+  });
+});
+
+describe("filterByRating", () => {
+  const IMAGES = [
+    image("r1.jpg", { rating: 1 }),
+    image("r2.jpg", { rating: 2 }),
+    image("r3.jpg", { rating: 3 }),
+    image("r4.jpg", { rating: 4 }),
+    image("r5.jpg", { rating: 5 }),
+    image("none-a.jpg"),
+    image("none-b.jpg"),
+  ];
+
+  /**
+   * 画面に出す 7 択（設計 §3 の対応表がそのまま期待値）。
+   *
+   * **`RATING_PRESETS` を回して照合する。** ここで `{ min, includeUnrated }` を
+   * 手で書き写すと、対応表を写し間違えても両方同じ間違いになって緑になる
+   */
+  const EXPECTED: Record<RatingPresetId, string[]> = {
+    all: ["r1.jpg", "r2.jpg", "r3.jpg", "r4.jpg", "r5.jpg", "none-a.jpg", "none-b.jpg"],
+    rated: ["r1.jpg", "r2.jpg", "r3.jpg", "r4.jpg", "r5.jpg"],
+    min2: ["r2.jpg", "r3.jpg", "r4.jpg", "r5.jpg"],
+    min3: ["r3.jpg", "r4.jpg", "r5.jpg"],
+    min4: ["r4.jpg", "r5.jpg"],
+    only5: ["r5.jpg"],
+    unrated: ["none-a.jpg", "none-b.jpg"],
+  };
+
+  test("7 択がすべて対応表どおりの集合を返す", () => {
+    // 前提条件: 選択肢が 7 つある（表から漏れた選択肢が黙って通らないように）
+    expect(RATING_PRESETS).toHaveLength(7);
+    for (const preset of RATING_PRESETS) {
+      expect(names(filterByRating(IMAGES, preset.filter))).toEqual(EXPECTED[preset.id]);
+    }
+  });
+
+  test("既定は「すべて」── フォルダーを開いた瞬間に何かが隠れていない", () => {
+    expect(names(filterByRating(IMAGES, ratingFilterOf("all")))).toEqual(names(IMAGES));
+  });
+
+  test("閾値は「以上」── ★3 以上に★3 は入り、★2 は入らない", () => {
+    const shown = names(filterByRating(IMAGES, ratingFilterOf("min3")));
+    expect(shown).toContain("r3.jpg");
+    // 前提条件: 除かれる側が母集合に実在する（「元から居ないから出ない」を防ぐ）
+    expect(names(IMAGES)).toContain("r2.jpg");
+    expect(shown).not.toContain("r2.jpg");
+  });
+
+  test("「★が付いているもの」は未評価を落とす", () => {
+    const shown = names(filterByRating(IMAGES, ratingFilterOf("rated")));
+    // 前提条件: 未評価が母集合に 2 枚ある
+    expect(IMAGES.filter((i) => i.rating === null)).toHaveLength(2);
+    expect(shown).not.toContain("none-a.jpg");
+    expect(shown).not.toContain("none-b.jpg");
+  });
+
+  test("「未評価だけ」は★の付いたものを全部落とす", () => {
+    const shown = names(filterByRating(IMAGES, ratingFilterOf("unrated")));
+    // 前提条件: ★付きが母集合に 5 枚ある
+    expect(IMAGES.filter((i) => i.rating !== null)).toHaveLength(5);
+    expect(shown).toEqual(["none-a.jpg", "none-b.jpg"]);
+  });
+
+  test("0 件になってもエラーにならず空配列を返す", () => {
+    const onlyRated = [image("r1.jpg", { rating: 1 })];
+    expect(filterByRating(onlyRated, ratingFilterOf("unrated"))).toEqual([]);
+  });
+
+  /**
+   * **★0 は「未評価」。** Rust 側が `xmp:Rating = 0` を `None` に落とすので
+   * ここへは来ないが、その不変条件が破れたときに「すべて」が写真を隠さないことを
+   * 固定しておく（0 が意味するのは「評価が無い」であって「評価が 0」ではない）
+   */
+  test("★0 は未評価と同じ扱いになる", () => {
+    const withZero = [...IMAGES, image("zero.jpg", { rating: 0 })];
+    // 前提条件: 0 を持つ写真が母集合に居る（型の上では来ない値なので明示する）
+    expect(withZero.some((i) => i.rating === 0)).toBe(true);
+
+    expect(names(filterByRating(withZero, ratingFilterOf("all")))).toContain("zero.jpg");
+    expect(names(filterByRating(withZero, ratingFilterOf("unrated")))).toContain("zero.jpg");
+    expect(names(filterByRating(withZero, ratingFilterOf("rated")))).not.toContain("zero.jpg");
+  });
+
+  test("元の配列を書き換えない", () => {
+    const before = names(IMAGES);
+    filterByRating(IMAGES, ratingFilterOf("only5"));
+    expect(names(IMAGES)).toEqual(before);
+  });
+});
+
+describe("arrangeImages と★の合成", () => {
+  const IMAGES = [
+    image("sunset-a.jpg", { rating: 5, modified: 1_000 }),
+    image("sunset-b.jpg", { rating: 2, modified: 2_000 }),
+    image("other.jpg", { rating: 5, modified: 3_000 }),
+  ];
+
+  test("名前で落ちた写真は★の条件を満たしても出ない", () => {
+    // 前提条件: other.jpg は★5 なので、★だけで見れば残る側である
+    expect(names(filterByRating(IMAGES, ratingFilterOf("only5")))).toContain("other.jpg");
+
+    const shown = names(
+      arrangeImages(IMAGES, "sunset", ratingFilterOf("only5"), { key: "name", desc: false })
+    );
+    expect(shown).toEqual(["sunset-a.jpg"]);
   });
 });
 

@@ -23,9 +23,11 @@
   import { createThumbnailQueue } from "./lib/browser/thumbnailQueue.svelte";
   import GridFilterBar from "./lib/browser/GridFilterBar.svelte";
   import {
+    DEFAULT_RATING_PRESET,
     DEFAULT_SORT,
     arrangeImages,
     hiddenSelectedCount,
+    ratingFilterOf,
     sortImages,
     type GridSort,
   } from "./lib/browser/gridFilter";
@@ -94,7 +96,10 @@
    * 下の `nextImagePath`・★の要求・`PhotoGrid` は同じ配列を index で参照する。
    * 2 箇所で順序を決めると index がずれ、そのまま「別の写真を処理する」になる
    */
-  let visibleImages = $derived(arrangeImages(images, searchQuery, gridSort));
+  // ★の絞り込みはまだ既定に固定。利用者が選べるようにするのは次のコミット
+  let visibleImages = $derived(
+    arrangeImages(images, searchQuery, ratingFilterOf(DEFAULT_RATING_PRESET), gridSort)
+  );
   /**
    * 変換対象。**絞り込みでは減らさない** ── 選択は表示と独立しているので、
    * 隠れている分も含めて変換する（その枚数はヘッダーに出す）。
