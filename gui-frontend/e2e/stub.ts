@@ -50,12 +50,11 @@ export interface StubOptions {
   /** grant_metadata_editing が「許可しない」を返す */
   denyGrant?: boolean;
   /**
-   * 情報モードへ入っただけ（保存を経由せず）で★が出ることを検査するための下ごしらえ。
+   * 特定の写真の★を既定パターンから差し替える。
    * 画像のインデックス（`list_images` が返す 0 始まりの並び順）→ 評価値（1〜5）。
    *
-   * `read_image_ratings` は `stored`（保存済みメタデータ）からしか値を引かない。
-   * 保存経路のテストしか無いと、`App.svelte` の可視範囲起点の `$effect` を丸ごと
-   * 消しても e2e が気づけない穴になる（裁定 X1）。
+   * 既定は `RATING_PATTERN`（★あり・なしを混ぜたもの）。
+   * 「index 0 に★が付いている」のような、既定と違う条件を作るときに使う
    */
   seedRatings?: Record<number, number>;
   /**
@@ -133,6 +132,24 @@ export async function installTauriStub(page: Page, options: StubOptions = {}) {
     }
 
     /**
+     * フォルダーを開いた時点で付いている★。**`list_images` が返す。**
+     *
+     * ★あり・なしを混ぜ、**名前順とも更新日順とも一致しない並び**にする ──
+     * 「名前で並べたまま★の条件だけを見ている」実装がすり抜けられないため。
+     * **index 0 は必ず未評価**にしてある（`metadata.spec.ts` の
+     * 「保存した★がグリッドのタイルにも出る」が「まだ★が付いていない」を
+     * 前提条件に取っているので、そこを崩さない）。
+     */
+    const RATING_PATTERN: (number | null)[] = [
+      null, 5, 3, null, 1, 4, null, 2, 5, null, 3, null,
+    ];
+
+    /** `seedRatings` の指定が勝ち、無ければ既定パターン */
+    function ratingOf(index: number): number | null {
+      return seedRatings[index] ?? RATING_PATTERN[index % RATING_PATTERN.length];
+    }
+
+    /**
      * Rust 側の保存時正規化を模す（前後の空白を落とす）。
      *
      * `write_image_metadata` が送られた値をそのまま echo すると、
@@ -157,26 +174,23 @@ export async function installTauriStub(page: Page, options: StubOptions = {}) {
      *  キャッシュが当たってしまい「取り直している」ことを検査できない */
     function imagesFor(folder: string) {
       const dir = folder.replace(/\/+$/, "") || "/photos";
-      const images = Array.from({ length: imageCount }, (_, i) => ({
-        ...template.image,
-        name: `photo-${String(i).padStart(4, "0")}.jpg`,
-        path: `${dir}/${i}.jpg`,
-        // 更新日は**隣り合う 2 枚を入れ替えた順**に振る（0↔1, 2↔3, ...）。
-        // 名前順・その逆順のどちらとも一致しない並びなので、
-        // 「名前で並べたまま向きだけ変えている」実装が更新日順のテストを
-        // すり抜けられない。
-        // 作成日は取れない環境（Linux の一部 FS）を再現して null のまま
-        modified_ms: ((i ^ 1) + 1) * 60_000,
-      }));
-      // 「読み込んだ時点で既に★が付いている」fixture。保存で上書き済みの分は
-      // 触らない（テスト内で保存 → 再訪した場合に、仕込みで書き戻さないため）
-      for (const [indexStr, rating] of Object.entries(seedRatings)) {
-        const image = images[Number(indexStr)];
-        if (image && !stored.has(image.path)) {
-          stored.set(image.path, { title: null, comment: null, rating });
-        }
-      }
-      return images;
+      return Array.from({ length: imageCount }, (_, i) => {
+        const path = `${dir}/${i}.jpg`;
+        const saved = stored.get(path) as { rating: number | null } | undefined;
+        return {
+          ...template.image,
+          name: `photo-${String(i).padStart(4, "0")}.jpg`,
+          path,
+          // 更新日は**隣り合う 2 枚を入れ替えた順**に振る（0↔1, 2↔3, ...）。
+          // 名前順・その逆順のどちらとも一致しない並びなので、
+          // 「名前で並べたまま向きだけ変えている」実装が更新日順のテストを
+          // すり抜けられない。
+          // 作成日は取れない環境（Linux の一部 FS）を再現して null のまま
+          modified_ms: ((i ^ 1) + 1) * 60_000,
+          // 保存済みがあればそれが勝つ（保存 → フォルダーを開き直す経路の再現）
+          rating: saved ? saved.rating : ratingOf(i),
+        };
+      });
     }
 
     const presets = [template.preset];
@@ -292,10 +306,14 @@ export async function installTauriStub(page: Page, options: StubOptions = {}) {
       },
       list_available_fonts: () => [template.font],
       // 形は契約（template.metadata = dto.metadataRead）から取り、値だけ上書きする。
-      // { metadata, warnings } と手で組むと境界の写しが3つ目に増える
+      // { metadata, warnings } と手で組むと境界の写しが3つ目に増える。
+      // **未保存の写真でも★は返す** ── そうしないと、タイルには★が出ているのに
+      // パネルは 0 という、実機では起きない食い違いをスタブが作ってしまう
       read_image_metadata: ({ path }: { path: string }) => ({
         ...template.metadata,
-        metadata: stored.get(path) ?? template.emptyMetadata,
+        metadata:
+          stored.get(path) ??
+          { ...template.emptyMetadata, rating: ratingOf(indexOfPath(path)) },
         warnings: stored.has(path) ? [] : metadataWarnings,
       }),
       // 呼ばれた回数を記録する。「連打しても実際の書き込みは1回だけ」を
@@ -317,11 +335,6 @@ export async function installTauriStub(page: Page, options: StubOptions = {}) {
       set_unsaved_state: () => null,
       os_color_scheme: () => osColorScheme,
       set_window_theme: () => null,
-      read_image_ratings: ({ paths }: { paths: string[] }) =>
-        paths.map((path) => ({
-          path,
-          rating: (stored.get(path) as { rating: number | null } | undefined)?.rating ?? null,
-        })),
       "plugin:event|listen": ({ event, handler }: { event: string; handler: number }) => {
         const callback = callbacks.get(handler);
         if (callback) eventListeners.set(event, callback);

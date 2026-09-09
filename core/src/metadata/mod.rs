@@ -11,6 +11,7 @@
 
 mod atomic;
 mod exif;
+mod header;
 mod xmp;
 
 /// 読めた文字列を正規形に寄せる。**前後の空白（と NUL）は落とし、trim 後が空なら `None`。**
@@ -153,8 +154,14 @@ pub fn read_metadata(path: &Path) -> Result<MetadataRead> {
     read_metadata_bytes(raw, path)
 }
 
-/// **spike 用（暫定）**: 読み込み済みのバイト列から同じ 3 項目を読む。
-/// `path` はエラーメッセージのためだけに使う。
+/// 読み込み済みのバイト列から同じ 3 項目を読む。`path` はエラーメッセージのためだけに使う。
+///
+/// **`read_metadata`（全体読み）と `read_metadata_header`（先頭だけ読む）の共通の下地。**
+/// 解析の実装がここ 1 箇所にあるので、「読む量」を変えても Exif と XMP の
+/// 優先順位・警告・trim 規則は変わらない。
+///
+/// バイト列が JPEG として妥当であることは呼び出し側の責任なので、
+/// 外向けの入口にはしない（`read_metadata` か `read_metadata_fast` を使う）。
 #[doc(hidden)]
 pub fn read_metadata_bytes(raw: Vec<u8>, path: &Path) -> Result<MetadataRead> {
     let mut warnings = Vec::new();
@@ -245,6 +252,63 @@ pub fn read_metadata_bytes(raw: Vec<u8>, path: &Path) -> Result<MetadataRead> {
         },
         warnings,
     })
+}
+
+/// 拡張子だけで JPEG かどうかを見る。**中身は見ない** ──
+/// ここは「読みに行くかどうか」の分岐であって、正しさの判定ではない
+/// （中身の検査は `header_bytes` の SOI 検査と `read_metadata` がやる）。
+/// 条件は `gui/src/security.rs` の `readable_jpeg` と同じ。
+fn has_jpeg_extension(path: &Path) -> bool {
+    path.extension()
+        .and_then(|ext| ext.to_str())
+        .is_some_and(|ext| ext.eq_ignore_ascii_case("jpg") || ext.eq_ignore_ascii_case("jpeg"))
+}
+
+/// JPEG の先頭（SOI〜SOS）だけから、人が編集する 3 項目を読む。
+///
+/// **解析の実装は一切変えない。** `read_metadata` と同じ [`read_metadata_bytes`] に、
+/// APP1 だけを写したバイト列を渡す。Exif と XMP の優先順位・警告・trim 規則は
+/// `docs/superpowers/specs/2026-08-18-metadata-editing-design.md` のまま。
+///
+/// 手書きのセグメント走査なので、歪んだ JPEG では `Err` になる。
+/// **直接呼ばず [`read_metadata_fast`] を使うこと**（フォールバックがそこにある）。
+pub fn read_metadata_header(path: &Path) -> Result<MetadataRead> {
+    let raw = header::header_bytes(path)
+        .with_context(|| format!("JPEG の先頭を読めません: {}", path.display()))?;
+    read_metadata_bytes(raw, path)
+}
+
+/// **読み取りの唯一の入口。★を読むところは全部これを使う。**
+///
+/// 呼び出し元は 3 つ ── `list_images`（グリッドの★）、`read_image_metadata`
+/// （情報パネル）、`write_image_metadata` の読み戻し。**1 つでも外すと、
+/// 「保存した直後だけ正しい★／フォルダーを開き直すと違う★」という、
+/// 再現条件が「保存を挟んだかどうか」になる差が出る。**
+///
+/// | 段 | 動き |
+/// |---|---|
+/// | 1 | 拡張子が JPEG でなければ `Ok`（全項目 `None`） |
+/// | 2 | [`read_metadata_header`] で先頭だけ読む。`Ok` ならそれを返す |
+/// | 3 | `Err` なら [`read_metadata`]（全体読み）へフォールバック |
+///
+/// **段 3 が要る理由**: 手書きの走査は「境界が 0xFF で始まっていない」等で `Err` を
+/// 返すが、`read_metadata` は `img_parts` / `little_exif` にバイト列ごと渡すので
+/// 多少歪んでいても APP1 に辿り着けば読める。フォールバックが無いと、
+/// **いままで情報パネルで開けていた写真がエラートーストになる**（編集して保存する
+/// 導線ごと塞がる）。落ちるのは歪んだファイルだけなので、性能は現行以上に悪くならない。
+///
+/// **段 1 は意図的に `read_metadata` と非対称**（`read_metadata` は非 JPEG で `Err`）。
+/// ★の読み取りは一覧表示の副作用なので、PNG が混ざっているだけで一覧が失敗したり
+/// 警告が出たりしてはいけない。段 1 に到達するのは `list_images` からの呼び出しだけで、
+/// 情報パネル側は `security::readable_jpeg` が先に非 JPEG を弾く。
+pub fn read_metadata_fast(path: &Path) -> Result<MetadataRead> {
+    if !has_jpeg_extension(path) {
+        return Ok(MetadataRead::default());
+    }
+    match read_metadata_header(path) {
+        Ok(read) => Ok(read),
+        Err(_) => read_metadata(path),
+    }
 }
 
 impl EditableMetadata {
@@ -866,5 +930,136 @@ mod tests {
             .collect();
         names.sort();
         names
+    }
+
+    /// **JPEG については `read_metadata_fast` と `read_metadata` の結果は常に一致する。**
+    ///
+    /// 先頭経路が成功すれば同じ `read_metadata_bytes` に同じ APP1 を渡しており、
+    /// 失敗すれば `read_metadata` そのものを呼ぶので、構成上そうなる。
+    #[test]
+    fn fast_and_full_reads_agree_on_jpeg() {
+        let (_dir, path) = scratch("lightroom-xmp.jpg");
+        write_metadata(
+            &path,
+            &EditableMetadata {
+                title: Some("夕暮れの港".to_string()),
+                comment: Some("テスト".to_string()),
+                rating: Some(4),
+            },
+        )
+        .unwrap();
+
+        let full = read_metadata(&path).unwrap();
+        // 前提条件: 比較対象が default でないこと。両方 default なら
+        // `read_metadata_fast` が中身を読まずに Ok(None) を返しても一致してしまう
+        assert_eq!(full.metadata.rating, Some(4), "前提条件が崩れている");
+        assert_eq!(full.metadata.title.as_deref(), Some("夕暮れの港"));
+
+        assert_eq!(read_metadata_fast(&path).unwrap().metadata, full.metadata);
+    }
+
+    /// 既存 fixture 2 つでも一致する（片方は Exif のみ、片方は XMP 付き）
+    #[test]
+    fn fast_and_full_reads_agree_on_the_fixtures() {
+        for name in ["exif-only.jpg", "lightroom-xmp.jpg"] {
+            let path = fixture(name);
+            assert_eq!(
+                read_metadata_fast(&path).unwrap().metadata,
+                read_metadata(&path).unwrap().metadata,
+                "{name} で食い違った"
+            );
+        }
+    }
+
+    /// **フォールバックが効くこと。**
+    ///
+    /// 前提条件として `read_metadata_header` 単体が `Err` になることを先に assert する ──
+    /// 入力が実は歪んでいなければ、フォールバックを消しても緑のままになる。
+    #[test]
+    fn a_jpeg_the_header_scan_cannot_parse_falls_back_to_the_full_read() {
+        let (_dir, path) = scratch("lightroom-xmp.jpg");
+        // **読める中身を先に入れる。** 空の写真で比べると、フォールバックを消して
+        // Err を握り潰す実装でも「両方 default」で一致してしまう
+        write_metadata(
+            &path,
+            &EditableMetadata {
+                rating: Some(4),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+
+        // SOI の直後にゴミを 2 バイト差し込み、セグメント境界を壊す。
+        // `img_parts` は APP1 に辿り着けるが、手書きの走査は 0xFF を期待して落ちる
+        // （この非対称は実測で確認済み。計画の Task 2 の実験ログ参照）
+        let mut raw = std::fs::read(&path).unwrap();
+        raw.splice(2..2, [0x00, 0x00]);
+        std::fs::write(&path, &raw).unwrap();
+
+        // 前提条件 1: 先頭だけの走査は失敗する
+        assert!(
+            read_metadata_header(&path).is_err(),
+            "前提条件が崩れている: 壊したはずの JPEG を先頭走査が読めてしまった"
+        );
+        // 前提条件 2: 全体読みは成功し、★も生きている（＝フォールバック先が生きている）
+        let full = read_metadata(&path).unwrap();
+        assert_eq!(full.metadata.rating, Some(4), "前提条件が崩れている");
+
+        assert_eq!(read_metadata_fast(&path).unwrap().metadata, full.metadata);
+    }
+
+    /// **非 JPEG は意図的に非対称にする。**
+    ///
+    /// `list_images` は PNG / WebP も並べる。★の読み取りは一覧表示の副作用なので、
+    /// PNG が混ざっているだけで一覧が失敗したり警告が出たりしてはいけない。
+    #[test]
+    fn non_jpeg_is_deliberately_asymmetric() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("photo.png");
+        std::fs::write(&path, [0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A]).unwrap();
+
+        // 全体読みは「JPEG として読めません」で Err（現行のまま）
+        assert!(read_metadata(&path).is_err());
+        // 入口は Ok かつ全項目 None
+        let read = read_metadata_fast(&path).unwrap();
+        assert_eq!(read.metadata, EditableMetadata::default());
+        assert!(read.warnings.is_empty());
+    }
+
+    /// **APP1 を持たない JPEG は、フォールバックへ落ちずに `Ok` かつ全項目 `None`。**
+    ///
+    /// これを `read_metadata_fast` で見てはならない ── 先頭走査が組み立てた
+    /// バイト列を `read_metadata_bytes` が受け取れなくても、フォールバックが
+    /// 全体読みで拾ってしまい**テストは緑のまま通る**。落ちていないことを
+    /// 確かめたいので `read_metadata_header` 単体を見る。
+    /// （本ツールが変換して出力した JPEG がこの形。`_processed` フォルダーを
+    /// 開くと全写真がここを通る）
+    #[test]
+    fn a_jpeg_without_app1_reads_as_none_without_falling_back() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("no-app1.jpg");
+        // SOI ＋ SOS ヘッダ ＋ 画素 ＋ EOI。APP1 も APP0 も持たない
+        let mut raw = vec![0xFF, 0xD8, 0xFF, 0xDA, 0x00, 0x0C];
+        raw.extend_from_slice(b"sos-header");
+        raw.extend_from_slice(&[0x11; 256]);
+        raw.extend_from_slice(&[0xFF, 0xD9]);
+        std::fs::write(&path, &raw).unwrap();
+
+        let read = read_metadata_header(&path).unwrap();
+        assert_eq!(read.metadata, EditableMetadata::default());
+        // **警告も出さない。** 「Exif が無い」と「Exif が壊れている」は別である
+        assert!(read.warnings.is_empty(), "警告が出た: {:?}", read.warnings);
+    }
+
+    /// 拡張子が `.jpg` なのに中身が JPEG ですらないファイル。
+    /// **先頭も全体も読めないので `Err`。panic はしない**
+    #[test]
+    fn a_file_that_is_not_a_jpeg_at_all_errors_without_panicking() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("liar.jpg");
+        std::fs::write(&path, b"this is not a jpeg at all").unwrap();
+
+        assert!(read_metadata_header(&path).is_err()); // 前提条件
+        assert!(read_metadata_fast(&path).is_err());
     }
 }

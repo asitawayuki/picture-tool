@@ -10,7 +10,6 @@ import type {
   FontInfo,
   EditableMetadata,
   MetadataRead,
-  RatingEntry,
 } from "./types";
 
 export async function listDirectory(path: string): Promise<FileEntry[]> {
@@ -142,10 +141,6 @@ export async function grantMetadataEditing(folder: string): Promise<string | nul
  */
 export async function setUnsavedState(unsaved: boolean): Promise<void> {
   return invoke("set_unsaved_state", { unsaved });
-}
-
-export async function readImageRatings(paths: string[]): Promise<RatingEntry[]> {
-  return invoke("read_image_ratings", { paths });
 }
 
 /**

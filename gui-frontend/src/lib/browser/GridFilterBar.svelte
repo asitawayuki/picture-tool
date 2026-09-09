@@ -10,7 +10,13 @@
   import TextField from "../ui/TextField.svelte";
   import Select from "../ui/Select.svelte";
   import IconButton from "../ui/IconButton.svelte";
-  import { SORT_LABELS, type GridSort, type SortKey } from "./gridFilter";
+  import {
+    RATING_PRESETS,
+    SORT_LABELS,
+    type GridSort,
+    type RatingPresetId,
+    type SortKey,
+  } from "./gridFilter";
 
   interface Props {
     query: string;
@@ -19,13 +25,21 @@
      * （`$state` のプロキシなので親まで届く）。ConvertPanel の config と同じ扱い
      */
     sort: GridSort;
+    /** ★の絞り込み。7 択の id。対応表は `gridFilter.ts` が持つ */
+    ratingPreset: RatingPresetId;
   }
 
-  let { query = $bindable(), sort }: Props = $props();
+  let { query = $bindable(), sort, ratingPreset = $bindable() }: Props = $props();
 
   const SORT_OPTIONS = (Object.keys(SORT_LABELS) as SortKey[]).map((value) => ({
     value,
     label: SORT_LABELS[value],
+  }));
+
+  // **対応表を写さない。** ラベルも値も `gridFilter.ts` の 1 箇所から取る
+  const RATING_OPTIONS = RATING_PRESETS.map((preset) => ({
+    value: preset.id,
+    label: preset.label,
   }));
 
   // 日時は「新しい順」から見たいが名前は A→Z から見たい。キーを変えたときの
@@ -55,6 +69,9 @@
     pressed={sort.desc}
     onclick={() => (sort.desc = !sort.desc)}
   />
+  <div class="rating">
+    <Select label="評価" bind:value={ratingPreset} options={RATING_OPTIONS} />
+  </div>
 </div>
 
 <style>
@@ -77,5 +94,10 @@
   .sort {
     flex: 0 0 auto;
     width: 104px;
+  }
+
+  .rating {
+    flex: 0 0 auto;
+    width: 166px;
   }
 </style>

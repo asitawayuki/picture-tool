@@ -37,8 +37,6 @@
     onVisibleRangeChange: (start: number, end: number) => void;
     onToggleSelect: (image: ImageEntry) => void;
     onFocus: (image: ImageEntry) => void;
-    /** タイルに出す★。undefined は未取得 */
-    ratingFor: (path: string) => number | null | undefined;
     /** 未保存の変更があるメタデータの編集対象 */
     unsavedPath: string | null;
     selectedCount: number;
@@ -67,7 +65,6 @@
     onVisibleRangeChange,
     onToggleSelect,
     onFocus,
-    ratingFor,
     unsavedPath,
     selectedCount,
     rightPanelCollapsed,
@@ -98,8 +95,16 @@
   let containerWidth = $state(0);
   let viewportHeight = $state(0);
 
-  // mount 時に親が持っている位置へ戻す。以降は onscroll が親へ書き戻す
-  $effect(() => {
+  // mount 時に親が持っている位置へ戻す。以降は onscroll が親へ書き戻す。
+  //
+  // **`$effect.pre` にしてあるのは、state だけを書く経路の受け皿だから。**
+  // 仮想化余白の更新（render effect）より後に回すと、一覧が縮んだ総高で
+  // ブラウザーがクランプした値が scroll イベント経由で onscroll から書き戻され、
+  // 親が書いた位置が DOM へ届く前に潰れる。一覧が縮む turn は実在する
+  // （★で絞り込み中に「保存して次の写真へ」→ `revealPath` の doc を見よ）。
+  // `revealPath` / `scrollToTop` 自身は DOM も同じ turn で書くのでこの行に頼らないが、
+  // 「state だけ書けば DOM も追う」を期待する経路が増えたときはここが最後の砦になる
+  $effect.pre(() => {
     if (scroller && scroller.scrollTop !== scrollTop) scroller.scrollTop = scrollTop;
   });
 
@@ -218,12 +223,38 @@
    * 指定の 1 枚を可視範囲へ入れる。呼ぶのは「保存して次の写真へ」だけ
    * （`focusedPath` の変化を見て自動でスクロールする案は退けた ──
    * 利用者自身のクリックでも動いてしまい、クリックした位置がずれる）。
-   * `scrollTop` は $bindable なので、代入は親と `scroller` の両方へ伝わる
+   *
+   * **state と DOM を同じ turn で揃える**（`scrollToTop` / `scrollIndexIntoView` と同じ規則）。
+   * この経路は「一覧が縮む turn」と重なる ── `handleSaveMetadata`（`App.svelte`）は
+   * 保存した 1 枚の `rating` をその場で書き換えるので、★で絞り込み中なら
+   * **保存した写真自身が絞り込みから外れて一覧が 1 枚縮む**。
+   * 「未評価だけ」で絞り込んで★を付けながら送る選別作業では毎回必ず起きる。
+   * state だけを書くと、余白が縮んだ瞬間にブラウザーが `scrollTop` を新しい末尾へ
+   * クランプし、その `scroll` を `onscroll` が書き戻して最大 1 行分ずれる
    */
   export function revealPath(path: string) {
     const index = images.findIndex((image) => image.path === path);
     if (index < 0) return;
-    scrollTop = scrollTopToReveal(metrics, index, scrollTop, viewportHeight);
+    const next = scrollTopToReveal(metrics, index, scrollTop, viewportHeight);
+    scrollTop = next;
+    if (scroller) scroller.scrollTop = next;
+  }
+
+  /**
+   * 先頭へ戻す。呼ぶのは App の「絞り込みと並び順が変わったら先頭へ戻す」だけ。
+   *
+   * **`scrollTop` への代入だけでは足りず、`scroller` も同じ turn で 0 にする。**
+   * 一覧が短くなると仮想化の余白が縮み、その瞬間にブラウザーが `scrollTop` を
+   * 新しい末尾へクランプして `scroll` イベントを撒く。`onscroll` がそれを
+   * 書き戻すと、親が state に書いた 0 は DOM へ届く前に消える
+   * （実測: 全体 e2e の約半分で「絞り込んだ結果の末尾」が出たまま固定された。
+   * `$effect.pre` に寄せてもこの順は保証できない ── 親の書き込みで初めて
+   * dirty になった pre effect は、余白の更新より後のフラッシュへ回されうる）。
+   * 余白が縮む前にここで DOM を 0 にしておけば、クランプ自体が起きない
+   */
+  export function scrollToTop() {
+    scrollTop = 0;
+    if (scroller) scroller.scrollTop = 0;
   }
 
   function handleKeydown(event: KeyboardEvent) {
@@ -338,7 +369,7 @@
       {#each visible as image, offset (image.path)}
         {@const index = range.startIndex + offset}
         {@const thumb = thumbnailFor(image.path, metrics.thumbnailSize)}
-        {@const stars = ratingFor(image.path)}
+        {@const stars = image.rating}
         {@const unsaved = unsavedPath === image.path}
         <!-- キーボードは listbox（親）側の onkeydown が composite widget として
              一括で受ける。ARIA の listbox/option ではそれが正しい形で、
@@ -415,6 +446,11 @@
     height: 100%;
     overflow: hidden;
     background: var(--md-sys-color-surface);
+    /* グリッドヘッダーの段組みが参照するコンテナ（GridHeader.svelte の @container）。
+       inline 方向だけを封じるので高さの計算には影響しない。PhotoViewer は
+       この div の外に描いているので、`contain: layout` が position: fixed の
+       包含ブロックになる問題も起きない */
+    container-type: inline-size;
   }
 
   .size {

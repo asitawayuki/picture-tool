@@ -10,7 +10,7 @@
 
 | ドキュメント | 内容 |
 |---|---|
-| [specs/2026-09-08-grid-filtering-design.md](superpowers/specs/2026-09-08-grid-filtering-design.md) | **写真グリッドの絞り込み**（現行）。ファイル名検索・並び替え（Phase 1、実装済み）と★レーティング絞り込み（Phase 2、未着手）。**一覧に何を出すかを決める規則**と、フォルダー全件の★を得る軽量読み取り経路。走査コストの実測値と、その計測の罠を持つ |
+| [specs/2026-09-08-grid-filtering-design.md](superpowers/specs/2026-09-08-grid-filtering-design.md) | **写真グリッドの絞り込み**（現行）。ファイル名検索・並び替え（Phase 1）と★レーティング絞り込み（Phase 2）。**一覧に何を出すかを決める規則**と、フォルダー全件の★を得る軽量読み取り経路。走査コストの実測値と、その計測の罠を持つ |
 | [specs/2026-08-19-gui-redesign-design.md](superpowers/specs/2026-08-19-gui-redesign-design.md) | **GUI デザイン刷新**（現行）。Material 3 系のトークン層 ＋ プリミティブ 11 個、navigation rail による 3 モード構成、写真グリッドの仮想スクロール化。3 カラム構成の出典はこちらへ移った |
 | [specs/2026-08-18-metadata-editing-design.md](superpowers/specs/2026-08-18-metadata-editing-design.md) | **メタデータ編集**（タイトル・コメント・レーティング）。元写真の JPEG に Windows / MWG 系の両方から読める形で書き込む。**レイアウトの出典は GUI デザイン刷新 spec**（本 spec は書き込むタグの仕様・信頼境界・読み取りの優先順位を持つ） |
 | [specs/2026-08-12-output-width-limit-design.md](superpowers/specs/2026-08-12-output-width-limit-design.md) | **出力幅の上限指定**（`--max-width`）。pad/crop の 4:5 キャンバスを指定 px 以下に縮小 |
@@ -22,6 +22,7 @@
 
 | ドキュメント | 内容 |
 |---|---|
+| [plans/2026-09-09-grid-rating-filter.md](superpowers/plans/2026-09-09-grid-rating-filter.md) | **★レーティング絞り込み**（Phase 2）の実装計画（全 8 タスク）と実施メモ。軽量読み取り経路のフォールバック率・`list_images` の並列化の実機確認・★の `<select>` の実幅とヘッダーの段の閾値・コンテナクエリが WebKitGTK で効いたか |
 | [plans/2026-08-26-metadata-editing.md](superpowers/plans/2026-08-26-metadata-editing.md) | **メタデータ編集**の実装計画（全 18 タスク）と実施メモ。round-trip 実測・既存 XMP 保持・終了時未保存ガードの実機確認・spec と食い違った点 |
 | [plans/2026-08-19-gui-redesign.md](superpowers/plans/2026-08-19-gui-redesign.md) | **GUI デザイン刷新**の実装計画（全 18 タスク）と実施メモ。トークン層・プリミティブ・仮想スクロール・LRU 上限の実測と、spec と食い違った点 |
 | [plans/2026-08-12-output-width-limit.md](superpowers/plans/2026-08-12-output-width-limit.md) | **出力幅の上限指定**（`--max-width`）の実装計画と実施メモ |

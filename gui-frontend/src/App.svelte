@@ -21,14 +21,16 @@
   import { toast, describeError } from "./lib/toasts.svelte";
   import { listImages, setUnsavedState } from "./lib/api";
   import { createThumbnailQueue } from "./lib/browser/thumbnailQueue.svelte";
-  import { createRatingStore } from "./lib/browser/ratings.svelte";
   import GridFilterBar from "./lib/browser/GridFilterBar.svelte";
   import {
+    DEFAULT_RATING_PRESET,
     DEFAULT_SORT,
     arrangeImages,
     hiddenSelectedCount,
+    ratingFilterOf,
     sortImages,
     type GridSort,
+    type RatingPresetId,
   } from "./lib/browser/gridFilter";
   import { createPresetStore } from "./lib/panels/presets.svelte";
   import { createConvertRun } from "./lib/panels/convertRun.svelte";
@@ -69,6 +71,9 @@
    */
   let searchQuery = $state("");
   let gridSort = $state<GridSort>({ ...DEFAULT_SORT });
+  /** ★の絞り込み。7 択の id を持つ（対応表は `gridFilter.ts`） */
+  let ratingPreset = $state<RatingPresetId>(DEFAULT_RATING_PRESET);
+  let ratingFilter = $derived(ratingFilterOf(ratingPreset));
 
   /**
    * グリッドのスクロール位置。**App が持つ**（spec §3-2）。
@@ -79,15 +84,9 @@
   /** `revealPath` を呼ぶための PhotoGrid インスタンス（Step 6b） */
   let grid = $state<ReturnType<typeof PhotoGrid> | undefined>();
 
-  // 可視範囲を App にも持たせる。**モードの切替では可視範囲が変わらない**ので、
-  // onVisibleRangeChange だけを起点にすると、変換モードから情報モードへ入って
-  // スクロールするまで★が 1 つも出ない（PhotoGrid の $effect は range 依存）
-  let visibleRange = $state({ start: 0, end: -1 });
-
   const layout = createLayout();
   const theme = createTheme();
   const thumbnails = createThumbnailQueue();
-  const ratings = createRatingStore();
   const presets = createPresetStore();
   const convert = createConvertRun();
   // 下書きは一覧を読み書きするのでプリセットストアを渡す
@@ -101,7 +100,7 @@
    * 下の `nextImagePath`・★の要求・`PhotoGrid` は同じ配列を index で参照する。
    * 2 箇所で順序を決めると index がずれ、そのまま「別の写真を処理する」になる
    */
-  let visibleImages = $derived(arrangeImages(images, searchQuery, gridSort));
+  let visibleImages = $derived(arrangeImages(images, searchQuery, ratingFilter, gridSort));
   /**
    * 変換対象。**絞り込みでは減らさない** ── 選択は表示と独立しているので、
    * 隠れている分も含めて変換する（その枚数はヘッダーに出す）。
@@ -166,25 +165,35 @@
     });
   });
 
-  // 可視範囲・モード・写真一覧のどれが動いても、情報モードなら★を取りに行く
-  $effect(() => {
-    if (mode !== "metadata") return;
-    // **絞り込み後の配列から取る。** 可視範囲は PhotoGrid が渡す配列の index なので、
-    // ここで `images` を切ると別の写真の★を読みに行く
-    const paths = visibleImages
-      .slice(visibleRange.start, visibleRange.end + 1)
-      .map((img) => img.path);
-    untrack(() => ratings.request(paths));
-  });
-
   // 絞り込みと並び順が変わったら先頭へ戻す。前のスクロール位置は別の写真を
-  // 指しており、そのままだと「絞り込んだのに何も出ない」（一覧より下に居る）
-  $effect(() => {
+  // 指しており、そのままだと「絞り込んだのに何も出ない」（一覧より下に居る）。
+  // ★を足さないと、一覧が短くなったぶん scrollTop がクランプされて末尾が出る
+  //
+  // **`$effect.pre` でなければならない。** 仮想化の余白が縮む前に位置を 0 にしないと、
+  // ブラウザーが先に scrollTop を新しい末尾へクランプして scroll イベントを撒き、
+  // `PhotoGrid` の onscroll がそのクランプ値を書き戻して 0 を潰す
+  // （実測: 全体実行の約 50% で「絞り込んだ結果の末尾」が出たまま固定された）
+  //
+  // **絞り込み設定（`searchQuery` / `gridSort` / `ratingPreset`）は、effect の中からでは
+  // なくハンドラーから書くこと。** この pre effect が余白の更新より先に走るのは
+  // 「ツリー順で `PhotoGrid` の template effect より前」かつ「フラッシュ開始時点で
+  // dirty」だから。effect の中から絞り込み設定を書く実装が入ると、この pre effect は
+  // 既に訪問済みで次フラッシュ送りになり、余白の縮みに負ける形が復活する
+  $effect.pre(() => {
     searchQuery;
     gridSort.key;
     gridSort.desc;
+    // **依存は絞り込み設定そのもの。`visibleImages` に張ってはならない** ──
+    // 保存 → その場で★を書き換え → グリッドから消える、でもスクロールが飛ぶ
+    ratingFilter.min;
+    ratingFilter.includeUnrated;
     untrack(() => {
       gridScrollTop = 0;
+      // **state だけでは足りない。** scrollTop の state を見て DOM を動かす
+      // PhotoGrid 側の effect は、ここでの書き込みで初めて dirty になるため、
+      // 余白の更新より後のフラッシュへ回されうる（実測で両方の順が出た）。
+      // グリッドが居るなら DOM も同じ turn で 0 にする → `scrollToTop` の説明
+      grid?.scrollToTop();
     });
   });
 
@@ -252,7 +261,6 @@
     // 選択は常に現在のフォルダー内に閉じる。SelectionList を廃止したので
     // 画面外の選択を可視化・解除する窓口がもう無い（spec §3-2 / §5-1）
     selectedPaths.clear();
-    ratings.forget();
     // 初回 1 画面分の目安。正確な可視枚数は PhotoGrid が出すが、
     // ここでは「上から順に流す枚数」の見積もりで足りる
     thumbnails.resetForFolder(30);
@@ -274,7 +282,6 @@
 
   function handleVisibleRangeChange(start: number, end: number) {
     thumbnails.setVisibleRange(start, end);
-    visibleRange = { start, end };
   }
 
   // クリックは「選択のトグル ＋ focusedPath の移動」を同時に行う（spec §3-2）
@@ -342,12 +349,18 @@
       const didSave = await metadata.save();
       if (didSave) {
         toast.success("保存しました。");
-        // invalidate だけでは、可視範囲・モード・一覧のどれも変わらないので
-        // ratings の request エフェクトが再実行されず、★が消えたまま戻ってこない。
-        // 保存した 1 枚だけはその場で取り直す（ブリーフからの逸脱。実施メモに記載）
+        // ★の出所は `list_images` なので、**保存した 1 枚だけその場で書き換える**。
+        // `listImages` を呼び直すとスクロール位置と選択が飛ぶ。
+        //
+        // **値は保存の応答（＝書いた後のファイルの実際の中身）から採る。**
+        // `metadataDraft.save()` は応答を `values` に入れている。送信した下書きの
+        // 値を採ると Rust 側の正規化（★の範囲外 → None）と食い違い、
+        // グリッドの★がディスクに無い値になる
         const savedPath = metadata.path!;
-        ratings.invalidate(savedPath);
-        ratings.request([savedPath]);
+        const stars = metadata.values.rating === 0 ? null : metadata.values.rating;
+        images = images.map((img) =>
+          img.path === savedPath ? { ...img, rating: stars } : img
+        );
       }
       return didSave;
     } catch (e) {
@@ -411,7 +424,6 @@
         bind:scrollTop={gridScrollTop}
         onToggleSelect={handleToggleSelect}
         onFocus={handleFocus}
-        ratingFor={ratings.get}
         unsavedPath={metadata.isDirty ? editingPath : null}
         selectedCount={selectedPaths.size}
         rightPanelCollapsed={layout.rightPanelCollapsed}
@@ -484,7 +496,7 @@
 <!-- 絞り込みと並び順。状態は App が持ち（`visibleImages` の出所）、
      見た目は PhotoGrid → GridHeader へ snippet で降ろす -->
 {#snippet gridFilters()}
-  <GridFilterBar bind:query={searchQuery} sort={gridSort} />
+  <GridFilterBar bind:query={searchQuery} sort={gridSort} bind:ratingPreset />
 {/snippet}
 
 {#snippet collapsedPrimaryAction()}

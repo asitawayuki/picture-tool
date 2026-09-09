@@ -22,6 +22,14 @@ pub struct ImageEntry {
     /// Linux の btime は統計情報を持たないファイルシステムがあり、
     /// `Metadata::created()` が `Err` を返す。並び順では `None` を末尾へ送る
     pub created_ms: Option<i64>,
+    /// ★（1〜5）。`None` は未評価、または読めなかった。
+    ///
+    /// **`list_images` が唯一の出所。** 以前は可視範囲ぶんを別コマンド
+    /// （`read_image_ratings`）で取りに行っていたが、先頭だけ読む軽量経路
+    /// （`core::metadata::read_metadata_fast`）ができたので一覧に畳んだ。
+    /// 絞り込みに使うには**フォルダー全件**が揃っている必要があり、
+    /// 可視範囲を起点にする形では原理的に足りない
+    pub rating: Option<u8>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -50,14 +58,6 @@ pub struct ProcessBatchResponse {
     pub failures: Vec<ProcessFailure>,
     /// バッチ全体に関わる警告（アセット読み込みの不備、削除のキャンセルなど）
     pub warnings: Vec<String>,
-}
-
-/// 写真グリッドに★を出すための最小の応答。
-/// `read_image_metadata` を 1 枚ずつ呼ぶと可視範囲だけで数十回の IPC になる
-#[derive(Debug, Clone, Serialize)]
-pub struct RatingEntry {
-    pub path: String,
-    pub rating: Option<u8>,
 }
 
 /// Exif フレームのプレビュー
@@ -253,24 +253,7 @@ mod contract {
                     size_bytes: 4_500_000,
                     modified_ms: Some(1_755_000_000_000),
                     created_ms: None,
-                },
-            ),
-            entry(
-                "ratingEntry",
-                "RatingEntry",
-                "グリッドの★1 件（読めなかった写真は rating: null）",
-                RatingEntry {
-                    path: "/home/user/photos/photo.jpg".to_string(),
                     rating: Some(3),
-                },
-            ),
-            entry(
-                "ratingEntryUnrated",
-                "RatingEntry",
-                "未評価（rating: None）の直列化を固定する。読めなかった場合と綴りが同じになる",
-                RatingEntry {
-                    path: "/home/user/photos/unrated.jpg".to_string(),
-                    rating: None,
                 },
             ),
             entry(
@@ -555,7 +538,6 @@ mod contract {
                 "ProcessResult",
                 "ProcessingConfig",
                 "ProgressPayload",
-                "RatingEntry",
             ],
         )
     }

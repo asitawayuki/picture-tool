@@ -89,22 +89,46 @@ fn epoch_ms(time: std::time::SystemTime) -> Option<i64> {
         .and_then(|d| i64::try_from(d.as_millis()).ok())
 }
 
-#[tauri::command]
-pub async fn list_images(path: String) -> Result<Vec<ImageEntry>, String> {
-    let dir = security::existing_dir(&path)?;
+/// 一覧の順序。**小文字化した名前 → 元の名前**の 2 段で比較する。
+///
+/// 1 段だけだと安定ソート任せになり、同じ小文字名を持つ `A.jpg` と `a.jpg` の
+/// 相対順が `read_dir` の返すファイルシステム順のままになる（＝実行ごとに変わりうる）。
+/// フロントの `sortImages` が同値を名前の昇順で解決しているのと同じ規則に揃える。
+fn sort_entries(entries: &mut [ImageEntry]) {
+    entries.sort_by(|a, b| {
+        a.name
+            .to_lowercase()
+            .cmp(&b.name.to_lowercase())
+            .then_with(|| a.name.cmp(&b.name))
+    });
+}
 
-    tokio::task::spawn_blocking(move || {
-        // 直下の画像のみ取得（再帰しない）
-        let read_dir = fs::read_dir(&dir).map_err(|e| e.to_string())?;
+/// フォルダー直下の画像を `ImageEntry` にする。**再帰しない。**
+///
+/// **`par_iter` であることが設計の一部。** 1 枚あたり `image_dimensions_oriented`
+/// ＋ `fs::metadata` ＋ ★の読み取りで open が 3 回になる。逐次のままだと
+/// 1,000 枚で 576 → 650ms の悪化になり、`list_images` が返るまでグリッドは空なので
+/// フォルダーを開いた瞬間の停止時間がそのまま伸びる。並列なら 169ms で現行より速い
+/// （実測は絞り込み spec の「実測」節）。
+///
+/// **順序は崩れない。** `&Vec<T>` の `par_iter()` は `IndexedParallelIterator` で、
+/// `map` は indexed 性を保ち、`Vec` への `collect` は index どおりに詰める。
+///
+/// コマンド本体（`#[tauri::command]` かつ `async`）は単体テストから素直に呼べないので、
+/// 中身をここへ出してテスト可能にしている（`metadata_target` と同じ形）。
+fn collect_image_entries(dir: &Path) -> Result<Vec<ImageEntry>, String> {
+    use rayon::prelude::*;
 
-        let direct_files: Vec<PathBuf> = read_dir
-            .flatten()
-            .map(|e| e.path())
-            .filter(|p| p.is_file() && core::is_supported_image(p))
-            .collect();
+    let read_dir = fs::read_dir(dir).map_err(|e| e.to_string())?;
+    let direct_files: Vec<PathBuf> = read_dir
+        .flatten()
+        .map(|e| e.path())
+        .filter(|p| p.is_file() && core::is_supported_image(p))
+        .collect();
 
-        let mut entries = Vec::new();
-        for file_path in direct_files {
+    let mut entries: Vec<ImageEntry> = direct_files
+        .par_iter()
+        .map(|file_path| {
             let name = file_path
                 .file_name()
                 .unwrap_or_default()
@@ -113,10 +137,10 @@ pub async fn list_images(path: String) -> Result<Vec<ImageEntry>, String> {
             let path_str = file_path.to_string_lossy().to_string();
 
             // 生ピクセルの縦横は Orientation 5-8 で入れ替わるため、表示値も揃える。
-            let (width, height) = core::image_dimensions_oriented(&file_path).unwrap_or_default();
+            let (width, height) = core::image_dimensions_oriented(file_path).unwrap_or_default();
             // 1 度の stat から大きさも日時も取る。並び順のために stat をもう 1 回
             // 回すと、3,000 枚のフォルダーで走査量が倍になる
-            let meta = fs::metadata(&file_path).ok();
+            let meta = fs::metadata(file_path).ok();
             let size_bytes = meta.as_ref().map(|m| m.len()).unwrap_or(0);
             let modified_ms = meta
                 .as_ref()
@@ -127,7 +151,16 @@ pub async fn list_images(path: String) -> Result<Vec<ImageEntry>, String> {
                 .and_then(|m| m.created().ok())
                 .and_then(epoch_ms);
 
-            entries.push(ImageEntry {
+            // **★は読めなくても一覧を落とさない。** グリッドの飾りであって、
+            // 一覧そのものの前提ではない（PNG も壊れた JPEG も並ぶ）。
+            // **`warnings` はここで捨てる** ── 3,000 枚ぶんの警告は利用者に
+            // 見せる形が無い。同じ写真を情報モードで開けば `read_image_metadata`
+            // が同じ警告を 1 枚分だけ返すので、情報は失われず出す場所が寄るだけ
+            let rating = core::metadata::read_metadata_fast(file_path)
+                .ok()
+                .and_then(|read| read.metadata.rating);
+
+            ImageEntry {
                 name,
                 path: path_str,
                 width,
@@ -135,15 +168,21 @@ pub async fn list_images(path: String) -> Result<Vec<ImageEntry>, String> {
                 size_bytes,
                 modified_ms,
                 created_ms,
-            });
-        }
+                rating,
+            }
+        })
+        .collect();
 
-        entries.sort_by_key(|a| a.name.to_lowercase());
+    sort_entries(&mut entries);
+    Ok(entries)
+}
 
-        Ok(entries)
-    })
-    .await
-    .map_err(|e| e.to_string())?
+#[tauri::command]
+pub async fn list_images(path: String) -> Result<Vec<ImageEntry>, String> {
+    let dir = security::existing_dir(&path)?;
+    tokio::task::spawn_blocking(move || collect_image_entries(&dir))
+        .await
+        .map_err(|e| e.to_string())?
 }
 
 #[tauri::command]
@@ -683,7 +722,7 @@ fn scan_user_fonts(dir: &Path) -> Vec<FontInfo> {
 pub async fn read_image_metadata(path: String) -> Result<core::metadata::MetadataRead, String> {
     let file = security::readable_jpeg(&path)?;
     tokio::task::spawn_blocking(move || {
-        core::metadata::read_metadata(&file).map_err(|e| e.to_string())
+        core::metadata::read_metadata_fast(&file).map_err(|e| e.to_string())
     })
     .await
     .map_err(|e| e.to_string())?
@@ -725,7 +764,9 @@ pub async fn write_image_metadata(
     let file = metadata_target(&state, &path)?;
     tokio::task::spawn_blocking(move || {
         core::metadata::write_metadata(&file, &metadata).map_err(|e| e.to_string())?;
-        core::metadata::read_metadata(&file).map_err(|e| e.to_string())
+        // **読み戻しも入口を通す。** ここだけ経路が違うと、★の書き戻しの
+        // 「値の出所」（絞り込み spec §5）がグリッドの★と別経路になる
+        core::metadata::read_metadata_fast(&file).map_err(|e| e.to_string())
     })
     .await
     .map_err(|e| e.to_string())?
@@ -782,48 +823,6 @@ pub async fn grant_metadata_editing(
 #[tauri::command]
 pub fn set_unsaved_state(state: tauri::State<'_, ProcessingState>, unsaved: bool) {
     state.unsaved.store(unsaved, Ordering::SeqCst);
-}
-
-/// 可視範囲ぶんの★をまとめて読む
-///
-/// 読めなかった写真（JPEG 以外・壊れている・消えた）は `rating: None` で返す。
-/// **1 枚の失敗で全件を落とさない** ── グリッドの飾りであって、
-/// 出なくても操作は成立する。
-#[tauri::command]
-pub async fn read_image_ratings(paths: Vec<String>) -> Result<Vec<RatingEntry>, String> {
-    /// 1 回の要求で読む上限。可視範囲は多くても 40 枚程度で、
-    /// 乗っ取られた webview がライブラリ全体を投げてきても走査量が跳ねない
-    const MAX_BATCH: usize = 64;
-
-    // **黙って切らずに拒否する。** 超過分を捨てると、返ってこなかったパスは
-    // 呼び出し側の期待から静かに落ち、「一部の★が永遠に出ない」という
-    // 診断しにくい症状になる（フロントは `CHUNK = 64` で分割して送る）
-    if paths.len() > MAX_BATCH {
-        return Err(format!(
-            "Too many paths in one request: {} (max {})",
-            paths.len(),
-            MAX_BATCH
-        ));
-    }
-    tokio::task::spawn_blocking(move || {
-        use rayon::prelude::*;
-        let entries = paths
-            .par_iter()
-            .map(|raw| {
-                let rating = security::readable_jpeg(raw)
-                    .ok()
-                    .and_then(|file| core::metadata::read_metadata(&file).ok())
-                    .and_then(|read| read.metadata.rating);
-                RatingEntry {
-                    path: raw.clone(),
-                    rating,
-                }
-            })
-            .collect();
-        Ok(entries)
-    })
-    .await
-    .map_err(|e| e.to_string())?
 }
 
 #[cfg(test)]
@@ -1043,5 +1042,108 @@ mod tests {
         assert!(metadata_target(&state, &as_str(&photo)).is_ok());
 
         assert!(security::writable_dir(&state.writable_roots, &as_str(dir.path())).is_err());
+    }
+
+    fn entry_named(name: &str) -> ImageEntry {
+        ImageEntry {
+            name: name.to_string(),
+            path: format!("/photos/{name}"),
+            width: 4000,
+            height: 3000,
+            size_bytes: 4_500_000,
+            modified_ms: Some(1_755_000_000_000),
+            created_ms: None,
+            rating: None,
+        }
+    }
+
+    /// **同じ小文字名を持つ 2 枚の相対順が、入力の並びに依存しない。**
+    ///
+    /// 現行の `sort_by_key(|a| a.name.to_lowercase())` は安定ソートなので、
+    /// `A.jpg` と `a.jpg` の順は `read_dir` が返したファイルシステム順のままになる。
+    /// `par_iter` にしても収集順は保たれる（`IndexedParallelIterator`）ので、
+    /// これは並列化が持ち込む問題ではなく、**ついでに直す既存の欠陥**である。
+    #[test]
+    fn entries_with_the_same_lowercased_name_are_ordered_deterministically() {
+        let mut forward = vec![entry_named("A.jpg"), entry_named("a.jpg")];
+        let mut backward = vec![entry_named("a.jpg"), entry_named("A.jpg")];
+        // 前提条件: 入力は実際に別の並びである（同じものを 2 回並べていない）
+        assert_ne!(forward[0].name, backward[0].name);
+
+        sort_entries(&mut forward);
+        sort_entries(&mut backward);
+
+        let names = |v: &[ImageEntry]| v.iter().map(|e| e.name.clone()).collect::<Vec<_>>();
+        assert_eq!(names(&forward), names(&backward));
+        // 小文字化した名前で同値なら、元の名前の昇順で決める
+        assert_eq!(
+            names(&forward),
+            vec!["A.jpg".to_string(), "a.jpg".to_string()]
+        );
+    }
+
+    /// 小文字化した比較が第 1 キーであること（`Z.jpg` が `a.jpg` より前に来ない）
+    #[test]
+    fn entries_are_ordered_case_insensitively_first() {
+        let mut entries = vec![entry_named("Z.jpg"), entry_named("a.jpg")];
+        sort_entries(&mut entries);
+        assert_eq!(entries[0].name, "a.jpg");
+    }
+
+    /// ★がファイルから読めて `ImageEntry` に載る
+    #[test]
+    fn list_reads_the_rating_from_the_file() {
+        let dir = TempDir::new().unwrap();
+        let rated = dir.path().join("rated.jpg");
+        write_real_jpeg(&rated);
+        core::metadata::write_metadata(
+            &rated,
+            &core::metadata::EditableMetadata {
+                rating: Some(4),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        let plain = dir.path().join("plain.jpg");
+        write_real_jpeg(&plain);
+
+        let entries = collect_image_entries(dir.path()).unwrap();
+
+        assert_eq!(entries.len(), 2);
+        let rating_of = |name: &str| {
+            entries
+                .iter()
+                .find(|e| e.name == name)
+                .unwrap_or_else(|| panic!("{name} が一覧に無い"))
+                .rating
+        };
+        assert_eq!(rating_of("rated.jpg"), Some(4));
+        assert_eq!(rating_of("plain.jpg"), None);
+    }
+
+    /// **★の読み取り失敗で一覧ごと失敗しない。**
+    ///
+    /// グリッドは PNG / WebP も並べるし、壊れた JPEG も混ざる。
+    /// ★は一覧表示の副作用であって、一覧そのものの前提ではない
+    #[test]
+    fn list_survives_files_whose_rating_cannot_be_read() {
+        let dir = TempDir::new().unwrap();
+        write_real_jpeg(&dir.path().join("ok.jpg"));
+        fs::write(dir.path().join("broken.jpg"), b"not a jpeg at all").unwrap();
+        fs::write(
+            dir.path().join("shot.png"),
+            [0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A],
+        )
+        .unwrap();
+
+        let entries = collect_image_entries(dir.path()).unwrap();
+
+        // 前提条件: 3 枚とも一覧に載っている（壊れた分が消えていない）
+        assert_eq!(entries.len(), 3);
+        for entry in &entries {
+            if entry.name != "ok.jpg" {
+                assert_eq!(entry.rating, None, "{} で★が付いた", entry.name);
+            }
+        }
     }
 }
