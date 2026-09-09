@@ -168,7 +168,12 @@
   // 絞り込みと並び順が変わったら先頭へ戻す。前のスクロール位置は別の写真を
   // 指しており、そのままだと「絞り込んだのに何も出ない」（一覧より下に居る）。
   // ★を足さないと、一覧が短くなったぶん scrollTop がクランプされて末尾が出る
-  $effect(() => {
+  //
+  // **`$effect.pre` でなければならない。** 仮想化の余白が縮む前に位置を 0 にしないと、
+  // ブラウザーが先に scrollTop を新しい末尾へクランプして scroll イベントを撒き、
+  // `PhotoGrid` の onscroll がそのクランプ値を書き戻して 0 を潰す
+  // （実測: 全体実行の約 50% で「絞り込んだ結果の末尾」が出たまま固定された）
+  $effect.pre(() => {
     searchQuery;
     gridSort.key;
     gridSort.desc;
@@ -178,6 +183,11 @@
     ratingFilter.includeUnrated;
     untrack(() => {
       gridScrollTop = 0;
+      // **state だけでは足りない。** scrollTop の state を見て DOM を動かす
+      // PhotoGrid 側の effect は、ここでの書き込みで初めて dirty になるため、
+      // 余白の更新より後のフラッシュへ回されうる（実測で両方の順が出た）。
+      // グリッドが居るなら DOM も同じ turn で 0 にする → `scrollToTop` の説明
+      grid?.scrollToTop();
     });
   });
 

@@ -198,6 +198,9 @@ test.describe("グリッドの絞り込みと並び順", () => {
       .toBeGreaterThan(0);
 
     await page.getByLabel("評価").selectOption("min4");
+    // 前提条件: 実際に絞り込まれている。これが無いと「絞り込み自体が効いていない」
+    // 壊れ方と「絞り込んだがスクロールが戻らない」壊れ方が同じ赤になる
+    await expect(page.getByText("75 / 300 枚")).toBeVisible();
 
     await expect.poll(() => scroller.evaluate((el) => el.scrollTop)).toBe(0);
   });

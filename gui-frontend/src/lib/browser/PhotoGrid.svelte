@@ -95,8 +95,13 @@
   let containerWidth = $state(0);
   let viewportHeight = $state(0);
 
-  // mount 時に親が持っている位置へ戻す。以降は onscroll が親へ書き戻す
-  $effect(() => {
+  // mount 時に親が持っている位置へ戻す。以降は onscroll が親へ書き戻す。
+  //
+  // **`$effect.pre` でなければならない。** 仮想化余白の更新（render effect）より前に
+  // 位置を当てる。後に回すと、縮んだ総高でブラウザーがクランプした値が
+  // scroll イベント経由で onscroll から書き戻され、親が書いた 0 が潰れる
+  // （App の「絞り込みが変わったら先頭へ戻す」`$effect.pre` と対で効く）
+  $effect.pre(() => {
     if (scroller && scroller.scrollTop !== scrollTop) scroller.scrollTop = scrollTop;
   });
 
@@ -221,6 +226,23 @@
     const index = images.findIndex((image) => image.path === path);
     if (index < 0) return;
     scrollTop = scrollTopToReveal(metrics, index, scrollTop, viewportHeight);
+  }
+
+  /**
+   * 先頭へ戻す。呼ぶのは App の「絞り込みと並び順が変わったら先頭へ戻す」だけ。
+   *
+   * **`scrollTop` への代入だけでは足りず、`scroller` も同じ turn で 0 にする。**
+   * 一覧が短くなると仮想化の余白が縮み、その瞬間にブラウザーが `scrollTop` を
+   * 新しい末尾へクランプして `scroll` イベントを撒く。`onscroll` がそれを
+   * 書き戻すと、親が state に書いた 0 は DOM へ届く前に消える
+   * （実測: 全体 e2e の約半分で「絞り込んだ結果の末尾」が出たまま固定された。
+   * `$effect.pre` に寄せてもこの順は保証できない ── 親の書き込みで初めて
+   * dirty になった pre effect は、余白の更新より後のフラッシュへ回されうる）。
+   * 余白が縮む前にここで DOM を 0 にしておけば、クランプ自体が起きない
+   */
+  export function scrollToTop() {
+    scrollTop = 0;
+    if (scroller) scroller.scrollTop = 0;
   }
 
   function handleKeydown(event: KeyboardEvent) {
