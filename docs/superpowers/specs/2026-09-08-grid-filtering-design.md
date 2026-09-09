@@ -1,6 +1,6 @@
 # 写真グリッドの絞り込み設計
 
-**状態**: Phase 1（ファイル名検索・並び替え）実装済み（`f0f12d3`）。Phase 2（★レーティング絞り込み）未着手
+**状態**: Phase 1（ファイル名検索・並び替え）実装済み（`f0f12d3`）。Phase 2（★レーティング絞り込み）実装済み（実装計画と実施メモは [plans/2026-09-09-grid-rating-filter.md](../plans/2026-09-09-grid-rating-filter.md)）
 **前提**: レイアウトの出典は
 [GUI デザイン刷新 spec](2026-08-19-gui-redesign-design.md)、★の読み書きの仕様は
 [メタデータ編集 spec](2026-08-18-metadata-editing-design.md)。本 spec が持つのは

@@ -526,3 +526,81 @@ fn peak_memory() {
         before as f64 / 1024.0
     );
 }
+
+/// **フォールバックへ落ちる頻度と、SOI〜SOS の大きさの分布**（絞り込み spec の未検証 3）。
+///
+/// `read_metadata_header` は手書きのセグメント走査なので、大きな MakerNote や
+/// Extended XMP を持つファイルで失敗しうる。正しさは `read_metadata_fast` の
+/// フォールバックが担保するが、**常時落ちるなら軽量経路の意味が無い。**
+///
+/// ```text
+/// PICTURE_TOOL_SPIKE_DIR=/path/to/real/photos \
+///   cargo test -p picture-tool-core --release --test rating_scan_spike \
+///     -- --ignored --nocapture header_fallback_rate
+/// ```
+#[test]
+#[ignore]
+fn header_fallback_rate() {
+    let dir = std::env::var("PICTURE_TOOL_SPIKE_DIR").expect("PICTURE_TOOL_SPIKE_DIR が要る");
+    let files: Vec<PathBuf> = std::fs::read_dir(&dir)
+        .unwrap()
+        .flatten()
+        .map(|e| e.path())
+        .filter(|p| {
+            p.extension()
+                .and_then(|e| e.to_str())
+                .is_some_and(|e| e.eq_ignore_ascii_case("jpg") || e.eq_ignore_ascii_case("jpeg"))
+        })
+        .collect();
+    assert!(!files.is_empty(), "JPEG が 1 枚も無い: {dir}");
+
+    let mut failed: Vec<(PathBuf, String)> = Vec::new();
+    let mut sizes: Vec<usize> = Vec::new();
+    for path in &files {
+        if let Err(error) = picture_tool_core::metadata::read_metadata_header(path) {
+            failed.push((path.clone(), error.to_string()));
+        }
+        if let Ok(bytes) = header_jpeg(path) {
+            sizes.push(bytes.len());
+        }
+    }
+    sizes.sort_unstable();
+
+    println!("枚数: {}", files.len());
+    println!(
+        "フォールバックへ落ちた: {} 枚（{:.2}%）",
+        failed.len(),
+        failed.len() as f64 * 100.0 / files.len() as f64
+    );
+    for (path, error) in failed.iter().take(10) {
+        println!("  {} — {}", path.display(), error);
+    }
+    if !sizes.is_empty() {
+        println!(
+            "SOI〜SOS: 最小 {} / 中央 {} / 最大 {} バイト",
+            sizes[0],
+            sizes[sizes.len() / 2],
+            sizes[sizes.len() - 1]
+        );
+    }
+}
+
+/// **コーパスのページキャッシュだけを落とす**（絞り込み spec の未検証 4 の下ごしらえ）。
+///
+/// 実機（`make dev`）でフォルダーを開く直前に叩く。`/proc/sys/vm/drop_caches` と違い
+/// **昇格した権限が要らず、開発機の他のキャッシュも巻き添えにしない。**
+///
+/// ```text
+/// PICTURE_TOOL_SPIKE_DIR=/var/tmp/rating-spike \
+///   cargo test -p picture-tool-core --release --test rating_scan_spike \
+///     -- --ignored --nocapture drop_corpus_cache
+/// ```
+#[test]
+#[ignore]
+fn drop_corpus_cache() {
+    let dir = spike_dir();
+    let files = corpus(&dir);
+    assert!(!files.is_empty(), "コーパスが空: {}", dir.display());
+    drop_page_cache(&files);
+    println!("{} 枚のページキャッシュを落とした", files.len());
+}
