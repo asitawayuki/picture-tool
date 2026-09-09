@@ -57,6 +57,7 @@ export const imageEntry: ImageEntry = {
   modified_ms: 1755000000000,
   name: "photo.jpg",
   path: "/home/user/photos/photo.jpg",
+  rating: 3,
   size_bytes: 4500000,
   width: 4000,
 };

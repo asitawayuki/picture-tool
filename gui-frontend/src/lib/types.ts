@@ -25,6 +25,13 @@ export interface ImageEntry {
    * **Linux では取れないファイルシステムがある**（並び順では末尾へ送る）
    */
   created_ms: number | null;
+  /**
+   * ★（1〜5）。null は未評価、または読めなかった。
+   *
+   * **`list_images` が唯一の出所。** 絞り込みにはフォルダー全件が揃っている
+   * 必要があり、可視範囲を起点にする形では原理的に足りない
+   */
+  rating: number | null;
 }
 
 export interface RatingEntry {

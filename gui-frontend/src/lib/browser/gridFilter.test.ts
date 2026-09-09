@@ -26,6 +26,7 @@ function image(
     size_bytes: 4_500_000,
     modified_ms: times.modified ?? null,
     created_ms: times.created ?? null,
+    rating: null,
   };
 }
 
