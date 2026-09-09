@@ -98,6 +98,6 @@
 
   .rating {
     flex: 0 0 auto;
-    width: 140px;
+    width: 166px;
   }
 </style>

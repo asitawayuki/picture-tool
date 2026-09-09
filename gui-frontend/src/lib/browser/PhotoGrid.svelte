@@ -412,6 +412,11 @@
     height: 100%;
     overflow: hidden;
     background: var(--md-sys-color-surface);
+    /* グリッドヘッダーの段組みが参照するコンテナ（GridHeader.svelte の @container）。
+       inline 方向だけを封じるので高さの計算には影響しない。PhotoViewer は
+       この div の外に描いているので、`contain: layout` が position: fixed の
+       包含ブロックになる問題も起きない */
+    container-type: inline-size;
   }
 
   .size {

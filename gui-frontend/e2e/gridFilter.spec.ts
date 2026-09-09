@@ -121,22 +121,6 @@ test.describe("グリッドの絞り込みと並び順", () => {
     await expect(page.getByRole("button", { name: "2 枚を変換" })).toBeVisible();
   });
 
-  test("最小ウィンドウ幅でもヘッダーが横に溢れない", async ({ page }) => {
-    // `gui/tauri.conf.json` の minWidth。ここより狭くはならない。
-    // 検索欄・並び順・サイズスライダー・開閉ハンドルが 1 行に同居するので、
-    // 部品を足すと真っ先に溢れるのがこのヘッダーである
-    await page.setViewportSize({ width: 1100, height: 700 });
-    await gridOf(page).getByRole("option").first().click(); // 「N 枚選択中／全解除」も出す
-
-    const overflow = await page.locator(".grid-header").evaluate((el) => ({
-      scrollWidth: el.scrollWidth,
-      clientWidth: el.clientWidth,
-    }));
-    // 前提: 実際に測れる幅があること（0 同士の比較で通らないように）
-    expect(overflow.clientWidth).toBeGreaterThan(0);
-    expect(overflow.scrollWidth).toBeLessThanOrEqual(overflow.clientWidth);
-  });
-
   test("情報モードの「次へ」は絞り込みの中だけを進む", async ({ page }) => {
     const options = gridOf(page).getByRole("option");
     await options.nth(9).click(); // photo-0009
@@ -300,5 +284,137 @@ test.describe("グリッドの絞り込みと並び順", () => {
     // これは絞り込みが持ち込む欠陥ではなく、保存ボタンの既存の振る舞いである
     await expect(save).toBeDisabled();
     await expect(next).toBeDisabled();
+  });
+});
+
+/**
+ * グループの実幅・自然幅と、**折り返しの無い状態の高さ**を測る。
+ *
+ * クローンに `width: max-content` / `min-content` を当てて測るのは、
+ * **中身が潰れていることは `scrollWidth` に現れない**ため
+ * （`.selected` の縦書きは溢れではなく折り返しなので `scrollWidth === clientWidth`）。
+ *
+ * **高さは「そのグループ自身の 1 行分」と比べる。** `.grid-header` の line-height から
+ * 出した固定値を全グループに当てると、ラベルが枠の上に乗る `TextField` / `Select` を含む
+ * `.filters-area`（1 行でも 58px）が、折り返していないのに落ちる
+ */
+const measureGroup = (page: import("@playwright/test").Page, selector: string, mode: string) =>
+  page.locator(selector).evaluate(
+    (el, sizing) => {
+      const clone = el.cloneNode(true) as HTMLElement;
+      clone.style.width = sizing;
+      clone.style.position = "absolute";
+      clone.style.left = "-99999px";
+      clone.style.top = "0";
+      el.parentElement!.appendChild(clone);
+      const natural = clone.getBoundingClientRect();
+      clone.remove();
+      const rect = el.getBoundingClientRect();
+      return {
+        actual: rect.width,
+        natural: natural.width,
+        height: rect.height,
+        naturalHeight: natural.height,
+      };
+    },
+    mode
+  );
+
+test.describe("グリッドヘッダーの段組み", () => {
+  test.beforeEach(async ({ page }) => {
+    await installTauriStub(page, { imageCount: 20 });
+    await clearStorageOnce(page);
+    await page.goto("/");
+    await page.getByRole("button", { name: "photos", exact: false }).first().click();
+    await expect(gridOf(page).getByRole("option").first()).toBeVisible();
+    // 「N 枚選択中 / 全解除」も出す ── `.selected` の縦書きはここでしか出ない
+    await gridOf(page).getByRole("option").first().click();
+  });
+
+  /**
+   * `.status` と `.tools` は縮んではいけない（中に伸縮する部品が無い）。
+   * `.filters-area` は検索欄が `min-width: 72px` まで縮むことを設計が許しているので、
+   * **幅は「溢れていないか」で見る** ── 縮み切った先は `.sort` / `.rating` が
+   * `flex: 0 0 auto` の固定幅で逃げ場が無く、足りなくなれば必ず溢れる。
+   * クローンに `width: min-content` を当てる測り方はここでは使えない。
+   * `<input>` の min-content は自身の内在サイズ（約 200px）を返し、
+   * `.search` の `min-width` を反映しないので、設計どおり縮んだ状態を「潰れた」と誤判定する
+   */
+  for (const width of [1100, 1600]) {
+    test(`ヘッダー幅 ${width}px で各グループが潰れない`, async ({ page }) => {
+      await page.setViewportSize({ width, height: 800 });
+
+      for (const selector of [".status", ".tools", ".filters-area"] as const) {
+        const m = await measureGroup(page, selector, "max-content");
+        // 前提条件: 実際に測れる幅と高さがある（0 同士の比較で通らないように）
+        expect(m.natural, `${selector} の自然幅`).toBeGreaterThan(0);
+        expect(m.naturalHeight, `${selector} の自然高さ`).toBeGreaterThan(0);
+        // 各グループは折り返さない。`.selected` の縦書きはここで落ちる
+        expect(m.height, `${selector} が 1 行に収まっていない`).toBeLessThanOrEqual(
+          m.naturalHeight + 1
+        );
+      }
+
+      // 縮まない 2 つは max-content のまま出ていること
+      for (const selector of [".status", ".tools"] as const) {
+        const m = await measureGroup(page, selector, "max-content");
+        expect(m.actual, `${selector} が max-content を下回った`).toBeGreaterThanOrEqual(
+          m.natural - 1
+        );
+      }
+
+      // 絞り込み群は溢れていないこと
+      const filters = await page.locator(".filters-area .filters").evaluate((el) => ({
+        scrollWidth: el.scrollWidth,
+        clientWidth: el.clientWidth,
+        search: el.querySelector(".search")!.getBoundingClientRect().width,
+        sort: el.querySelector(".sort")!.getBoundingClientRect().width,
+        rating: el.querySelector(".rating")!.getBoundingClientRect().width,
+      }));
+      // 前提条件: 検索欄が設計の下限（72px）以上で、固定幅の 2 つが縮んでいない
+      // （0 幅同士の比較や、全部潰れた状態で「溢れていない」が成立するのを防ぐ）
+      expect(filters.search, "検索欄が設計の下限を下回った").toBeGreaterThanOrEqual(72);
+      expect(filters.sort, "並び順が固定幅を下回った").toBeGreaterThanOrEqual(104);
+      expect(filters.rating, "★が固定幅を下回った").toBeGreaterThanOrEqual(166);
+      expect(filters.clientWidth, ".filters の実幅").toBeGreaterThan(0);
+      expect(filters.scrollWidth, ".filters-area が溢れた").toBeLessThanOrEqual(
+        filters.clientWidth
+      );
+    });
+  }
+
+  /**
+   * **変換モードでの検査である。** 実効幅は「窓幅 −（rail 80 ＋ 左カラム ＋ 右カラム）」で、
+   * 右カラムの既定は変換 320px / 情報 360px。情報モードは 1600px の窓でも 920px にしかならず、
+   * 1 段に要る幅を下回るので**常に 2 段**になる（許容。設計 §6 の 960px は変換モードの数字）
+   */
+  test("狭いと 2 段・広いと 1 段に切り替わる（変換モード）", async ({ page }) => {
+    /**
+     * **`top` ではなく垂直方向の中心で比べる。** `.grid-header` は `align-items: center` なので、
+     * ラベルの分だけ 18px 高い `.filters-area` は、同じ行にあっても `top` が `.status` と一致しない
+     */
+    const rowOf = (selector: string) =>
+      page.locator(selector).evaluate((el) => {
+        const r = el.getBoundingClientRect();
+        return Math.round(r.top + r.height / 2);
+      });
+
+    await page.setViewportSize({ width: 1100, height: 800 });
+    // 前提条件: 2 段になっている（`.filters-area` が `.status` より下の行にある）
+    expect(await rowOf(".filters-area")).toBeGreaterThan(await rowOf(".status"));
+
+    await page.setViewportSize({ width: 1600, height: 800 });
+    await expect
+      .poll(async () => (await rowOf(".filters-area")) - (await rowOf(".status")))
+      .toBe(0);
+  });
+
+  test("スクリーンショットを残す（px を並べただけでは破綻が見えない）", async ({ page }) => {
+    for (const width of [1100, 1600]) {
+      await page.setViewportSize({ width, height: 800 });
+      await page
+        .locator(".grid-header")
+        .screenshot({ path: `e2e/__screenshots__/grid-header-${width}.png` });
+    }
   });
 });
