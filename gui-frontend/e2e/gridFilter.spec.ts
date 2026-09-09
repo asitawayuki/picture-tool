@@ -1,5 +1,6 @@
 import { expect, test } from "@playwright/test";
 import { clearStorageOnce, installTauriStub } from "./stub";
+import { RATING_PRESETS, type RatingPresetId } from "../src/lib/browser/gridFilter";
 
 /**
  * グリッドの絞り込みと並び順。
@@ -159,6 +160,145 @@ test.describe("グリッドの絞り込みと並び順", () => {
     await expect(options.nth(9)).toHaveAttribute("aria-label", /photo-0009/);
 
     // 全体では photo-0010 が続いているが、画面に無いので送り先にしない
+    await expect(next).toBeDisabled();
+  });
+
+  /**
+   * スタブの `RATING_PATTERN`（`stub.ts`）を 20 枚に当てたときの内訳。
+   * **選択肢のラベルではなく `RATING_PRESETS` を回す** ── 対応表の写しを
+   * ここにもう 1 つ作ると、写し間違えても緑になる
+   */
+  const EXPECTED_COUNTS: Record<RatingPresetId, number> = {
+    all: 20,
+    rated: 12,
+    min2: 10,
+    min3: 8,
+    min4: 5,
+    only5: 3,
+    unrated: 8,
+  };
+
+  test("★の 7 択それぞれでグリッドが絞られ、ヘッダーが分母付きになる", async ({ page }) => {
+    // 前提条件: 絞り込む前は全件で、分母が出ていない
+    await expect(page.getByText("20 枚", { exact: true })).toBeVisible();
+    // 前提条件: スタブが★あり・なしを混ぜている（全部★なし／全部★ありだと
+    // どの選択肢も同じ枚数になり、検査が成立しない）
+    expect(EXPECTED_COUNTS.rated).toBeGreaterThan(0);
+    expect(EXPECTED_COUNTS.unrated).toBeGreaterThan(0);
+
+    const rating = page.getByLabel("評価");
+    for (const preset of RATING_PRESETS) {
+      await rating.selectOption(preset.id);
+      const expected = EXPECTED_COUNTS[preset.id];
+      if (expected === 20) {
+        await expect(page.getByText("20 枚", { exact: true })).toBeVisible();
+      } else {
+        await expect(page.getByText(`${expected} / 20 枚`)).toBeVisible();
+      }
+    }
+  });
+
+  test("★の条件を変えるとスクロールが先頭へ戻る", async ({ page }) => {
+    // 20 枚は viewport 1440x800 に収まってしまい、そもそもスクロールできない。
+    // この検査だけ枚数を増やして貼り直す（★の内訳は見ないので枚数は自由）
+    await installTauriStub(page, { imageCount: 300 });
+    await page.goto("/");
+    await page.getByRole("button", { name: "photos", exact: false }).first().click();
+    await expect(gridOf(page).getByRole("option").first()).toBeVisible();
+
+    const scroller = page.locator(".scroller");
+    await scroller.evaluate((el) => (el.scrollTop = el.scrollHeight));
+    // 前提条件: 実際に下までスクロールできている（0 のままだと自明に成立する）
+    await expect
+      .poll(() => scroller.evaluate((el) => el.scrollTop))
+      .toBeGreaterThan(0);
+
+    await page.getByLabel("評価").selectOption("min4");
+
+    await expect.poll(() => scroller.evaluate((el) => el.scrollTop)).toBe(0);
+  });
+
+  test("★で隠れた選択も枚数が画面に出て、変換対象からは減らない", async ({ page }) => {
+    const options = gridOf(page).getByRole("option");
+    // photo-0000 は未評価（スタブの既定パターン）
+    await options.nth(0).click();
+    await expect(page.getByRole("button", { name: "1 枚を変換" })).toBeVisible();
+    // 前提条件: 絞り込む前は非表示の注記が出ていない
+    await expect(page.getByText("枚は非表示")).toHaveCount(0);
+
+    await page.getByLabel("評価").selectOption("only5");
+
+    // 前提条件: 選んだ 1 枚が実際にグリッドから消えていること
+    await expect(options).toHaveCount(3);
+    await expect(page.getByText("（1 枚は非表示）")).toBeVisible();
+    // **減らない。** 選択は表示と独立している
+    await expect(page.getByRole("button", { name: "1 枚を変換" })).toBeVisible();
+  });
+
+  test("絞り込み中に「保存して次の写真へ」を押すと、その写真は消えるがパネルは次へ送られる", async ({
+    page,
+  }) => {
+    // photo-0001 は★5。「★5」に絞ると 3 枚（index 1, 8, 13）が残る
+    await page.getByLabel("評価").selectOption("only5");
+    const options = gridOf(page).getByRole("option");
+    await expect(options).toHaveCount(3);
+    await options.nth(0).click();
+    await page
+      .getByRole("navigation", { name: "モード" })
+      .getByRole("button", { name: "情報" })
+      .click();
+
+    // canSave を満たす（承認済み ＋ 変更あり）。満たさないままボタンを押しても
+    // 何も起きないので、検査そのものが成立しない
+    await page.getByRole("button", { name: "このフォルダーへの書き込みを許可..." }).click();
+    await page.getByLabel("タイトル").fill("夕暮れの港");
+    // ★を 5 から 3 へ落とす。保存すると「★5」の条件から外れる
+    const rating = page.getByRole("slider", { name: "レーティング" });
+    await rating.focus();
+    await rating.press("ArrowLeft");
+    await rating.press("ArrowLeft");
+
+    await page.getByRole("button", { name: "保存して次の写真へ" }).click();
+
+    // グリッドから消える（3 → 2 枚）
+    await expect(options).toHaveCount(2);
+    // **パネルは次の写真へ送られている** ── 保存前に次を確定しているため
+    // （`App.svelte` の `const next = nextImagePath;`）
+    await expect(page.locator('[data-region="right"]').getByText("photo-0008.jpg")).toBeVisible();
+  });
+
+  test("絞り込み中に「保存」だけを押すと、写真は消えて両方のボタンが無効になる（仕様）", async ({
+    page,
+  }) => {
+    await page.getByLabel("評価").selectOption("only5");
+    const options = gridOf(page).getByRole("option");
+    await expect(options).toHaveCount(3);
+    await options.nth(0).click();
+    await page
+      .getByRole("navigation", { name: "モード" })
+      .getByRole("button", { name: "情報" })
+      .click();
+    await page.getByRole("button", { name: "このフォルダーへの書き込みを許可..." }).click();
+    await page.getByLabel("タイトル").fill("夕暮れの港");
+    const rating = page.getByRole("slider", { name: "レーティング" });
+    await rating.focus();
+    await rating.press("ArrowLeft");
+    await rating.press("ArrowLeft");
+
+    const save = page.getByRole("button", { name: "保存", exact: true });
+    const next = page.getByRole("button", { name: "保存して次の写真へ" });
+    // 前提条件: 押す前はどちらも有効（＝「元から無効」で緑にならないように）
+    await expect(save).toBeEnabled();
+    await expect(next).toBeEnabled();
+
+    await save.click();
+
+    await expect(options).toHaveCount(2);
+    // **「次へが有効であること」を検査してはならない。** 保存に成功すると
+    // `draft.isDirty` が false になり `canSave` が false になるので、
+    // hasNext の値に関係なく両方押せない（設計 §5 / R-16）。
+    // これは絞り込みが持ち込む欠陥ではなく、保存ボタンの既存の振る舞いである
+    await expect(save).toBeDisabled();
     await expect(next).toBeDisabled();
   });
 });

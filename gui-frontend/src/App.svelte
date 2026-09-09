@@ -30,6 +30,7 @@
     ratingFilterOf,
     sortImages,
     type GridSort,
+    type RatingPresetId,
   } from "./lib/browser/gridFilter";
   import { createPresetStore } from "./lib/panels/presets.svelte";
   import { createConvertRun } from "./lib/panels/convertRun.svelte";
@@ -70,6 +71,9 @@
    */
   let searchQuery = $state("");
   let gridSort = $state<GridSort>({ ...DEFAULT_SORT });
+  /** ★の絞り込み。7 択の id を持つ（対応表は `gridFilter.ts`） */
+  let ratingPreset = $state<RatingPresetId>(DEFAULT_RATING_PRESET);
+  let ratingFilter = $derived(ratingFilterOf(ratingPreset));
 
   /**
    * グリッドのスクロール位置。**App が持つ**（spec §3-2）。
@@ -96,10 +100,7 @@
    * 下の `nextImagePath`・★の要求・`PhotoGrid` は同じ配列を index で参照する。
    * 2 箇所で順序を決めると index がずれ、そのまま「別の写真を処理する」になる
    */
-  // ★の絞り込みはまだ既定に固定。利用者が選べるようにするのは次のコミット
-  let visibleImages = $derived(
-    arrangeImages(images, searchQuery, ratingFilterOf(DEFAULT_RATING_PRESET), gridSort)
-  );
+  let visibleImages = $derived(arrangeImages(images, searchQuery, ratingFilter, gridSort));
   /**
    * 変換対象。**絞り込みでは減らさない** ── 選択は表示と独立しているので、
    * 隠れている分も含めて変換する（その枚数はヘッダーに出す）。
@@ -165,11 +166,16 @@
   });
 
   // 絞り込みと並び順が変わったら先頭へ戻す。前のスクロール位置は別の写真を
-  // 指しており、そのままだと「絞り込んだのに何も出ない」（一覧より下に居る）
+  // 指しており、そのままだと「絞り込んだのに何も出ない」（一覧より下に居る）。
+  // ★を足さないと、一覧が短くなったぶん scrollTop がクランプされて末尾が出る
   $effect(() => {
     searchQuery;
     gridSort.key;
     gridSort.desc;
+    // **依存は絞り込み設定そのもの。`visibleImages` に張ってはならない** ──
+    // 保存 → その場で★を書き換え → グリッドから消える、でもスクロールが飛ぶ
+    ratingFilter.min;
+    ratingFilter.includeUnrated;
     untrack(() => {
       gridScrollTop = 0;
     });
@@ -474,7 +480,7 @@
 <!-- 絞り込みと並び順。状態は App が持ち（`visibleImages` の出所）、
      見た目は PhotoGrid → GridHeader へ snippet で降ろす -->
 {#snippet gridFilters()}
-  <GridFilterBar bind:query={searchQuery} sort={gridSort} />
+  <GridFilterBar bind:query={searchQuery} sort={gridSort} bind:ratingPreset />
 {/snippet}
 
 {#snippet collapsedPrimaryAction()}
