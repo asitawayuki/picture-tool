@@ -81,8 +81,10 @@ pub(super) fn read(meta: &Metadata) -> ExifSide {
 /// UCS-2LE（実質 UTF-16LE）＋ NUL 終端を読む
 pub(super) fn from_ucs2le_nul(bytes: &[u8]) -> Option<String> {
     let units: Vec<u16> = bytes
-        .chunks_exact(2)
-        .map(|pair| u16::from_le_bytes([pair[0], pair[1]]))
+        .as_chunks::<2>()
+        .0
+        .iter()
+        .map(|&pair| u16::from_le_bytes(pair))
         .collect();
     let end = units.iter().position(|&u| u == 0).unwrap_or(units.len());
     cleaned(&String::from_utf16(&units[..end]).ok()?)
@@ -96,10 +98,12 @@ pub(super) fn decode_user_comment(bytes: &[u8], endian: &Endian) -> Option<Strin
     let (id, body) = bytes.split_at(8);
     let text = if id == ID_UNICODE {
         let units: Vec<u16> = body
-            .chunks_exact(2)
-            .map(|pair| match endian {
-                Endian::Little => u16::from_le_bytes([pair[0], pair[1]]),
-                Endian::Big => u16::from_be_bytes([pair[0], pair[1]]),
+            .as_chunks::<2>()
+            .0
+            .iter()
+            .map(|&pair| match endian {
+                Endian::Little => u16::from_le_bytes(pair),
+                Endian::Big => u16::from_be_bytes(pair),
             })
             .collect();
         String::from_utf16(&units).ok()?
