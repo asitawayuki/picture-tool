@@ -16,8 +16,8 @@ clap = ["dep:clap"]
 [dependencies]
 image.workspace = true
 ab_glyph = "0.2"
-resvg = "0.37"
-usvg = "0.37"
+resvg = "0.48"
+usvg = "0.48"
 rust-embed = { version = "8", features = ["include-exclude"] }
 dirs = "7"
 rayon.workspace = true
