@@ -19,15 +19,15 @@ ab_glyph = "0.2"
 resvg = "0.37"
 usvg = "0.37"
 rust-embed = { version = "8", features = ["include-exclude"] }
-dirs = "5"
+dirs = "7"
 rayon.workspace = true
 walkdir = "2.5"
 anyhow.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 clap = { workspace = true, optional = true }
-base64 = "0.22"
-kamadak-exif = "0.5"
+base64 = "0.23"
+kamadak-exif = "0.6"
 # メタデータ編集（spec 2026-08-18）。どちらも 1.0 未満で更新頻度が緩やかなため
 # バージョンを固定する。API 破壊的変更とメンテナンス停滞のリスクを見込んでのこと。
 little_exif = "=0.6.23"
@@ -43,4 +43,4 @@ tempfile = "3"
 # **dev-dependency 限定**で、配布物には入らない
 libc = "0.2"
 # 統合テストから base64 のプレビュー出力をデコードして検証するため
-base64 = "0.22"
+base64 = "0.23"
