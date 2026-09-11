@@ -7,14 +7,14 @@
 //! 判定は**接頭辞ではなく名前空間 URI**で行う。`xmp:` `dc:` は慣習であって規約ではなく、
 //! 書き手が別の接頭辞を使っていても同じプロパティである。
 
-use anyhow::{anyhow, bail, Result};
-use img_parts::jpeg::{markers, Jpeg, JpegSegment};
+use anyhow::{Result, anyhow, bail};
 use img_parts::Bytes;
+use img_parts::jpeg::{Jpeg, JpegSegment, markers};
 use quick_xml::events::{BytesStart, BytesText, Event};
 use quick_xml::name::{Namespace, ResolveResult};
 use quick_xml::{NsReader, Writer};
 
-use super::{cleaned, stars_to_percent, without_xml_forbidden_chars, EditableMetadata};
+use super::{EditableMetadata, cleaned, stars_to_percent, without_xml_forbidden_chars};
 
 /// APP1 の XMP パケットに前置きされる識別子（末尾の NUL 込み）
 pub(super) const XMP_ID: &[u8] = b"http://ns.adobe.com/xap/1.0/\0";
@@ -350,7 +350,9 @@ pub(super) fn patch(packet: &str, values: &EditableMetadata) -> Result<String> {
         // 宣言の URI が 1 文字違う・`xmlns:rdf` を書き忘れた、といったパケットでも
         // 起きる。その中の `crs:` などのデータは健在でありうる。
         // 黙って全消しするより、保存を失敗させて元ファイルを無傷で残すほうが一貫している
-        bail!("XMP パケットに書き込み先の rdf:Description が見つかりません（壊れている可能性があります）");
+        bail!(
+            "XMP パケットに書き込み先の rdf:Description が見つかりません（壊れている可能性があります）"
+        );
     }
     Ok(String::from_utf8(writer.into_inner())?)
 }
@@ -643,8 +645,8 @@ mod tests {
     /// 前提条件つきの否定形。XMP を持たない JPEG から取り出そうとしても落ちない
     #[test]
     fn extract_returns_none_when_there_is_no_xmp_segment() {
-        use img_parts::jpeg::Jpeg;
         use img_parts::Bytes;
+        use img_parts::jpeg::Jpeg;
         let bytes = std::fs::read(
             std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
                 .join("tests/fixtures/exif-only.jpg"),
@@ -652,9 +654,10 @@ mod tests {
         .unwrap();
         let jpeg = Jpeg::from_bytes(Bytes::from(bytes)).unwrap();
         // 前提条件: EXIF の APP1 は在る（＝「APP1 が無いから None」ではない）
-        assert!(jpeg
-            .segments_by_marker(img_parts::jpeg::markers::APP1)
-            .any(|s| s.contents().starts_with(b"Exif\0\0")));
+        assert!(
+            jpeg.segments_by_marker(img_parts::jpeg::markers::APP1)
+                .any(|s| s.contents().starts_with(b"Exif\0\0"))
+        );
         assert_eq!(extract(&jpeg), None);
     }
     use crate::metadata::EditableMetadata;
@@ -958,8 +961,8 @@ mod tests {
     /// **push すると EOI の後ろに置かれ、再パース時に消える**（spec の落とし穴）
     #[test]
     fn install_puts_the_packet_before_the_scan() {
-        use img_parts::jpeg::Jpeg;
         use img_parts::Bytes;
+        use img_parts::jpeg::Jpeg;
         let bytes = std::fs::read(
             std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
                 .join("tests/fixtures/exif-only.jpg"),
@@ -984,8 +987,8 @@ mod tests {
     /// 2 回書いてもセグメントが増えない
     #[test]
     fn install_replaces_the_existing_packet_instead_of_adding_one() {
-        use img_parts::jpeg::{markers, Jpeg};
         use img_parts::Bytes;
+        use img_parts::jpeg::{Jpeg, markers};
         let bytes = std::fs::read(
             std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
                 .join("tests/fixtures/lightroom-xmp.jpg"),
@@ -1064,14 +1067,16 @@ mod tests {
         // 前提条件: 消えては困るデータが実際に入っていること
         assert!(packet.contains("crs:Exposure2012"));
 
-        assert!(patch(
-            packet,
-            &EditableMetadata {
-                rating: Some(3),
-                ..Default::default()
-            }
-        )
-        .is_err());
+        assert!(
+            patch(
+                packet,
+                &EditableMetadata {
+                    rating: Some(3),
+                    ..Default::default()
+                }
+            )
+            .is_err()
+        );
     }
 
     /// 中身が空のときだけは作り直してよい（失うものが無い）

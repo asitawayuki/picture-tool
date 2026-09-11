@@ -229,8 +229,8 @@ fn a_real_photo_survives_two_write_cycles() {
     println!("サムネイル本体一致: {}", baseline_thumbnail.is_some());
 }
 
-use img_parts::jpeg::{markers, Jpeg};
 use img_parts::Bytes;
+use img_parts::jpeg::{Jpeg, markers};
 
 fn fixture_path(name: &str) -> std::path::PathBuf {
     std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))

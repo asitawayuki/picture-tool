@@ -108,8 +108,8 @@ pub(crate) fn percent_to_stars(percent: u16) -> Option<u8> {
 }
 
 use anyhow::{Context, Result};
-use img_parts::jpeg::Jpeg;
 use img_parts::Bytes;
+use img_parts::jpeg::Jpeg;
 use little_exif::filetype::FileExtension;
 use little_exif::metadata::Metadata;
 use std::path::Path;
@@ -400,7 +400,7 @@ fn build(original: &[u8], values: &EditableMetadata) -> Result<Vec<u8>> {
             return Err(anyhow::anyhow!(
                 "既存の Exif を解析できないため書き込みを中止しました: {}",
                 error
-            ))
+            ));
         }
         // Exif をそもそも持たない画像。新しく作ってよい
         Err(_) => Metadata::new(),

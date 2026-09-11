@@ -42,8 +42,8 @@ use serde::{Deserialize, Serialize};
 use std::fs::{self, File};
 use std::io::{BufWriter, Write};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use walkdir::WalkDir;
 
 // --- 型定義 ---
@@ -153,7 +153,7 @@ pub fn read_exif_info(path: &Path) -> Result<ExifInfo> {
         Ok(f) => f,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(ExifInfo::default()),
         Err(e) => {
-            return Err(e).with_context(|| format!("Failed to open for EXIF: {}", path.display()))
+            return Err(e).with_context(|| format!("Failed to open for EXIF: {}", path.display()));
         }
     };
     let mut bufreader = std::io::BufReader::new(file);
@@ -713,7 +713,7 @@ fn write_new_output_file(input_path: &Path, output_folder: &Path, bytes: &[u8]) 
             Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => counter += 1,
             Err(e) => {
                 return Err(e)
-                    .with_context(|| format!("Failed to create file: {}", candidate.display()))
+                    .with_context(|| format!("Failed to create file: {}", candidate.display()));
             }
         }
     }

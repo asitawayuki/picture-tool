@@ -1,4 +1,4 @@
-use anyhow::{anyhow, Context, Result};
+use anyhow::{Context, Result, anyhow};
 use rust_embed::Embed;
 use serde::Deserialize;
 use std::collections::HashMap;
@@ -215,9 +215,11 @@ mod tests {
 
     #[test]
     fn lens_brand_match_non_gm() {
-        assert!(bundled()
-            .lens_brand_logo("FE 70-200mm f/4 OSS II")
-            .is_none());
+        assert!(
+            bundled()
+                .lens_brand_logo("FE 70-200mm f/4 OSS II")
+                .is_none()
+        );
     }
 
     #[test]

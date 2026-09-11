@@ -16,7 +16,7 @@
 //! 長さ 0 または途中までしか書かれていない内容で元写真が置き換わりうる。
 
 use super::EditableMetadata;
-use anyhow::{anyhow, bail, Context, Result};
+use anyhow::{Context, Result, anyhow, bail};
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -204,8 +204,8 @@ fn verify(temp: &Path, original: &Path, expected: &EditableMetadata) -> Result<(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use img_parts::jpeg::Jpeg;
     use img_parts::Bytes;
+    use img_parts::jpeg::Jpeg;
     use little_exif::filetype::FileExtension;
     use little_exif::metadata::Metadata;
 

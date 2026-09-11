@@ -1,4 +1,4 @@
-use ab_glyph::{point, Font, FontArc, Glyph, PxScale, ScaleFont};
+use ab_glyph::{Font, FontArc, Glyph, PxScale, ScaleFont, point};
 use anyhow::{Context, Result};
 use image::{Rgba, RgbaImage};
 #[cfg(feature = "bundled-font")]

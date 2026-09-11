@@ -30,7 +30,7 @@ use std::os::unix::io::AsRawFd;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
-use picture_tool_core::metadata::{read_metadata, read_metadata_bytes, EditableMetadata};
+use picture_tool_core::metadata::{EditableMetadata, read_metadata, read_metadata_bytes};
 use rayon::prelude::*;
 
 // --- 測る対象 ---------------------------------------------------------------
