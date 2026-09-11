@@ -134,10 +134,10 @@ pub fn resolve_and_load_logo(
     crate::model_map::validate_asset_filename(base_name).ok()?;
 
     // 1. ユーザーディレクトリから検索
-    if let Some(path) = resolve_logo_file(user_dir, base_name, use_light) {
-        if let Ok(img) = load_logo_file(&path, target_size) {
-            return Some(img);
-        }
+    if let Some(path) = resolve_logo_file(user_dir, base_name, use_light)
+        && let Ok(img) = load_logo_file(&path, target_size)
+    {
+        return Some(img);
     }
 
     // 2. バンドルロゴからフォールバック

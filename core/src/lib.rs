@@ -286,10 +286,10 @@ pub fn validate_config(config: &ProcessingConfig) -> Result<()> {
     }
     // 上限そのものが壊れていると `k * 5` が u32 で溢れる。
     // 20000 は 20000x25000 の RGBA キャンバス（約 2GB）というメモリ側の線。
-    if let Some(max_width) = config.max_width {
-        if !(4..=20000).contains(&max_width) {
-            anyhow::bail!("max_width must be between 4 and 20000");
-        }
+    if let Some(max_width) = config.max_width
+        && !(4..=20000).contains(&max_width)
+    {
+        anyhow::bail!("max_width must be between 4 and 20000");
     }
     Ok(())
 }
@@ -438,14 +438,14 @@ pub fn process_image(
     }
 
     // 成功時のみ元ファイルを削除
-    if config.delete_originals {
-        if let Err(e) = fs::remove_file(input_path) {
-            warnings.push(format!(
-                "Failed to delete original file {}: {}",
-                input_path.display(),
-                e
-            ));
-        }
+    if config.delete_originals
+        && let Err(e) = fs::remove_file(input_path)
+    {
+        warnings.push(format!(
+            "Failed to delete original file {}: {}",
+            input_path.display(),
+            e
+        ));
     }
 
     Ok(ProcessResult {
@@ -492,10 +492,10 @@ pub fn process_batch(
             let result = process_image(path, output_folder, config, exif_frame_config, assets);
 
             let current = processed_count.fetch_add(1, Ordering::SeqCst) + 1;
-            if let Some(ref cb) = on_progress {
-                if !cb(current, total) {
-                    cancelled.store(true, Ordering::Relaxed);
-                }
+            if let Some(ref cb) = on_progress
+                && !cb(current, total)
+            {
+                cancelled.store(true, Ordering::Relaxed);
             }
 
             result

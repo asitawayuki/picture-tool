@@ -190,10 +190,10 @@ mod platform {
         }
         // **型を確かめてから開く。** `as_variant()` は `v` 以外を渡すと
         // GLib の critical を出す（実測。`G_DEBUG=fatal-criticals` では落ちる）
-        if value.is::<Variant>() {
-            if let Some(inner) = value.as_variant() {
-                return dark_from_variant(&inner);
-            }
+        if value.is::<Variant>()
+            && let Some(inner) = value.as_variant()
+        {
+            return dark_from_variant(&inner);
         }
         if value.type_().is_tuple() {
             return (0..value.n_children()).find_map(|i| dark_from_variant(&value.child_value(i)));
