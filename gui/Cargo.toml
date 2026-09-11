@@ -24,7 +24,7 @@ gio = "0.18"
 [dev-dependencies]
 tempfile = "3"
 # パス検証のテストで「中身も本物の画像」を用意するためだけに使う（バイナリには入らない）
-image = "0.24"
+image.workspace = true
 
 [build-dependencies]
 tauri-build = { version = "2", features = [] }

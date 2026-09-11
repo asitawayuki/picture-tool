@@ -780,7 +780,7 @@ fn encode_jpeg_rgb(rgb_img: &image::RgbImage, quality: u8) -> Result<Vec<u8>> {
             rgb_img.as_raw(),
             rgb_img.width(),
             rgb_img.height(),
-            image::ColorType::Rgb8,
+            image::ExtendedColorType::Rgb8,
         )
         .context("Failed to encode JPEG")?;
     Ok(bytes)
@@ -836,10 +836,9 @@ mod tests {
             Rgb([(x % 256) as u8, (y % 256) as u8, ((x + y) % 256) as u8])
         });
         let mut jpeg = Vec::new();
-        img.write_to(
-            &mut std::io::Cursor::new(&mut jpeg),
-            image::ImageOutputFormat::Jpeg(90),
-        )
+        img.write_with_encoder(image::codecs::jpeg::JpegEncoder::new_with_quality(
+            &mut jpeg, 90,
+        ))
         .unwrap();
 
         let mut app1 = Vec::new();

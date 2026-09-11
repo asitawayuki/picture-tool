@@ -243,11 +243,13 @@ fn tiny_jpeg() -> Vec<u8> {
     let img = image::RgbImage::from_fn(64, 80, |x, y| {
         image::Rgb([(x * 4) as u8, (y * 3) as u8, 128])
     });
-    let mut buffer = std::io::Cursor::new(Vec::new());
-    image::DynamicImage::ImageRgb8(img)
-        .write_to(&mut buffer, image::ImageOutputFormat::Jpeg(92))
-        .unwrap();
-    buffer.into_inner()
+    let mut buffer = Vec::new();
+    img.write_with_encoder(image::codecs::jpeg::JpegEncoder::new_with_quality(
+        &mut buffer,
+        92,
+    ))
+    .unwrap();
+    buffer
 }
 
 #[test]
