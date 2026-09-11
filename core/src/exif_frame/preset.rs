@@ -20,12 +20,11 @@ pub fn load_user_presets(presets_dir: &Path) -> Vec<ExifFrameConfig> {
     if let Ok(entries) = fs::read_dir(presets_dir) {
         for entry in entries.flatten() {
             let path = entry.path();
-            if path.extension().is_some_and(|e| e == "json") {
-                if let Ok(data) = fs::read_to_string(&path) {
-                    if let Ok(config) = serde_json::from_str::<ExifFrameConfig>(&data) {
-                        presets.push(config);
-                    }
-                }
+            if path.extension().is_some_and(|e| e == "json")
+                && let Ok(data) = fs::read_to_string(&path)
+                && let Ok(config) = serde_json::from_str::<ExifFrameConfig>(&data)
+            {
+                presets.push(config);
             }
         }
     }

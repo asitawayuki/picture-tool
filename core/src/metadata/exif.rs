@@ -11,7 +11,7 @@ use little_exif::exif_tag::ExifTag;
 use little_exif::ifd::ExifTagGroup;
 use little_exif::metadata::Metadata;
 
-use crate::metadata::{cleaned, stars_to_percent, without_xml_forbidden_chars, EditableMetadata};
+use crate::metadata::{EditableMetadata, cleaned, stars_to_percent, without_xml_forbidden_chars};
 
 /// IFD0 に置くタグ。`little_exif` に専用の enum バリアントが無いので生の ID で扱う
 pub(super) const XP_TITLE: u16 = 0x9c9b;

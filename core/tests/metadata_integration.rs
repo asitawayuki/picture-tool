@@ -3,7 +3,7 @@
 //! 合成画像だけでは spec の「未検証リスク」を踏み抜く。**実写真由来の Exif** と、
 //! **他名前空間を含む実物の XMP パケット**に対して検査する。
 
-use picture_tool_core::metadata::{read_metadata, write_metadata, EditableMetadata};
+use picture_tool_core::metadata::{EditableMetadata, read_metadata, write_metadata};
 use std::path::{Path, PathBuf};
 
 fn scratch(name: &str) -> (tempfile::TempDir, PathBuf) {
@@ -300,14 +300,16 @@ fn a_failed_write_leaves_the_original_untouched() {
     std::fs::write(&path, [0xFF, 0xD8, 0xFF, 0xE0, 0x00, 0x04, 0x11, 0x22]).unwrap();
     let before = std::fs::read(&path).unwrap();
 
-    assert!(write_metadata(
-        &path,
-        &EditableMetadata {
-            rating: Some(3),
-            ..Default::default()
-        }
-    )
-    .is_err());
+    assert!(
+        write_metadata(
+            &path,
+            &EditableMetadata {
+                rating: Some(3),
+                ..Default::default()
+            }
+        )
+        .is_err()
+    );
     assert_eq!(std::fs::read(&path).unwrap(), before);
 }
 

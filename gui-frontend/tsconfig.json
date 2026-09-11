@@ -7,7 +7,10 @@
     "resolveJsonModule": true,
     "isolatedModules": true,
     "esModuleInterop": true,
-    "skipLibCheck": true
+    "skipLibCheck": true,
+    // TypeScript 6 から types の既定が [] になり @types/* を自動で読まなくなった。
+    // bun:test・Bun・process（@types/bun 経由の @types/node）の型はこれで入る
+    "types": ["bun"]
   },
   "include": [
     "src/**/*.ts",

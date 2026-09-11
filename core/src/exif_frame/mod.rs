@@ -146,26 +146,26 @@ impl ExifAssets {
         let mut model_map = crate::model_map::ModelMap::load_bundled()?;
         let mut warnings = Vec::new();
 
-        if let Some(ref custom_path) = dirs.user_model_map {
-            if custom_path.exists() {
-                // カスタムマップが壊れていても描画自体は続行するが、
-                // 「書いたのに効いていない」に気づけるよう必ず警告を残す。
-                match std::fs::read_to_string(custom_path) {
-                    Ok(json_str) => {
-                        if let Err(e) = model_map.merge_custom(&json_str) {
-                            warnings.push(format!(
-                                "Ignoring custom model map {}: {:#}",
-                                custom_path.display(),
-                                e
-                            ));
-                        }
+        if let Some(ref custom_path) = dirs.user_model_map
+            && custom_path.exists()
+        {
+            // カスタムマップが壊れていても描画自体は続行するが、
+            // 「書いたのに効いていない」に気づけるよう必ず警告を残す。
+            match std::fs::read_to_string(custom_path) {
+                Ok(json_str) => {
+                    if let Err(e) = model_map.merge_custom(&json_str) {
+                        warnings.push(format!(
+                            "Ignoring custom model map {}: {:#}",
+                            custom_path.display(),
+                            e
+                        ));
                     }
-                    Err(e) => warnings.push(format!(
-                        "Failed to read custom model map {}: {}",
-                        custom_path.display(),
-                        e
-                    )),
                 }
+                Err(e) => warnings.push(format!(
+                    "Failed to read custom model map {}: {}",
+                    custom_path.display(),
+                    e
+                )),
             }
         }
 
@@ -529,45 +529,45 @@ fn overlay_lens_logo(
 
 fn build_primary_text(exif: &crate::ExifInfo, items: &DisplayItems) -> String {
     let mut parts = Vec::new();
-    if items.camera_model {
-        if let Some(ref model) = exif.camera_model {
-            parts.push(model.clone());
-        }
+    if items.camera_model
+        && let Some(ref model) = exif.camera_model
+    {
+        parts.push(model.clone());
     }
-    if items.lens_model {
-        if let Some(ref lens) = exif.lens_model {
-            parts.push(lens.clone());
-        }
+    if items.lens_model
+        && let Some(ref lens) = exif.lens_model
+    {
+        parts.push(lens.clone());
     }
     parts.join(" | ")
 }
 
 fn build_secondary_text(exif: &crate::ExifInfo, items: &DisplayItems, custom_text: &str) -> String {
     let mut parts = Vec::new();
-    if items.focal_length {
-        if let Some(ref v) = exif.focal_length {
-            parts.push(v.clone());
-        }
+    if items.focal_length
+        && let Some(ref v) = exif.focal_length
+    {
+        parts.push(v.clone());
     }
-    if items.f_number {
-        if let Some(ref v) = exif.f_number {
-            parts.push(v.clone());
-        }
+    if items.f_number
+        && let Some(ref v) = exif.f_number
+    {
+        parts.push(v.clone());
     }
-    if items.shutter_speed {
-        if let Some(ref v) = exif.shutter_speed {
-            parts.push(v.clone());
-        }
+    if items.shutter_speed
+        && let Some(ref v) = exif.shutter_speed
+    {
+        parts.push(v.clone());
     }
-    if items.iso {
-        if let Some(v) = exif.iso {
-            parts.push(format!("ISO {}", v));
-        }
+    if items.iso
+        && let Some(v) = exif.iso
+    {
+        parts.push(format!("ISO {}", v));
     }
-    if items.date_taken {
-        if let Some(ref v) = exif.date_taken {
-            parts.push(v.clone());
-        }
+    if items.date_taken
+        && let Some(ref v) = exif.date_taken
+    {
+        parts.push(v.clone());
     }
     if items.custom_text && !custom_text.is_empty() {
         parts.push(custom_text.to_string());

@@ -42,8 +42,8 @@ use serde::{Deserialize, Serialize};
 use std::fs::{self, File};
 use std::io::{BufWriter, Write};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use walkdir::WalkDir;
 
 // --- 型定義 ---
@@ -153,7 +153,7 @@ pub fn read_exif_info(path: &Path) -> Result<ExifInfo> {
         Ok(f) => f,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(ExifInfo::default()),
         Err(e) => {
-            return Err(e).with_context(|| format!("Failed to open for EXIF: {}", path.display()))
+            return Err(e).with_context(|| format!("Failed to open for EXIF: {}", path.display()));
         }
     };
     let mut bufreader = std::io::BufReader::new(file);
@@ -286,10 +286,10 @@ pub fn validate_config(config: &ProcessingConfig) -> Result<()> {
     }
     // 上限そのものが壊れていると `k * 5` が u32 で溢れる。
     // 20000 は 20000x25000 の RGBA キャンバス（約 2GB）というメモリ側の線。
-    if let Some(max_width) = config.max_width {
-        if !(4..=20000).contains(&max_width) {
-            anyhow::bail!("max_width must be between 4 and 20000");
-        }
+    if let Some(max_width) = config.max_width
+        && !(4..=20000).contains(&max_width)
+    {
+        anyhow::bail!("max_width must be between 4 and 20000");
     }
     Ok(())
 }
@@ -438,14 +438,14 @@ pub fn process_image(
     }
 
     // 成功時のみ元ファイルを削除
-    if config.delete_originals {
-        if let Err(e) = fs::remove_file(input_path) {
-            warnings.push(format!(
-                "Failed to delete original file {}: {}",
-                input_path.display(),
-                e
-            ));
-        }
+    if config.delete_originals
+        && let Err(e) = fs::remove_file(input_path)
+    {
+        warnings.push(format!(
+            "Failed to delete original file {}: {}",
+            input_path.display(),
+            e
+        ));
     }
 
     Ok(ProcessResult {
@@ -492,10 +492,10 @@ pub fn process_batch(
             let result = process_image(path, output_folder, config, exif_frame_config, assets);
 
             let current = processed_count.fetch_add(1, Ordering::SeqCst) + 1;
-            if let Some(ref cb) = on_progress {
-                if !cb(current, total) {
-                    cancelled.store(true, Ordering::Relaxed);
-                }
+            if let Some(ref cb) = on_progress
+                && !cb(current, total)
+            {
+                cancelled.store(true, Ordering::Relaxed);
             }
 
             result
@@ -713,7 +713,7 @@ fn write_new_output_file(input_path: &Path, output_folder: &Path, bytes: &[u8]) 
             Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => counter += 1,
             Err(e) => {
                 return Err(e)
-                    .with_context(|| format!("Failed to create file: {}", candidate.display()))
+                    .with_context(|| format!("Failed to create file: {}", candidate.display()));
             }
         }
     }
@@ -780,7 +780,7 @@ fn encode_jpeg_rgb(rgb_img: &image::RgbImage, quality: u8) -> Result<Vec<u8>> {
             rgb_img.as_raw(),
             rgb_img.width(),
             rgb_img.height(),
-            image::ColorType::Rgb8,
+            image::ExtendedColorType::Rgb8,
         )
         .context("Failed to encode JPEG")?;
     Ok(bytes)
@@ -836,10 +836,9 @@ mod tests {
             Rgb([(x % 256) as u8, (y % 256) as u8, ((x + y) % 256) as u8])
         });
         let mut jpeg = Vec::new();
-        img.write_to(
-            &mut std::io::Cursor::new(&mut jpeg),
-            image::ImageOutputFormat::Jpeg(90),
-        )
+        img.write_with_encoder(image::codecs::jpeg::JpegEncoder::new_with_quality(
+            &mut jpeg, 90,
+        ))
         .unwrap();
 
         let mut app1 = Vec::new();

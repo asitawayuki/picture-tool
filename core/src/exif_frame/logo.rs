@@ -2,7 +2,6 @@ use anyhow::{Context, Result};
 use image::DynamicImage;
 use rust_embed::Embed;
 use std::path::{Path, PathBuf};
-use usvg::TreeParsing;
 
 /// バンドルロゴのみを埋め込む
 #[derive(Embed)]
@@ -52,10 +51,9 @@ fn load_svg(path: &Path, target_size: u32) -> Result<DynamicImage> {
 
 fn load_svg_from_bytes(svg_data: &[u8], target_size: u32) -> Result<DynamicImage> {
     let options = usvg::Options::default();
-    let utree = usvg::Tree::from_data(svg_data, &options)?;
-    let rtree = resvg::Tree::from_usvg(&utree);
+    let tree = usvg::Tree::from_data(svg_data, &options)?;
 
-    let orig_size = rtree.size;
+    let orig_size = tree.size();
     let orig_w = orig_size.width();
     let orig_h = orig_size.height();
     // 幅・高さが0のSVGだとスケールが NaN / Inf になり、そのまま as u32 で
@@ -74,7 +72,7 @@ fn load_svg_from_bytes(svg_data: &[u8], target_size: u32) -> Result<DynamicImage
         .context("failed to create pixmap")?;
     let (width, height) = (width.max(1), height.max(1));
     let transform = resvg::tiny_skia::Transform::from_scale(scale, scale);
-    rtree.render(transform, &mut pixmap.as_mut());
+    resvg::render(&tree, transform, &mut pixmap.as_mut());
 
     let rgba = image::RgbaImage::from_raw(width, height, pixmap.data().to_vec())
         .context("failed to create image from pixmap")?;
@@ -136,10 +134,10 @@ pub fn resolve_and_load_logo(
     crate::model_map::validate_asset_filename(base_name).ok()?;
 
     // 1. ユーザーディレクトリから検索
-    if let Some(path) = resolve_logo_file(user_dir, base_name, use_light) {
-        if let Ok(img) = load_logo_file(&path, target_size) {
-            return Some(img);
-        }
+    if let Some(path) = resolve_logo_file(user_dir, base_name, use_light)
+        && let Ok(img) = load_logo_file(&path, target_size)
+    {
+        return Some(img);
     }
 
     // 2. バンドルロゴからフォールバック

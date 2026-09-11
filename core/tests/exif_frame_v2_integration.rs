@@ -367,14 +367,16 @@ fn exif_frame_preview_rejects_an_unreadable_file() {
     let path = tmp.path().join("broken.jpg");
     std::fs::write(&path, b"not a JPEG").unwrap();
 
-    assert!(generate_exif_frame_preview_base64(
-        &path,
-        &ExifFrameConfig::default(),
-        &BackgroundColor::White,
-        &default_assets(),
-        400,
-    )
-    .is_err());
+    assert!(
+        generate_exif_frame_preview_base64(
+            &path,
+            &ExifFrameConfig::default(),
+            &BackgroundColor::White,
+            &default_assets(),
+            400,
+        )
+        .is_err()
+    );
 }
 
 // =========================================================

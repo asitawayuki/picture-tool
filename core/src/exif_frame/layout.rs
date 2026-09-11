@@ -1,7 +1,7 @@
 // Pad+Exif統合レイアウト計算
 
-use crate::exif_frame::{ExifFrameConfig, ExifPosition};
 use crate::BackgroundColor;
+use crate::exif_frame::{ExifFrameConfig, ExifPosition};
 
 /// Exifバーの配置方向（内部表現）
 #[derive(Debug, Clone, Copy, PartialEq)]

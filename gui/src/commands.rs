@@ -5,8 +5,8 @@ use picture_tool_core as core;
 use picture_tool_core::exif_frame::{self, AssetDirs, ExifFrameConfig, FontInfo};
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use tauri::{Emitter, Manager};
 use tauri_plugin_dialog::{DialogExt, MessageDialogButtons, MessageDialogKind};
 use tauri_plugin_store::StoreExt;
@@ -257,10 +257,10 @@ pub async fn pick_output_folder(
         .set_title("出力先フォルダーを選択");
 
     // 既定位置はあくまで初期表示。ここが許可されるわけではない。
-    if let Some(ref raw) = default_path {
-        if let Ok(dir) = security::existing_dir(raw) {
-            builder = builder.set_directory(dir);
-        }
+    if let Some(ref raw) = default_path
+        && let Ok(dir) = security::existing_dir(raw)
+    {
+        builder = builder.set_directory(dir);
     }
 
     let Some(picked) = builder.blocking_pick_folder() else {
@@ -487,10 +487,9 @@ fn progress_callback(
                 total,
                 file_name,
             },
-        ) {
-            if !emit_failure_logged.swap(true, Ordering::Relaxed) {
-                eprintln!("Failed to emit processing-progress: {}", e);
-            }
+        ) && !emit_failure_logged.swap(true, Ordering::Relaxed)
+        {
+            eprintln!("Failed to emit processing-progress: {}", e);
         }
 
         !cancel_flag.load(Ordering::Relaxed)
