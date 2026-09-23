@@ -29,6 +29,25 @@ cargo tree --duplicates 2>&1
 if command -v cargo-audit >/dev/null; then cargo audit; else echo "cargo-audit not installed"; fi
 ```
 
+## Locating code (this repo)
+
+Only when a `.codegraph/` directory exists at the repo root. To pull the context around a
+changed symbol — its callers, or one part of a large file — prefer
+
+```bash
+codegraph sync && codegraph explore "<symbol name or file path>"
+```
+
+over grep + Read: this repo has 1000-2000 line files, and one call returns verbatim,
+line-numbered source plus the callers. Constraints, measured here:
+
+- Query by **symbol name or file path**. Feature descriptions (especially Japanese ones)
+  return nothing.
+- If it prints `No relevant code found`, fall back to grep. Do not rephrase and retry.
+- It does **not** follow the Tauri `invoke("...")` boundary between TypeScript and Rust, and
+  will list unrelated same-named symbols as if they were related. Trace that boundary by
+  grepping the command name instead.
+
 ## Resolution Workflow
 
 ```text

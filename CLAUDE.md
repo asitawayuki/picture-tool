@@ -43,6 +43,14 @@ make check   # CI と同等（lint / cargo test / typecheck / bun test）。変�
   境界（CLI は stderr、GUI は `gui/src/commands.rs`）が決める → `core/src/lib.rs` 冒頭
 - **Svelte 5 の runes 構文（`$state` / `$derived` / `$effect`）を使う。** 旧構文は使わない
 
+## コードを探すとき
+
+- **Rust ⇄ TS の `invoke` 境界は codegraph でも LSP でも追えない。**
+  `renderExifFramePreview` から `invoke("render_exif_frame_preview")` の先へは繋がらず、
+  名前が似ただけの無関係なシンボルを「関連」として挙げる。この境界はコマンド名の grep で追う
+  → `gui-frontend/src/lib/dto.contract.ts` 冒頭
+- サブエージェントに調査を投げるときは、上の制約をプロンプトに直接書く
+
 ## どこに何が書いてあるか
 
 | 知りたいこと | 読む場所 |
