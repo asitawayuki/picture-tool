@@ -10,6 +10,7 @@
 
 | ドキュメント | 内容 |
 |---|---|
+| [specs/2026-09-29-metadata-write-verification-design.md](superpowers/specs/2026-09-29-metadata-write-verification-design.md) | **メタデータ書き込みの検証強化**。保存時に編集対象 5 タグ以外の Exif・サムネイル・他セグメントが消えた／変わったら置き換えずに失敗させる。`little_exif` の書き込みが何を変えるかの実測値を持つ |
 | [specs/2026-09-08-grid-filtering-design.md](superpowers/specs/2026-09-08-grid-filtering-design.md) | **写真グリッドの絞り込み**（現行）。ファイル名検索・並び替え（Phase 1）と★レーティング絞り込み（Phase 2）。**一覧に何を出すかを決める規則**と、フォルダー全件の★を得る軽量読み取り経路。走査コストの実測値と、その計測の罠を持つ |
 | [specs/2026-08-19-gui-redesign-design.md](superpowers/specs/2026-08-19-gui-redesign-design.md) | **GUI デザイン刷新**（現行）。Material 3 系のトークン層 ＋ プリミティブ 11 個、navigation rail による 3 モード構成、写真グリッドの仮想スクロール化。3 カラム構成の出典はこちらへ移った |
 | [specs/2026-08-18-metadata-editing-design.md](superpowers/specs/2026-08-18-metadata-editing-design.md) | **メタデータ編集**（タイトル・コメント・レーティング）。元写真の JPEG に Windows / MWG 系の両方から読める形で書き込む。**レイアウトの出典は GUI デザイン刷新 spec**（本 spec は書き込むタグの仕様・信頼境界・読み取りの優先順位を持つ） |
