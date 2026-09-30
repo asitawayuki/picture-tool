@@ -23,6 +23,7 @@
 
 | ドキュメント | 内容 |
 |---|---|
+| [plans/2026-09-30-metadata-write-verification.md](superpowers/plans/2026-09-30-metadata-write-verification.md) | **メタデータ書き込みの検証強化**の実装計画（全 8 タスク）。spec を実装者の目で読んで決めたこと（A-1〜A-7）・比較規則での 3 枚の再実測・検査を 1 つずつ外したときに落ちるテストの対応表 |
 | [plans/2026-09-09-grid-rating-filter.md](superpowers/plans/2026-09-09-grid-rating-filter.md) | **★レーティング絞り込み**（Phase 2）の実装計画（全 8 タスク）と実施メモ。軽量読み取り経路のフォールバック率・`list_images` の並列化の実機確認・★の `<select>` の実幅とヘッダーの段の閾値・コンテナクエリが WebKitGTK で効いたか |
 | [plans/2026-08-26-metadata-editing.md](superpowers/plans/2026-08-26-metadata-editing.md) | **メタデータ編集**の実装計画（全 18 タスク）と実施メモ。round-trip 実測・既存 XMP 保持・終了時未保存ガードの実機確認・spec と食い違った点 |
 | [plans/2026-08-19-gui-redesign.md](superpowers/plans/2026-08-19-gui-redesign.md) | **GUI デザイン刷新**の実装計画（全 18 タスク）と実施メモ。トークン層・プリミティブ・仮想スクロール・LRU 上限の実測と、spec と食い違った点 |

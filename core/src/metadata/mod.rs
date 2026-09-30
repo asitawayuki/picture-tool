@@ -12,6 +12,9 @@
 mod atomic;
 mod exif;
 mod header;
+// Task 6 で atomic::verify から呼ぶまでの仮置き。Task 6 で外す
+#[allow(dead_code)]
+mod preserve;
 mod xmp;
 
 /// 読めた文字列を正規形に寄せる。**前後の空白（と NUL）は落とし、trim 後が空なら `None`。**
