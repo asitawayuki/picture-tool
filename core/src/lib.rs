@@ -22,8 +22,9 @@
 //!   画像ごとに作るとモデルマップを毎回読み直す。
 //! - **このクレートは `eprintln!` しない。** 利用者に伝えるべき事象は
 //!   [`ProcessResult::warnings`] や `ExifFrameOutput::warnings` /
-//!   `ExifFramePreview::warnings` に積んで呼び出し元へ返す。出すか捨てるかは
-//!   境界（CLI は stderr、GUI は `gui/src/commands.rs`）が決める。
+//!   `ExifFramePreview::warnings`、[`metadata::write_metadata`] の戻り値に積んで
+//!   呼び出し元へ返す。出すか捨てるかは境界（CLI は stderr、GUI は
+//!   `gui/src/commands.rs`）が決める。
 //! - **変換は元の画像ファイルを上書きしない。** 削除は `delete_originals` を
 //!   立てたときだけ。唯一の例外が [`metadata::write_metadata`] で、これは
 //!   元ファイルのメタデータセグメントのみを差し替える（画素は再エンコード

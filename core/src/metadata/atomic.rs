@@ -3,7 +3,8 @@
 //! 1. 同一ディレクトリに一時ファイルとして書き、`sync_all()` でディスクへ永続化する
 //!    （同じファイルシステム上にいる必要があるのは、後段の `rename` が原子的であるため）
 //! 2. **読み戻して検証する** ── 書いた値が正しく読めるか、EXIF 側と XMP 側が食い違って
-//!    いないか、既存 Exif が壊れていないか、画素が 1 バイトも変わっていないか
+//!    いないか、編集対象以外のメタデータ（Exif・サムネイル・他のセグメント）が失われて
+//!    いないか（`preserve`）、画素が 1 バイトも変わっていないか
 //! 3. 検証を通ったときだけ `rename` で置き換える
 //!
 //! 手順 2 を挟むのは、書いた結果が壊れていた場合に元ファイルを置き換えないため。
@@ -79,13 +80,13 @@ fn temp_path(dir: &Path, name: &str) -> PathBuf {
     ))
 }
 
-/// 検証付きの原子的置換
+/// 検証付きの原子的置換。`Ok` の中身は保存を止めない警告（`preserve::check` 由来）
 pub(super) fn replace_verified(
     path: &Path,
     original: &[u8],
     patched: Vec<u8>,
     expected: &EditableMetadata,
-) -> Result<()> {
+) -> Result<Vec<String>> {
     // --- ピクセル不変（設計の必須条件） ---
     if original[scan_offset(original)?..] != patched[scan_offset(&patched)?..] {
         bail!("画素データが変化したため書き込みを中止しました");
@@ -120,7 +121,7 @@ pub(super) fn replace_verified(
         file.sync_all()
             .with_context(|| format!("一時ファイルを永続化できません: {}", temp.0.display()))?;
     }
-    verify(&temp.0, path, expected)?;
+    let warnings = verify(&temp.0, original, expected)?;
 
     // 同一ディレクトリなので rename は同時に読む側に対しては原子的
     // （古い内容と新しい内容が混ざった状態を外から観測できない）。
@@ -144,7 +145,7 @@ pub(super) fn replace_verified(
         let _ = dir_handle.sync_all();
     }
 
-    Ok(())
+    Ok(warnings)
 }
 
 /// 一時ファイルの後始末。
@@ -162,8 +163,8 @@ impl Drop for TempFile {
     }
 }
 
-/// 書いた結果を読み戻して確かめる
-fn verify(temp: &Path, original: &Path, expected: &EditableMetadata) -> Result<()> {
+/// 書いた結果を読み戻して確かめる。`Ok` の中身は保存を止めない警告
+fn verify(temp: &Path, original: &[u8], expected: &EditableMetadata) -> Result<Vec<String>> {
     let read = super::read_metadata(temp)?;
     if read.metadata != *expected {
         bail!(
@@ -187,18 +188,14 @@ fn verify(temp: &Path, original: &Path, expected: &EditableMetadata) -> Result<(
         );
     }
 
-    // 撮影情報が壊れていないこと。**独立の実装（kamadak-exif）で見る**ので、
-    // 「little_exif で書いて little_exif で読めた」の同語反復にならない
-    let before = crate::read_exif_info(original)?;
-    let after = crate::read_exif_info(temp)?;
-    if before != after {
-        bail!(
-            "既存の Exif が壊れました（期待 {:?} / 実際 {:?}）",
-            before,
-            after
-        );
-    }
-    Ok(())
+    // 編集対象以外のメタデータが失われていないこと（`preserve` のモジュールコメント）。
+    // **メモリ上の `patched` ではなく、実際に rename される一時ファイルを読み戻して見る**
+    let written = std::fs::read(temp)
+        .with_context(|| format!("一時ファイルを読み戻せません: {}", temp.display()))?;
+    super::preserve::check(
+        &original[..scan_offset(original)?],
+        &written[..scan_offset(&written)?],
+    )
 }
 
 #[cfg(test)]
@@ -329,15 +326,15 @@ mod tests {
     }
 
     /// **既存 Exif が消えたら置き換えない。**
-    /// little_exif が Exif APP1 を丸ごと落とす事故（spec の issue #93）は、
+    /// little_exif が既存の Exif を落とす事故（spec の issue #93）は、
     /// 「本ツールの 3 タグは読み戻せる」ので値の一致だけでは捕まらない。
-    /// 独立実装（kamadak-exif）で撮影情報を突き合わせて初めて見える。
+    /// 独立実装（kamadak-exif）で見て初めて見える（`preserve`。この buffer は
+    /// kamadak-exif が読めないので「検証できない」として拒否される）。
     ///
     /// **空の `Metadata` で書き直す（issue #93 そのものの手口）ことで、この buffer は
     /// little_exif 自身は問題なく読める（＝ K2 の食い違い警告 gate では捕まらない）**
     /// ようにしてある。`jpeg.set_exif(None)`（APP1 ごと削除）では little_exif の
-    /// パースそのものが失敗して K2 が先に捕まえてしまい、この gate（kamadak-exif との
-    /// 突き合わせ）を単独で動かせなくなる（実測済み）
+    /// パースそのものが失敗して K2 が先に捕まえてしまい、この gate を単独で動かせなくなる（実測済み）
     #[test]
     fn replace_verified_refuses_a_buffer_that_lost_the_existing_exif() {
         let (dir, path, original) = scratch();
@@ -365,11 +362,22 @@ mod tests {
             buffer[scan_offset(&buffer).unwrap()..],
             original[scan_offset(&original).unwrap()..]
         );
+        // 前提条件: どちらの経路で拒否されるかを固定する。little_exif が空の Metadata で
+        // 書き直した Exif は kamadak-exif の厳格読みでは読めない（実測: "Truncated IFD
+        // count"）ので、検査 1 ではなく「検証できない」の経路で拒否される
+        assert!(
+            exif::Reader::new()
+                .read_from_container(&mut std::io::Cursor::new(&buffer))
+                .is_err(),
+            "前提条件が崩れている: kamadak-exif が読めた（検査 1 の経路になる）"
+        );
 
         let error =
             replace_verified(&path, &original, buffer, &EditableMetadata::default()).unwrap_err();
         assert!(
-            error.to_string().contains("既存の Exif が壊れました"),
+            error
+                .to_string()
+                .contains("既存の Exif を検証できないため中止しました"),
             "{error:#}"
         );
         assert_untouched(&dir, &path, &original);

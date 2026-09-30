@@ -761,14 +761,29 @@ pub async fn write_image_metadata(
     metadata: core::metadata::EditableMetadata,
 ) -> Result<core::metadata::MetadataRead, String> {
     let file = metadata_target(&state, &path)?;
-    tokio::task::spawn_blocking(move || {
-        core::metadata::write_metadata(&file, &metadata).map_err(|e| e.to_string())?;
-        // **読み戻しも入口を通す。** ここだけ経路が違うと、★の書き戻しの
-        // 「値の出所」（絞り込み spec §5）がグリッドの★と別経路になる
-        core::metadata::read_metadata_fast(&file).map_err(|e| e.to_string())
-    })
-    .await
-    .map_err(|e| e.to_string())?
+    tokio::task::spawn_blocking(move || save_and_read_back(&file, &metadata))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
+/// `write_image_metadata` の本体。コマンド本体（`tauri::State` を取る）は単体テストから
+/// 呼べないので、ここへ出してある（`metadata_target` と同じ理由）。
+///
+/// **保存失敗は文脈のチェーン全体（`{e:#}`）で文字列化する。** `to_string()` だと
+/// 最上位の「メタデータを保存できませんでした…」しか届かず、なぜ止めたか
+/// （「既存の Exif が保存で失われるか変わるため」等）が利用者に見えない。
+/// 保存が返した警告（MakerNote の位置の変化）は、読み戻した結果の `warnings` に足す ──
+/// フロントは保存後の `warnings` をそのまま表示している（`metadataDraft.svelte.ts`）
+fn save_and_read_back(
+    file: &Path,
+    metadata: &core::metadata::EditableMetadata,
+) -> Result<core::metadata::MetadataRead, String> {
+    let saved = core::metadata::write_metadata(file, metadata).map_err(|e| format!("{e:#}"))?;
+    // **読み戻しも入口を通す。** ここだけ経路が違うと、★の書き戻しの
+    // 「値の出所」（絞り込み spec §5）がグリッドの★と別経路になる
+    let mut read = core::metadata::read_metadata_fast(file).map_err(|e| e.to_string())?;
+    read.warnings.extend(saved);
+    Ok(read)
 }
 
 /// フォルダー単位でメタデータの書き込みを承認させる
@@ -1144,5 +1159,76 @@ mod tests {
                 assert_eq!(entry.rating, None, "{} で★が付いた", entry.name);
             }
         }
+    }
+
+    /// **保存の拒否理由が境界を越えて届く。** `to_string()` では最上位の文脈
+    /// （「メタデータを保存できませんでした…」）しか残らず、内側の理由が落ちる。
+    /// 内側の文面には `build` の「解析できない」を使う（実書き込み経路で `preserve` の
+    /// 拒否を起こす入力は作れない。計画 A-4）
+    #[test]
+    fn a_refused_save_reports_the_inner_reason() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("broken-exif.jpg");
+        write_real_jpeg(&path);
+        // SOI の直後に、TIFF として読めない Exif APP1 を差し込む
+        let mut bytes = fs::read(&path).unwrap();
+        let contents = b"Exif\0\0\xAA\xAA\xAA\xAA\xAA\xAA\xAA\xAA";
+        let mut app1 = vec![0xFF, 0xE1];
+        app1.extend(((contents.len() + 2) as u16).to_be_bytes());
+        app1.extend(contents);
+        bytes.splice(2..2, app1);
+        fs::write(&path, &bytes).unwrap();
+
+        let error = save_and_read_back(
+            &path,
+            &core::metadata::EditableMetadata {
+                rating: Some(3),
+                ..Default::default()
+            },
+        )
+        .unwrap_err();
+
+        assert!(
+            error.contains("メタデータを保存できませんでした"),
+            "{error}"
+        );
+        assert!(error.contains("既存の Exif を解析できない"), "{error}");
+        assert_eq!(fs::read(&path).unwrap(), bytes, "元ファイルが変わった");
+    }
+
+    /// **保存が返した警告は、保存後に返す `warnings` に載る。**
+    /// フロントは保存後の `warnings` だけを表示するので、ここで落とすと利用者に届かない
+    #[test]
+    fn a_save_warning_reaches_the_returned_warnings() {
+        use little_exif::exif_tag::ExifTag;
+        use little_exif::filetype::FileExtension;
+        use little_exif::metadata::Metadata;
+
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("maker-note.jpg");
+        write_real_jpeg(&path);
+        let mut bytes = fs::read(&path).unwrap();
+        let mut meta = Metadata::new();
+        meta.set_tag(ExifTag::MakerNote(
+            b"SONY DSC \0\0\0maker-note-body".to_vec(),
+        ));
+        meta.write_to_vec(&mut bytes, FileExtension::JPEG).unwrap();
+        fs::write(&path, &bytes).unwrap();
+
+        let read = save_and_read_back(
+            &path,
+            &core::metadata::EditableMetadata {
+                title: Some("Harbor at dusk".into()),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+
+        assert_eq!(read.metadata.title.as_deref(), Some("Harbor at dusk"));
+        assert!(
+            read.warnings.iter().any(|w| w.contains("MakerNote")),
+            "{:?}",
+            read.warnings
+        );
     }
 }

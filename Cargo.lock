@@ -3124,6 +3124,7 @@ dependencies = [
  "anyhow",
  "gio",
  "image",
+ "little_exif",
  "lru",
  "picture-tool-core",
  "rayon",

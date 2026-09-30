@@ -12,6 +12,7 @@
 mod atomic;
 mod exif;
 mod header;
+mod preserve;
 mod xmp;
 
 /// 読めた文字列を正規形に寄せる。**前後の空白（と NUL）は落とし、trim 後が空なら `None`。**
@@ -355,7 +356,10 @@ impl EditableMetadata {
 /// `rename` だけで起き、それが最後の操作である）。その事実を利用者に伝えるのは
 /// ここの責務 ── 下位の `bail!`（`xmp::patch` の「書き込み先が無い」等）は
 /// 原因しか語らないので、文脈をここで 1 度だけ足す。
-pub fn write_metadata(path: &Path, values: &EditableMetadata) -> Result<()> {
+///
+/// **`Ok` の中身は保存を止めない警告**（MakerNote の位置の変化。`preserve` 参照）。
+/// 出すか捨てるかは呼び出し側（境界）が決める。
+pub fn write_metadata(path: &Path, values: &EditableMetadata) -> Result<Vec<String>> {
     let values = values.normalized();
     std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| write_inner(path, &values)))
         .unwrap_or_else(|_| Err(anyhow::anyhow!("書き込み処理が異常終了しました")))
@@ -367,7 +371,7 @@ pub fn write_metadata(path: &Path, values: &EditableMetadata) -> Result<()> {
         })
 }
 
-fn write_inner(path: &Path, values: &EditableMetadata) -> Result<()> {
+fn write_inner(path: &Path, values: &EditableMetadata) -> Result<Vec<String>> {
     let original =
         std::fs::read(path).with_context(|| format!("ファイルを読めません: {}", path.display()))?;
     let patched = build(&original, values)?;
@@ -391,9 +395,10 @@ fn build(original: &[u8], values: &EditableMetadata) -> Result<Vec<u8>> {
     // **既存 Exif の解析に失敗したら、そこで止める。**
     // 空の Metadata から書き直すと little_exif は既存の Exif APP1 を丸ごと落とし、
     // MakerNote も GPS もサムネイルも消えた「本ツールの 3 タグだけの Exif」になる。
-    // しかも `read_exif_info` は解析失敗時も `Ok(ExifInfo::default())` を返すので、
-    // 前後とも default で一致し、`atomic::verify` を素通りする ── これは spec が
-    // 「クレート選定ごと見直す」と決めた issue #93 の症状そのものの経路である。
+    // `atomic::verify` の `preserve::check` もこの結果を拒否する（書き込み前の全フィールドが
+    // 失われるか、書き直した Exif を kamadak-exif が読めない）が、ここで止めた方が
+    // 理由（「解析できない」）が正確に伝わる。**二重にあるのは意図的**:
+    // ここは little_exif が読めない場合、`preserve` は kamadak-exif で比べた結果を受け持つ。
     let mut meta = match Metadata::new_from_vec(&buffer, FileExtension::JPEG) {
         Ok(meta) => meta,
         Err(error) if has_exif_segment(&jpeg) => {
@@ -1061,5 +1066,40 @@ mod tests {
 
         assert!(read_metadata_header(&path).is_err()); // 前提条件
         assert!(read_metadata_fast(&path).is_err());
+    }
+
+    /// **保存を止めない警告は `write_metadata` の戻り値で返る**（core は `eprintln!` しない）。
+    /// MakerNote を持たない写真では空であることを対照に置く
+    #[test]
+    fn a_moved_maker_note_is_returned_as_a_warning() {
+        let (_dir, plain) = scratch("exif-only.jpg");
+        let values = EditableMetadata {
+            title: Some("Harbor at dusk".into()),
+            ..Default::default()
+        };
+        assert_eq!(
+            write_metadata(&plain, &values).unwrap(),
+            Vec::<String>::new(),
+            "MakerNote が無ければ警告も無い"
+        );
+
+        let (_dir, path) = scratch("exif-only.jpg");
+        let mut bytes = std::fs::read(&path).unwrap();
+        let mut meta = Metadata::new_from_vec(&bytes, FileExtension::JPEG).unwrap();
+        meta.set_tag(little_exif::exif_tag::ExifTag::MakerNote(
+            b"SONY DSC \0\0\0maker-note-body".to_vec(),
+        ));
+        meta.write_to_vec(&mut bytes, FileExtension::JPEG).unwrap();
+        std::fs::write(&path, &bytes).unwrap();
+
+        assert_eq!(
+            write_metadata(&path, &values).unwrap(),
+            vec![preserve::MAKER_NOTE_MOVED.to_string()]
+        );
+        assert_eq!(
+            read_metadata(&path).unwrap().metadata,
+            values,
+            "保存はされている"
+        );
     }
 }
