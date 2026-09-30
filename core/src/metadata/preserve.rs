@@ -23,6 +23,9 @@ const APP2: u8 = 0xE2;
 const APP13: u8 = 0xED;
 const EXIF_ID: &[u8] = b"Exif\0\0";
 
+/// MakerNote の位置だけが変わったときに返す警告（spec「MakerNote の位置の変化」）
+pub(super) const MAKER_NOTE_MOVED: &str = "保存しました。ただしカメラ固有の情報（MakerNote）の位置が変わったため、他のソフトで一部の撮影情報が読めなくなる可能性があります";
+
 /// SOS より前の 1 セグメント。`contents` は長さフィールドの後ろ（識別子を含む）
 #[derive(Debug, PartialEq)]
 struct Segment<'a> {
@@ -217,6 +220,27 @@ fn thumbnail(exif: &Exif) -> Option<&[u8]> {
     exif.buf().get(offset as usize..end as usize)
 }
 
+/// 前後に MakerNote が 1 つずつあり、バイト列が同じで位置だけが違うか。
+///
+/// 拒否しないのは、IFD0 が伸びれば後方のデータは一律にずれ、拒否にすると MakerNote 付きの
+/// 写真がほぼすべて保存できなくなるから。警告にするのは、メーカーによっては MakerNote 内部の
+/// オフセットが TIFF 先頭基準で、他のソフトで読めなくなりうるから（中身の整合は判定しない）
+fn maker_note_moved(before: &Exif, after: &Exif) -> bool {
+    fn only(exif: &Exif) -> Option<&Value> {
+        let mut found = exif
+            .fields()
+            .filter(|f| f.ifd_num == In::PRIMARY && f.tag == Tag::MakerNote);
+        match (found.next(), found.next()) {
+            (Some(field), None) => Some(&field.value),
+            _ => None,
+        }
+    }
+    matches!(
+        (only(before), only(after)),
+        (Some(Value::Undefined(a, at)), Some(Value::Undefined(b, bt))) if a == b && at != bt
+    )
+}
+
 /// 検査 3 で比べる列: 最初の Exif APP1 と最初の XMP APP1 を除いたもの。
 ///
 /// 除外を「最初の 1 つ」に限るのは、検査 1・2 と kamadak-exif・`has_exif_segment`・
@@ -249,13 +273,13 @@ fn segment_name(segment: &Segment) -> String {
 
 /// 書き込み前後の SOS より前を比べ、既存のメタデータが失われていれば `Err`。
 ///
-/// `Ok` の中身は保存を止めない警告。
+/// `Ok` の中身は保存を止めない警告（MakerNote の位置の変化）。
 /// 拒否の文面は `write_metadata` の文脈「メタデータを保存できませんでした…」の
 /// **後ろに `: ` で連結されて**利用者に届くので、単独で意味が通るように書く
 pub(super) fn check(original_head: &[u8], written_head: &[u8]) -> Result<Vec<String>> {
     let before_segments = segments(original_head)?;
     let after_segments = segments(written_head)?;
-    let warnings = Vec::new();
+    let mut warnings = Vec::new();
 
     if let Some(before) = read_exif(&before_segments)? {
         let after = read_exif(&after_segments)?;
@@ -274,6 +298,9 @@ pub(super) fn check(original_head: &[u8], written_head: &[u8]) -> Result<Vec<Str
                 && thumbnail(after) != Some(original_thumbnail)
             {
                 bail!("Exif のサムネイルが保存で変わるため中止しました");
+            }
+            if maker_note_moved(&before, after) {
+                warnings.push(MAKER_NOTE_MOVED.to_string());
             }
         }
     }
@@ -1058,5 +1085,74 @@ mod tests {
         assert_eq!(name(APP0, b"JFIF\0\x01"), "JFIF");
         assert_eq!(name(0xEE, b"Adobe"), "APP14");
         assert_eq!(name(0xDB, b"\x00"), "画像の符号化情報");
+    }
+
+    // --- MakerNote の位置の変化（警告） ---------------------------------------
+
+    use little_exif::exif_tag::ExifTag;
+    use little_exif::filetype::FileExtension;
+    use little_exif::metadata::Metadata;
+
+    const MAKER_NOTE: &[u8] = b"SONY DSC \0\0\0maker-note-body-0123456789";
+
+    /// exif-only.jpg に MakerNote を足したもの（全体のバイト列）。
+    /// フィクスチャは 2 枚とも MakerNote を持たない（計画 A-3）
+    fn with_maker_note() -> Vec<u8> {
+        let mut bytes = fixture("exif-only.jpg");
+        let mut meta = Metadata::new_from_vec(&bytes, FileExtension::JPEG).unwrap();
+        meta.set_tag(ExifTag::MakerNote(MAKER_NOTE.to_vec()));
+        meta.write_to_vec(&mut bytes, FileExtension::JPEG).unwrap();
+        bytes
+    }
+
+    fn maker_note(head: &[u8]) -> (Vec<u8>, u32) {
+        match edited_value(head, Tag::MakerNote) {
+            Some(Value::Undefined(bytes, at)) => (bytes, at),
+            other => panic!("前提条件: MakerNote が無い（{other:?}）"),
+        }
+    }
+
+    /// 実際の書き込み（`build`）で IFD0 が伸び、MakerNote が後ろへずれる。
+    /// 通したうえで警告を返す（Review Focus 1）
+    #[test]
+    fn a_moved_maker_note_passes_with_a_warning() {
+        let original = with_maker_note();
+        let written = built(&original, &all_three());
+        let (before_bytes, before_at) = maker_note(&head_of(&original));
+        let (after_bytes, after_at) = maker_note(&head_of(&written));
+        assert_eq!(
+            before_bytes, MAKER_NOTE,
+            "前提条件: 足した MakerNote が読める"
+        );
+        assert_eq!(
+            after_bytes, before_bytes,
+            "前提条件: バイト列は保たれている"
+        );
+        assert_ne!(after_at, before_at, "前提条件: 位置が変わっている");
+
+        assert_eq!(
+            check(&head_of(&original), &head_of(&written)).unwrap(),
+            vec![MAKER_NOTE_MOVED.to_string()]
+        );
+    }
+
+    #[test]
+    fn an_unmoved_maker_note_passes_without_a_warning() {
+        let head = head_of(&with_maker_note());
+        maker_note(&head); // 前提条件: MakerNote がある
+        assert_eq!(check(&head, &head).unwrap(), Vec::<String>::new());
+    }
+
+    /// MakerNote の中身が変われば警告ではなく検査 1 の拒否
+    #[test]
+    fn a_changed_maker_note_is_refused() {
+        let before = head_of(&with_maker_note());
+        let (_, at) = maker_note(&before);
+        let after = edit_tiff(&before, |tiff| tiff[at as usize] ^= 0xFF);
+
+        assert_eq!(
+            refusal(&before, &after),
+            "既存の Exif が保存で失われるか変わるため中止しました: MakerNote"
+        );
     }
 }
