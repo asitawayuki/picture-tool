@@ -25,6 +25,9 @@ gio = "0.18"
 tempfile = "3"
 # パス検証のテストで「中身も本物の画像」を用意するためだけに使う（バイナリには入らない）
 image.workspace = true
+# 保存の警告（MakerNote の位置の変化）が境界を通って届くかのテストで、MakerNote 付きの
+# JPEG を作るためだけに使う。core と同じ版に固定する（依存木に既にあり、ビルドは増えない）
+little_exif = "=0.6.23"
 
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
