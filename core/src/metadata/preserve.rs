@@ -129,6 +129,31 @@ fn same_value(a: &Value, b: &Value) -> bool {
     }
 }
 
+/// 書き込みで SHORT が**同じ値の** LONG に広がっただけか（最終レビュー C1）。
+///
+/// little_exif は既知のタグを自分の宣言した型で書き戻すので、カメラが SHORT で書いた
+/// `PixelXDimension` 等は LONG になる（Pixel 7 の撮って出しで実測）。これを「変わった」と
+/// すると、そうした写真は保存のたびに拒否される。許すのは Exif／TIFF が SHORT と LONG の
+/// **両方を認めるタグ**に限り、向きも SHORT → LONG だけ。`ResolutionUnit` のような
+/// SHORT 限定のタグの型の変化は、従来どおり `same_value` の規則で拒否する
+fn widened(tag: Tag, before: &Value, after: &Value) -> bool {
+    const SHORT_OR_LONG: [Tag; 7] = [
+        Tag::ImageWidth,
+        Tag::ImageLength,
+        Tag::StripOffsets,
+        Tag::RowsPerStrip,
+        Tag::StripByteCounts,
+        Tag::PixelXDimension,
+        Tag::PixelYDimension,
+    ];
+    SHORT_OR_LONG.contains(&tag)
+        && matches!(
+            (before, after),
+            (Value::Short(x), Value::Long(y))
+                if x.len() == y.len() && x.iter().zip(y).all(|(p, q)| u32::from(*p) == *q)
+        )
+}
+
 /// 比較から外すフィールドか（spec 検査 1「比較から除外するキー」）。
 ///
 /// 編集対象の 5 タグ（値の正しさは `atomic::verify` の読み戻し検査が受け持つ）と、
@@ -164,7 +189,8 @@ fn lost_fields(before: &Exif, after: Option<&Exif>) -> Vec<(In, Tag)> {
         let kept = remaining.iter().position(|candidate| {
             candidate.ifd_num == field.ifd_num
                 && candidate.tag == field.tag
-                && same_value(&candidate.value, &field.value)
+                && (same_value(&candidate.value, &field.value)
+                    || widened(field.tag, &field.value, &candidate.value))
         });
         match kept {
             Some(at) => {
@@ -1154,5 +1180,84 @@ mod tests {
             refusal(&before, &after),
             "既存の Exif が保存で失われるか変わるため中止しました: MakerNote"
         );
+    }
+
+    // --- SHORT → LONG の拡幅（最終レビュー C1） ---------------------------------
+
+    /// IFD0 の ExifIFDPointer（0x8769）が指す Exif IFD
+    fn exif_ifd(tiff: &[u8]) -> usize {
+        u32_le(tiff, entry(tiff, ifd0(tiff), 0x8769) + 8) as usize
+    }
+
+    /// Exif IFD の ColorSpace（0xA001、SHORT、値 1）を PixelXDimension（0xA002）へ付け替え、
+    /// 「カメラが SHORT で書いた PixelXDimension」を作る（フィクスチャは持たない）。
+    /// 番号は隣なので IFD 内の昇順は崩れない
+    fn with_short_pixel_dimension(head: &[u8]) -> Vec<u8> {
+        edit_tiff(head, |tiff| {
+            let at = entry(tiff, exif_ifd(tiff), 0xa001);
+            assert_eq!(u16_le(tiff, at + 2), 3, "前提条件: ColorSpace は SHORT");
+            tiff[at..at + 2].copy_from_slice(&0xa002u16.to_le_bytes());
+        })
+    }
+
+    fn pixel_x(head: &[u8]) -> Value {
+        exif_of(head)
+            .get_field(Tag::PixelXDimension, In::PRIMARY)
+            .expect("前提条件: PixelXDimension がある")
+            .value
+            .clone()
+    }
+
+    /// little_exif は既知のタグを宣言の型で書き戻すので、SHORT の PixelXDimension は
+    /// 同じ値の LONG になる（Pixel 7 の撮って出しで実測）。Exif はこのタグに
+    /// SHORT と LONG の両方を認めているので、情報は失われていない。通す
+    #[test]
+    fn a_pixel_dimension_widened_by_the_real_write_passes() {
+        let plain = fixture("exif-only.jpg");
+        let scan = super::super::atomic::scan_offset(&plain).unwrap();
+        let original = [
+            &with_short_pixel_dimension(&plain[..scan])[..],
+            &plain[scan..],
+        ]
+        .concat();
+        let written = built(&original, &all_three());
+        assert!(
+            matches!(pixel_x(&head_of(&original)), Value::Short(ref v) if v == &[1]),
+            "前提条件: 書き込み前は SHORT"
+        );
+        assert!(
+            matches!(pixel_x(&head_of(&written)), Value::Long(ref v) if v == &[1]),
+            "前提条件: 書き込み後は同じ値の LONG（little_exif の型の正規化）"
+        );
+
+        assert_eq!(
+            check(&head_of(&original), &head_of(&written)).unwrap(),
+            Vec::<String>::new()
+        );
+    }
+
+    /// 許すのは「SHORT と LONG の両方を認めるタグ」の「値を保った SHORT → LONG」だけ。
+    /// 値が変わる・LONG → SHORT に狭まるのは拒否（ResolutionUnit のような SHORT 限定の
+    /// タグは `a_type_change_with_the_same_number_is_refused` が押さえている）
+    #[test]
+    fn a_pixel_dimension_that_changes_value_or_narrows_is_refused() {
+        let short = with_short_pixel_dimension(&head_of(&fixture("exif-only.jpg")));
+        let to_long = |value: u32| {
+            edit_tiff(&short, |tiff| {
+                let at = entry(tiff, exif_ifd(tiff), 0xa002);
+                tiff[at + 2..at + 4].copy_from_slice(&4u16.to_le_bytes());
+                tiff[at + 8..at + 12].copy_from_slice(&value.to_le_bytes());
+            })
+        };
+        let (same, changed) = (to_long(1), to_long(2));
+        assert!(matches!(pixel_x(&short), Value::Short(ref v) if v == &[1]));
+        assert!(matches!(pixel_x(&same), Value::Long(ref v) if v == &[1]));
+        assert!(matches!(pixel_x(&changed), Value::Long(ref v) if v == &[2]));
+        // 対照: 値を保った拡幅は通る（以下の拒否が「何でも拒否」でないこと）
+        assert_eq!(check(&short, &same).unwrap(), Vec::<String>::new());
+
+        let refused = "既存の Exif が保存で失われるか変わるため中止しました: PixelXDimension";
+        assert_eq!(refusal(&short, &changed), refused, "値が変わった");
+        assert_eq!(refusal(&same, &short), refused, "LONG → SHORT に狭まった");
     }
 }

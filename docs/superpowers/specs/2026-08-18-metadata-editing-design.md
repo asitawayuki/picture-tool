@@ -448,6 +448,8 @@ SOS より前を `core/src/metadata/preserve.rs` で比べる。
 - MakerNote 内部のオフセット整合 ── バイト列が同じで位置だけが変わったときは保存を通し、
   警告（「…MakerNote）の位置が変わったため…」）を返すに留める
 - 未知の型コードを持つタグの中身（kamadak-exif が中身を返さないため、型と個数だけを比べる）
+- SHORT と LONG の両方を認めるタグ（`PixelXDimension` 等）の SHORT → LONG の拡幅（値が同じなら許す。
+  `little_exif` が既知のタグを宣言の型で書き戻すため）
 - XMP 内部の保全（本 spec の「既知の制約」のまま）
 
 MakerNote 付きの JPEG が手に入ったら、`core/tests/metadata_spike.rs` の

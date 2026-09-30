@@ -2163,3 +2163,16 @@ test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 8 filtered out; fini
 
 - spec の実測の値の変化は 1030 → 1180 だが、再実測では 1030 → 1144（書いた文字列の違いで IFD0 の伸びが違うだけ。Task 1 の実施メモ）
 - 計画のコードのうち 1 か所（Task 3 の `check` 内の入れ子の `if`）は clippy の `collapsible_if` に掛かったので let-chain に畳んだ。挙動は同じ
+
+### 最終レビュー: SHORT → LONG の拡幅（C1）
+
+- **観測**: Pixel 7 の撮って出し JPEG（手元の写真。リポジトリには入れていない）への保存が、
+  「既存の Exif が保存で失われるか変わるため中止しました: PixelXDimension, PixelYDimension」で毎回拒否された（main では保存できていた）。
+  exiv2 で見ると書き込み前は `Short 1920`、`little_exif` の書き戻し後は `Long 1920`。再実測の 3 枚はもともと LONG なので現れなかった
+- **判断（利用者 2026-09-30）**: SHORT と LONG の両方を認めるタグに限り、値を保った SHORT → LONG を一致とみなす（`preserve::widened`）。spec の「値の比較規則」を改訂
+- **テスト**: `a_pixel_dimension_widened_by_the_real_write_passes`（実際の `build` を通し、書き込み後が LONG になることを前提条件で固定）・
+  `a_pixel_dimension_that_changes_value_or_narrows_is_refused`。変異の実測: タグ限定を外すと `a_type_change_with_the_same_number_is_refused`、
+  値の一致を外すと `a_pixel_dimension_that_changes_value_or_narrows_is_refused` が落ちる
+- **実写真**: 修正後、Pixel 7 の写真と Lightroom 書き出しのコピーへ保存（★5・タイトル・コメント → 空欄で 2 回目）がどちらも通り、警告は無い
+- **残る確認**: カメラ撮って出しの**本物の MakerNote** を持つ JPEG では未実測（Pixel の写真も MakerNote を持たない）。
+  手に入ったら `core/tests/metadata_spike.rs` の `PICTURE_TOOL_SPIKE_JPEG` 経路と、上と同じ保存の確認を行う

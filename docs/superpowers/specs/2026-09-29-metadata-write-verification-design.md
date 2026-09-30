@@ -76,6 +76,7 @@
 | `Debug` 表現だけ変わったフィールド | `ExifVersion`・`FileSource`・`SceneType`（`Value::Undefined` の `ofs`） | kamadak-exif の `Value::Undefined(bytes, ofs)` は **Exif 内の位置を値に含む**。比較は `ofs` を無視してバイト列で行う |
 | 増えたフィールド | `0x4749`（RatingPercent）・`0x9c9b`（XPTitle）・`0x9c9c`（XPComment）・`UserComment` | すべて編集対象。増えることは許す |
 | IFD ポインタ系のタグ | kamadak-exif は `ExifIFDPointer` 等を**フィールドとして返さない** | 除外リストに入れる必要がない |
+| 型の正規化（撮って出し。実装後の最終レビューで追加） | Pixel 7 の撮って出し JPEG では `PixelXDimension`・`PixelYDimension` が SHORT → LONG（値は同じ）。上の 3 枚はもともと LONG なので現れなかった | 値の比較規則に、SHORT と LONG の両方を認めるタグに限った拡幅の例外を置く |
 | セグメント | Exif・XMP 以外（JFIF APP0・APP13・ICC APP2・DQT 等）は内容も相対順序も不変。Exif APP1 と XMP APP1 が先頭へ移動 | 検査 3 は**絶対位置ではなく相対順序**で比べる |
 
 ## 設計
@@ -102,7 +103,12 @@
 - **値の比較規則**: kamadak-exif 0.6 の `Value` は `PartialEq` を持たないので、次の規則で
   自前に比べる。`Debug` 文字列・`display_value()` の比較は使わない（前者は位置を含み、後者は
   表示用の整形で値の違いを丸めうる）
-  - バリアントが違えば不一致（型の正規化、例えば SHORT → LONG の書き戻しも「変わった」とみなす）
+  - バリアントが違えば不一致（型の正規化、例えば SHORT → LONG の書き戻しも「変わった」とみなす）。
+    **例外**: Exif／TIFF が SHORT と LONG の両方を認めるタグ（`ImageWidth`・`ImageLength`・`StripOffsets`・
+    `RowsPerStrip`・`StripByteCounts`・`PixelXDimension`・`PixelYDimension`）に限り、書き込み前が `Short`、
+    後が `Long` で要素列の値が同じなら一致とみなす（逆向きは不一致）。`little_exif` は既知のタグを自分の
+    宣言した型で書き戻すため、SHORT で書かれた写真（Pixel 7 の撮って出しで実測）が保存のたびに拒否されるのを
+    避ける（ブランチ最終レビュー C1、利用者判断 2026-09-30）。`ResolutionUnit` のような SHORT 限定のタグは拒否のまま
   - `Undefined(bytes, ofs)` はバイト列だけを比べ、`ofs` は無視する（上記の実測）
   - `Unknown(type, count, ofs)`（未知の型コード）は `(type, count)` だけを比べ、`ofs` は無視する。
     kamadak-exif は未知型の中身を返さないため、**中身の変化は検知できない**（残る制約として記録する）
