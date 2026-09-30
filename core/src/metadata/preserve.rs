@@ -201,6 +201,20 @@ fn lost_message(lost: &[(In, Tag)]) -> String {
     message
 }
 
+/// IFD1 サムネイル本体。オフセットは TIFF 先頭（`Exif\0\0` の直後）基準で、
+/// 検査 1 で読んだのと同じ Exif APP1 の中身から切り出す。
+///
+/// `JPEGInterchangeFormat` と `JPEGInterchangeFormatLength` の**両方**があり、
+/// 範囲が溢れず TIFF 本体に収まるときだけ `Some`。範囲外で panic しない
+/// （panic は `catch_unwind` で捕まるが、文面が「異常終了しました」に化ける）
+fn thumbnail(exif: &Exif) -> Option<&[u8]> {
+    let uint = |tag| exif.get_field(tag, In::THUMBNAIL)?.value.get_uint(0);
+    let offset = uint(Tag::JPEGInterchangeFormat)?;
+    let length = uint(Tag::JPEGInterchangeFormatLength)?;
+    let end = offset.checked_add(length)?;
+    exif.buf().get(offset as usize..end as usize)
+}
+
 /// 書き込み前後の SOS より前を比べ、既存のメタデータが失われていれば `Err`。
 ///
 /// `Ok` の中身は保存を止めない警告。
@@ -218,6 +232,17 @@ pub(super) fn check(original_head: &[u8], written_head: &[u8]) -> Result<Vec<Str
         let lost = lost_fields(&before, after.as_ref());
         if !lost.is_empty() {
             bail!(lost_message(&lost));
+        }
+
+        // 書き込み前に 1 つでも比べるフィールドがあれば、検査 1 を通った時点で after は
+        // 必ず Some。フィールドが 1 つも無い Exif から Exif が消えた場合だけ None で残る
+        if let Some(after) = &after {
+            // 検査 2: サムネイル本体（元写真のサムネイルが壊れているか無ければ比べない）
+            if let Some(original_thumbnail) = thumbnail(&before)
+                && thumbnail(after) != Some(original_thumbnail)
+            {
+                bail!("Exif のサムネイルが保存で変わるため中止しました");
+            }
         }
     }
 
@@ -762,6 +787,104 @@ mod tests {
                 check(&head_of(before), &head_of(after)).unwrap(),
                 Vec::<String>::new()
             );
+        }
+    }
+
+    // --- 検査 2: サムネイル ---------------------------------------------------
+
+    #[test]
+    fn a_changed_thumbnail_is_refused() {
+        let before = head_of(&fixture("exif-only.jpg"));
+        let original = exif_of(&before);
+        let thumb = thumbnail(&original)
+            .expect("前提条件: サムネイルがある")
+            .to_vec();
+        let offset = original
+            .get_field(Tag::JPEGInterchangeFormat, In::THUMBNAIL)
+            .unwrap()
+            .value
+            .get_uint(0)
+            .unwrap() as usize;
+        let after = edit_tiff(&before, |tiff| {
+            assert_eq!(&tiff[offset..offset + thumb.len()], &thumb[..]);
+            tiff[offset + thumb.len() / 2] ^= 0xFF;
+        });
+
+        assert_eq!(
+            refusal(&before, &after),
+            "Exif のサムネイルが保存で変わるため中止しました"
+        );
+    }
+
+    /// `JPEGInterchangeFormat` は検査 1 の除外キーなので、ここを消しても検査 1 は通る。
+    /// 検査 2 が捕まえる
+    #[test]
+    fn a_lost_thumbnail_pointer_is_refused() {
+        let before = head_of(&fixture("exif-only.jpg"));
+        assert!(
+            thumbnail(&exif_of(&before)).is_some(),
+            "前提条件: サムネイルがある"
+        );
+        let after = edit_tiff(&before, |tiff| {
+            let ifd1 = ifd1(tiff);
+            rename_tag(tiff, ifd1, 0x0201, 0xfff0);
+        });
+        assert!(
+            thumbnail(&exif_of(&after)).is_none(),
+            "前提条件: サムネイルが引けない"
+        );
+
+        assert_eq!(
+            refusal(&before, &after),
+            "Exif のサムネイルが保存で変わるため中止しました"
+        );
+    }
+
+    /// サムネイルが後ろへ動いても、本体が同じなら通す（IFD0 が伸びたときの正常な変化。
+    /// Review Focus 5）
+    #[test]
+    fn a_moved_thumbnail_with_the_same_bytes_passes() {
+        let before = head_of(&fixture("exif-only.jpg"));
+        let thumb = thumbnail(&exif_of(&before)).unwrap().to_vec();
+        let after = edit_tiff(&before, |tiff| {
+            let moved_to = tiff.len() as u32;
+            tiff.extend(&thumb);
+            let at = entry(tiff, ifd1(tiff), 0x0201) + 8;
+            tiff[at..at + 4].copy_from_slice(&moved_to.to_le_bytes());
+        });
+        let pointer = |head: &[u8]| {
+            exif_of(head)
+                .get_field(Tag::JPEGInterchangeFormat, In::THUMBNAIL)
+                .unwrap()
+                .value
+                .get_uint(0)
+        };
+        assert_ne!(
+            pointer(&before),
+            pointer(&after),
+            "前提条件: オフセットが変わっている"
+        );
+
+        assert_eq!(check(&before, &after).unwrap(), Vec::<String>::new());
+    }
+
+    /// 範囲外・溢れるサムネイルで panic しない。元写真のサムネイルが壊れていれば比べない
+    #[test]
+    fn a_broken_thumbnail_range_neither_panics_nor_is_compared() {
+        let head = head_of(&fixture("exif-only.jpg"));
+        for (offset, length) in [(u32::MAX, 16), (16, u32::MAX), (0xFFFF_0000, 0x1_0000)] {
+            let broken = edit_tiff(&head, |tiff| {
+                let ifd1 = ifd1(tiff);
+                let at = entry(tiff, ifd1, 0x0201) + 8;
+                tiff[at..at + 4].copy_from_slice(&offset.to_le_bytes());
+                let at = entry(tiff, ifd1, 0x0202) + 8;
+                tiff[at..at + 4].copy_from_slice(&length.to_le_bytes());
+            });
+            assert!(
+                thumbnail(&exif_of(&broken)).is_none(),
+                "{offset:#x}+{length:#x}"
+            );
+            assert_eq!(check(&broken, &broken).unwrap(), Vec::<String>::new());
         }
     }
 }
