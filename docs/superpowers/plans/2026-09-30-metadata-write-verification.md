@@ -2130,8 +2130,36 @@ GUI の見た目は変えていない（`MetadataRead` の形も、フロント�
 
 ### Task 8: 変異の実測
 
-（M1〜M8 の結果表をここに書く）
+実行日: 2026-09-30。変異を 1 つずつ入れ、`cargo test -p picture-tool-core --lib metadata::` と
+`cargo test -p picture-tool-gui save` を走らせた（コミットしていない）。**8 変異とも少なくとも計画の列挙どおりのテストが落ち、生き残りは無い。**
+
+| # | 変異 | 落ちたテスト |
+|---|---|---|
+| M1 | 検査 1 を `if false` | `a_lost_tag_is_refused_by_name`・`a_changed_value_is_refused_by_name`・`a_type_change_with_the_same_number_is_refused`・`more_than_three_lost_tags_are_summarized`・`losing_the_whole_exif_app1_is_refused`・`a_changed_maker_note_is_refused`（6） |
+| M2 | 検査 2 を `&& false` | `a_changed_thumbnail_is_refused`・`a_lost_thumbnail_pointer_is_refused`（2） |
+| M3 | 検査 3 の `find` を `None::<usize>` | `a_lost_icc_profile_is_refused_by_name`・`a_changed_icc_profile_is_refused_by_name`・`a_lost_second_exif_or_xmp_app1_is_refused`・`swapping_other_segments_is_refused`（4） |
+| M4 | `excluded` が常に `false` | `preserve` 4 件（`edited_tags_may_appear_change_and_disappear`・`a_moved_thumbnail_with_the_same_bytes_passes`・`a_moved_maker_note_passes_with_a_warning`・`a_lost_thumbnail_pointer_is_refused` ── 最後のものは検査 1 が先に別の文面で拒否するため）＋ `metadata::tests` の実書き込みテスト 12 件（16） |
+| M5 | 除外の `Tag::UserComment` を `Tag(Context::Tiff, 0x9286)` | `edited_tags_may_appear_change_and_disappear`（1） |
+| M6 | `warnings.push(...)` を削除 | `a_moved_maker_note_passes_with_a_warning`・`a_moved_maker_note_is_returned_as_a_warning`・`a_save_warning_reaches_the_returned_warnings`（3） |
+| M7 | `verify` の `preserve::check` を `Ok(Vec::new())` | `replace_verified_refuses_a_buffer_that_lost_the_existing_exif`・`a_moved_maker_note_is_returned_as_a_warning`・`a_save_warning_reaches_the_returned_warnings`（3） |
+| M8 | `read_exif` を部分結果で読む | `an_exif_with_one_broken_entry_is_refused_as_unverifiable`・`replace_verified_refuses_a_buffer_that_lost_the_existing_exif`（2。後者は部分結果で読めてしまい「検証できない」ではなく検査 1 の文面になるため） |
 
 ### Task 8: 実写真
 
-（出力をここに貼る）
+実行日: 2026-09-30。`docs/tmp/20260328-DSC05024.jpg`（Lightroom Classic 書き出し、APP13・ICC 付き）の
+コピーへ、タイトル「実写真」・コメント・★5 を保存し、続けて空欄で 2 回目の保存をした（一時テストはコミットしていない）。
+
+```text
+running 1 test
+warnings: []
+test real_photo_saves_without_refusal ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 8 filtered out; finished in 0.52s
+```
+
+拒否されず、警告も無い（Lightroom 書き出しは MakerNote を持たない）。
+
+### spec と食い違った点
+
+- spec の実測の値の変化は 1030 → 1180 だが、再実測では 1030 → 1144（書いた文字列の違いで IFD0 の伸びが違うだけ。Task 1 の実施メモ）
+- 計画のコードのうち 1 か所（Task 3 の `check` 内の入れ子の `if`）は clippy の `collapsible_if` に掛かったので let-chain に畳んだ。挙動は同じ

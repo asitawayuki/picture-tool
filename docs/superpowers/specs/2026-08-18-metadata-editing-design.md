@@ -430,14 +430,25 @@ round-trip を検証した。kamadak-exif とは独立に書いた TIFF/IFD パ�
 `core/tests/metadata_integration.rs` の
 `a_file_whose_exif_cannot_be_parsed_is_refused_without_being_modified` が守る。
 
-**この保証の実際の強度**（ブランチ最終レビュー I-3 の記録）: 守られるのは
-「`little_exif` が既存 Exif の**解析に失敗する**」経路だけである。
-`atomic::verify` の gate 3 が書き込み前後で比較しているのは `ExifInfo` の撮影情報
-9 項目だけなので、**解析には成功するが書き戻しで一部を落とす**経路 ── GPS・
-MakerNote・IFD1 サムネイル・ICC が消えても、9 項目が一致していれば gate 3 は通る。
-つまり spec のこの節が言う「壊さずに失敗する」は、コードが保証する範囲より広い主張
-だった。ゲート自体の強化（比較対象を全タグへ広げる等）は次のブランチの仕事とし、
-ここでは実態の記録に留める。
+**この保証の実際の強度**（ブランチ最終レビュー I-3 の記録を、検証強化
+[2026-09-29-metadata-write-verification-design.md](2026-09-29-metadata-write-verification-design.md)
+の実装後の実態に書き換えたもの）: `atomic::verify` は置き換えの前に、書き込み前後の
+SOS より前を `core/src/metadata/preserve.rs` で比べる。
+
+- **検査 1**: Exif の全フィールド（編集対象 5 タグと `JPEGInterchangeFormat` を除く）が、
+  書き込み後に同じ値で残っていること。Exif は kamadak-exif の厳格読みで読み、
+  書き込み前後のどちらかを読めなければ保存を拒否する
+- **検査 2**: IFD1 サムネイル本体のバイト列が同じであること
+- **検査 3**: Exif・XMP 以外のセグメント（ICC・IPTC・拡張 XMP・JFIF・量子化／ハフマン表、
+  2 つ目以降の Exif／XMP APP1）が内容も相対順序も同じであること
+
+したがって「解析には成功するが書き戻しで一部を落とす」経路も、GPS・MakerNote・サムネイル・ICC の
+消失として検知して拒否する。**それでも検知しないもの**:
+
+- MakerNote 内部のオフセット整合 ── バイト列が同じで位置だけが変わったときは保存を通し、
+  警告（「…MakerNote）の位置が変わったため…」）を返すに留める
+- 未知の型コードを持つタグの中身（kamadak-exif が中身を返さないため、型と個数だけを比べる）
+- XMP 内部の保全（本 spec の「既知の制約」のまま）
 
 MakerNote 付きの JPEG が手に入ったら、`core/tests/metadata_spike.rs` の
 `#[ignore]` テストに `PICTURE_TOOL_SPIKE_JPEG` で渡していつでも再検査できる。
