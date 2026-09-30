@@ -19,6 +19,8 @@ use exif::{Context, Exif, Field, In, Tag, Value};
 
 const APP0: u8 = 0xE0;
 const APP1: u8 = 0xE1;
+const APP2: u8 = 0xE2;
+const APP13: u8 = 0xED;
 const EXIF_ID: &[u8] = b"Exif\0\0";
 
 /// SOS より前の 1 セグメント。`contents` は長さフィールドの後ろ（識別子を含む）
@@ -215,6 +217,36 @@ fn thumbnail(exif: &Exif) -> Option<&[u8]> {
     exif.buf().get(offset as usize..end as usize)
 }
 
+/// 検査 3 で比べる列: 最初の Exif APP1 と最初の XMP APP1 を除いたもの。
+///
+/// 除外を「最初の 1 つ」に限るのは、検査 1・2 と kamadak-exif・`has_exif_segment`・
+/// `xmp::extract` が見るのが最初の 1 つだけだから。2 つ目以降の消失はここで検知する
+fn others<'a>(segments: &'a [Segment<'a>]) -> Vec<&'a Segment<'a>> {
+    let exif = first_app1(segments, EXIF_ID);
+    let xmp = first_app1(segments, super::xmp::XMP_ID);
+    segments
+        .iter()
+        .enumerate()
+        .filter(|(at, _)| Some(*at) != exif && Some(*at) != xmp)
+        .map(|(_, segment)| segment)
+        .collect()
+}
+
+/// 検査 3 の文面に出すセグメントの名前（spec「エラー文面」の対応表）
+fn segment_name(segment: &Segment) -> String {
+    let starts = |prefix: &[u8]| segment.contents.starts_with(prefix);
+    match segment.marker {
+        APP2 if starts(b"ICC_PROFILE\0") => "ICC プロファイル".into(),
+        APP13 if starts(b"Photoshop 3.0\0") => "IPTC（Photoshop）".into(),
+        APP1 if starts(b"http://ns.adobe.com/xmp/extension/\0") => "拡張 XMP".into(),
+        APP1 if starts(EXIF_ID) => "2 つ目の Exif".into(),
+        APP1 if starts(super::xmp::XMP_ID) => "2 つ目の XMP".into(),
+        APP0 if starts(b"JFIF\0") => "JFIF".into(),
+        marker @ 0xE0..=0xEF => format!("APP{}", marker - 0xE0),
+        _ => "画像の符号化情報".into(),
+    }
+}
+
 /// 書き込み前後の SOS より前を比べ、既存のメタデータが失われていれば `Err`。
 ///
 /// `Ok` の中身は保存を止めない警告。
@@ -243,6 +275,20 @@ pub(super) fn check(original_head: &[u8], written_head: &[u8]) -> Result<Vec<Str
             {
                 bail!("Exif のサムネイルが保存で変わるため中止しました");
             }
+        }
+    }
+
+    // 検査 3: Exif・XMP 以外のセグメント（相対順序を含む）
+    let before_others = others(&before_segments);
+    let after_others = others(&after_segments);
+    let length = before_others.len().max(after_others.len());
+    if let Some(at) = (0..length).find(|&at| before_others.get(at) != after_others.get(at)) {
+        // 書き込み前の列の側を名指す。先に尽きていたら書き込み後の列の側
+        if let Some(segment) = before_others.get(at).or(after_others.get(at)) {
+            bail!(
+                "Exif・XMP 以外のメタデータ（{}）が保存で変わるため中止しました",
+                segment_name(segment)
+            );
         }
     }
 
@@ -886,5 +932,131 @@ mod tests {
             );
             assert_eq!(check(&broken, &broken).unwrap(), Vec::<String>::new());
         }
+    }
+
+    // --- 検査 3: Exif・XMP 以外のセグメント -----------------------------------
+
+    const ICC: &[u8] = b"ICC_PROFILE\0\x01\x01profile-bytes";
+
+    /// フィクスチャの APP0 の直後に `extra` を差し込んだ head
+    /// （フィクスチャは 2 枚とも ICC を持たないので、テスト内で足す。spec「テスト」）
+    fn with_segment_after_app0(name: &str, extra: (u8, &[u8])) -> Vec<u8> {
+        let head = head_of(&fixture(name));
+        let mut list: Vec<(u8, &[u8])> = segments(&head)
+            .unwrap()
+            .iter()
+            .map(|s| (s.marker, s.contents))
+            .collect();
+        assert_eq!(list[0].0, APP0, "前提条件: 先頭は APP0");
+        list.insert(1, extra);
+        head_with(&list)
+    }
+
+    #[test]
+    fn a_lost_icc_profile_is_refused_by_name() {
+        let before = with_segment_after_app0("exif-only.jpg", (APP2, ICC));
+        let after = head_of(&fixture("exif-only.jpg"));
+        assert!(
+            segments(&before).unwrap().iter().any(|s| s.marker == APP2),
+            "前提条件: 書き込み前に ICC がある"
+        );
+
+        assert_eq!(
+            refusal(&before, &after),
+            "Exif・XMP 以外のメタデータ（ICC プロファイル）が保存で変わるため中止しました"
+        );
+    }
+
+    #[test]
+    fn a_changed_icc_profile_is_refused_by_name() {
+        let before = with_segment_after_app0("exif-only.jpg", (APP2, ICC));
+        let after = with_segment_after_app0(
+            "exif-only.jpg",
+            (APP2, b"ICC_PROFILE\0\x01\x01PROFILE-bytes"),
+        );
+
+        assert_eq!(
+            refusal(&before, &after),
+            "Exif・XMP 以外のメタデータ（ICC プロファイル）が保存で変わるため中止しました"
+        );
+    }
+
+    /// little_exif / `xmp::install` は前置きが一致する APP1 を**すべて**消すので、
+    /// 2 つ目以降は検査 3 が捕まえる
+    #[test]
+    fn a_lost_second_exif_or_xmp_app1_is_refused() {
+        let head = head_of(&fixture("lightroom-xmp.jpg"));
+        let list = segments(&head).unwrap();
+        let exif = list[first_app1(&list, EXIF_ID).unwrap()].contents;
+        let xmp = list[first_app1(&list, super::super::xmp::XMP_ID).unwrap()].contents;
+
+        for (second, name) in [(exif, "2 つ目の Exif"), (xmp, "2 つ目の XMP")] {
+            let mut doubled: Vec<(u8, &[u8])> =
+                list.iter().map(|s| (s.marker, s.contents)).collect();
+            // APP0・Exif・XMP の後ろに 2 つ目を置く
+            doubled.insert(3, (APP1, second));
+            let before = head_with(&doubled);
+
+            assert_eq!(
+                refusal(&before, &head),
+                format!("Exif・XMP 以外のメタデータ（{name}）が保存で変わるため中止しました")
+            );
+        }
+    }
+
+    /// Exif APP1 と XMP APP1 が先頭へ動くのは既存の挙動（spec「実測」）。相対順序で比べる
+    #[test]
+    fn moving_exif_and_xmp_to_the_front_passes() {
+        let before = with_segment_after_app0("lightroom-xmp.jpg", (APP2, ICC));
+        let list = segments(&before).unwrap();
+        let (moved, rest): (Vec<_>, Vec<_>) = list.iter().partition(|s| s.marker == APP1);
+        assert_eq!(moved.len(), 2, "前提条件: Exif と XMP の 2 つ");
+        let after = head_with(
+            &moved
+                .iter()
+                .chain(rest.iter())
+                .map(|s| (s.marker, s.contents))
+                .collect::<Vec<_>>(),
+        );
+        assert_ne!(before, after, "前提条件: 並びが変わっている");
+
+        assert_eq!(check(&before, &after).unwrap(), Vec::<String>::new());
+    }
+
+    /// Exif・XMP 以外どうしの順序が入れ替われば拒否。書き込み前の列の側を名指す
+    #[test]
+    fn swapping_other_segments_is_refused() {
+        let before = with_segment_after_app0("exif-only.jpg", (APP2, ICC));
+        let mut list: Vec<(u8, &[u8])> = segments(&before)
+            .unwrap()
+            .iter()
+            .map(|s| (s.marker, s.contents))
+            .collect();
+        list.swap(0, 1); // APP0 と APP2
+        let after = head_with(&list);
+
+        assert_eq!(
+            refusal(&before, &after),
+            "Exif・XMP 以外のメタデータ（JFIF）が保存で変わるため中止しました"
+        );
+    }
+
+    #[test]
+    fn segments_are_named_by_the_spec_table() {
+        let name = |marker, contents: &[u8]| segment_name(&Segment { marker, contents });
+        assert_eq!(name(APP2, ICC), "ICC プロファイル");
+        assert_eq!(name(APP13, b"Photoshop 3.0\08BIM"), "IPTC（Photoshop）");
+        assert_eq!(
+            name(APP1, b"http://ns.adobe.com/xmp/extension/\0abc"),
+            "拡張 XMP"
+        );
+        assert_eq!(name(APP1, b"Exif\0\0II*\0"), "2 つ目の Exif");
+        assert_eq!(
+            name(APP1, b"http://ns.adobe.com/xap/1.0/\0<x"),
+            "2 つ目の XMP"
+        );
+        assert_eq!(name(APP0, b"JFIF\0\x01"), "JFIF");
+        assert_eq!(name(0xEE, b"Adobe"), "APP14");
+        assert_eq!(name(0xDB, b"\x00"), "画像の符号化情報");
     }
 }
