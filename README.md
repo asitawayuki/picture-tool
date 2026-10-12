@@ -12,13 +12,16 @@ Instagram投稿用の画像一括変換ツール。写真を4:5アスペクト�
 - **メタデータ編集** — JPEG のタイトル・コメント・★を GUI から読み書き（元ファイルへ保存）
 - **検索・並び替え** — グリッドをファイル名で絞り込み、名前 / 更新日 / 作成日で並べ替え
 - **元ファイル削除オプション** — 変換完了後に元ファイルを自動削除可能
-- **対応フォーマット** — JPEG, PNG, WebP（出力は常にJPEG）
+- **対応フォーマット** — JPEG, PNG, WebP, JPEG XL, AVIF（出力は常にJPEG。メタデータ編集は JPEG のみ）
 
 ## セットアップ
 
 ### 前提条件
 
-- [Rust](https://rustup.rs/) 1.70以降
+- [Rust](https://rustup.rs/) 1.98以降（AVIF デコーダ `avif-decode` の要件）
+- [NASM](https://nasm.us/)（x86/x86_64 でのビルド時。AVIF デコーダ内部の rav1d がアセンブリを使う）
+  - Windows: `winget install NASM.NASM`（インストーラは PATH を通さないので、`nasm.exe` のあるフォルダーを PATH に追加する）
+  - Debian/Ubuntu: `sudo apt install nasm` / macOS: `brew install nasm`
 - [Bun](https://bun.sh/)（フロントエンドビルド用）
 - Tauri v2の[システム依存](https://v2.tauri.app/start/prerequisites/)（GUI使用時）
 
@@ -173,6 +176,8 @@ picture-tool-rust/
 - ファイル名: `{元のファイル名}_processed.jpg`（重複時は連番追加）
 - 元の画像ファイルは上書きしない（`--delete-originals`で明示的に削除）
 - 読み込み失敗した画像はスキップして継続
+- JPEG XL / AVIF の向きは画像本体の情報（JPEG XL のコードストリーム）に従い、Exif の Orientation は使わない
+- 既知の制限: AVIF の回転・反転（`irot` / `imir`）は適用されない。HDR・広色域の JPEG XL / AVIF は色管理せず 8bit に落とすため、色がずれることがある
 
 ### 終了コード（CLI）
 
