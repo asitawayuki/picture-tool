@@ -176,8 +176,8 @@ picture-tool-rust/
 - ファイル名: `{元のファイル名}_processed.jpg`（重複時は連番追加）
 - 元の画像ファイルは上書きしない（`--delete-originals`で明示的に削除）
 - 読み込み失敗した画像はスキップして継続
-- JPEG XL / AVIF の向きは画像本体の情報（JPEG XL のコードストリーム）に従い、Exif の Orientation は使わない
-- 既知の制限: AVIF の回転・反転（`irot` / `imir`）は適用されない。HDR・広色域の JPEG XL / AVIF は色管理せず 8bit に落とすため、色がずれることがある
+- JPEG XL / AVIF の向きは画像本体の情報（JPEG XL はコードストリーム、AVIF は `irot` / `imir`）に従い、Exif の Orientation は使わない
+- 既知の制限: AVIF の切り抜き（`clap`）・グリッド分割された画像・アニメーション（`avis`）には対応しない。HDR・広色域の JPEG XL / AVIF は色管理せず 8bit に落とすため、色がずれることがある
 
 ### 終了コード（CLI）
 
