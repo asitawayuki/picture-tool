@@ -16,7 +16,8 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
-      # gui クレート（Tauri v2）を Linux でビルドするために必須
+      # gui クレート（Tauri v2）を Linux でビルドするために必須。
+      # nasm は core の AVIF デコーダ（rav1d のアセンブリ）用
       - name: Install Tauri system dependencies
         run: |
           sudo apt-get update
@@ -29,7 +30,8 @@ jobs:
             build-essential \
             curl \
             wget \
-            file
+            file \
+            nasm
 
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable

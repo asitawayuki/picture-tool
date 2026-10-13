@@ -14,7 +14,7 @@ serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 clap = { version = "4.5", features = ["derive"] }
 rayon = "1.10"
-# 読むのは入力（jpg / png / webp）とロゴ（png）、書くのは JPEG だけなので形式を絞る。
+# image で読むのは入力（jpg / png / webp。JPEG XL / AVIF は core の専用デコーダ）とロゴ（png）、書くのは JPEG だけなので形式を絞る。
 # 0.25 の既定機能には AVIF エンコーダ（rav1e）が入り、ビルド時間と配布物が大きく膨らむ
 image = { version = "0.25", default-features = false, features = ["jpeg", "png", "webp", "rayon"] }
 

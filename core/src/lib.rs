@@ -32,6 +32,7 @@
 //! - 画像の読み込みに失敗したらスキップして次へ進む。1 枚の失敗でバッチを
 //!   止めない。
 
+mod decode;
 pub mod exif_frame;
 pub mod metadata;
 pub mod model_map;
@@ -125,6 +126,7 @@ pub struct ExifInfo {
     pub date_taken: Option<String>,
     /// EXIF Orientation (1-8)。`None` は「タグ無し」＝変換不要。
     /// `image` クレートは読み込み時にこれを適用しないため、core 側で明示的に適用する。
+    /// JPEG XL / AVIF では Exif に値があっても常に `None`（向きは画素側が正。`decode` 参照）。
     pub orientation: Option<u16>,
 }
 
@@ -157,8 +159,18 @@ pub fn read_exif_info(path: &Path) -> Result<ExifInfo> {
             return Err(e).with_context(|| format!("Failed to open for EXIF: {}", path.display()));
         }
     };
-    let mut bufreader = std::io::BufReader::new(file);
-    let exif_data = match exif::Reader::new().read_from_container(&mut bufreader) {
+    let format = decode::sniff(path)?;
+    // kamadak-exif のコンテナ判定は JPEG XL を知らないので、Exif ボックスを自前で取り出す
+    let parsed = if format == decode::Format::Jxl {
+        drop(file);
+        match decode::jxl_raw_exif(path) {
+            Some(tiff) => exif::Reader::new().read_raw(tiff),
+            None => return Ok(ExifInfo::default()),
+        }
+    } else {
+        exif::Reader::new().read_from_container(&mut std::io::BufReader::new(file))
+    };
+    let exif_data = match parsed {
         Ok(e) => e,
         Err(_) => return Ok(ExifInfo::default()),
     };
@@ -221,7 +233,8 @@ pub fn read_exif_info(path: &Path) -> Result<ExifInfo> {
         .get_field(exif::Tag::Orientation, exif::In::PRIMARY)
         .and_then(|f| f.value.get_uint(0))
         .and_then(|v| u16::try_from(v).ok())
-        .filter(|v| (1..=8).contains(v));
+        .filter(|v| (1..=8).contains(v))
+        .filter(|_| format.exif_orientation_applies());
 
     Ok(ExifInfo {
         camera_make: get_string(exif::Tag::Make).map(|s| s.trim().to_string()),
@@ -271,8 +284,7 @@ pub fn oriented_dimensions((width, height): (u32, u32), orientation: Option<u16>
 /// 生の `image::open` を直接使うと向きが正規化されず、プレビューと出力がずれる。
 /// 表示・処理を問わず、画像を開く入口はこの関数に揃えること。
 pub fn open_image_oriented(path: &Path) -> Result<DynamicImage> {
-    let img =
-        image::open(path).with_context(|| format!("Failed to open image: {}", path.display()))?;
+    let img = decode::open(path, decode::sniff(path)?)?;
     let orientation = read_exif_info(path).ok().and_then(|info| info.orientation);
     Ok(apply_orientation(img, orientation))
 }
@@ -299,7 +311,10 @@ pub fn validate_config(config: &ProcessingConfig) -> Result<()> {
 pub fn is_supported_image(path: &Path) -> bool {
     if let Some(ext) = path.extension() {
         let ext = ext.to_string_lossy().to_lowercase();
-        matches!(ext.as_str(), "jpg" | "jpeg" | "png" | "webp")
+        matches!(
+            ext.as_str(),
+            "jpg" | "jpeg" | "png" | "webp" | "jxl" | "avif"
+        )
     } else {
         false
     }
@@ -355,8 +370,7 @@ pub fn process_image(
         }
     };
 
-    let img = image::open(input_path)
-        .with_context(|| format!("Failed to open image: {}", input_path.display()))?;
+    let img = decode::open(input_path, decode::sniff(input_path)?)?;
     let img = apply_orientation(img, exif.orientation);
 
     // 出力キャンバス幅の上限。quality モードはアスペクト比を変えないため対象外
@@ -579,9 +593,14 @@ pub fn generate_exif_frame_preview_base64(
 /// EXIF Orientation 5-8 では生ピクセルの縦横が入れ替わるため、
 /// 一覧表示の値も `open_image_oriented` 後の見え方に揃える。
 pub fn image_dimensions_oriented(path: &Path) -> Result<(u32, u32)> {
-    let raw = image::image_dimensions(path)
-        .with_context(|| format!("Failed to read image dimensions: {}", path.display()))?;
-    let orientation = read_exif_info(path).ok().and_then(|info| info.orientation);
+    let format = decode::sniff(path)?;
+    let raw = decode::dimensions(path, format)?;
+    // 一覧表示で全ファイルに対して呼ばれる。Exif の向きを使わない形式では読みに行かない
+    let orientation = if format.exif_orientation_applies() {
+        read_exif_info(path).ok().and_then(|info| info.orientation)
+    } else {
+        None
+    };
     Ok(oriented_dimensions(raw, orientation))
 }
 

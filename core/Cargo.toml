@@ -36,6 +36,17 @@ img-parts = "=0.4.0"
 # **0.37 系であることが重要**: little_exif 0.6.23 が quick-xml 0.37.5 に依存しており、
 # 0.42 を足すと同じクレートの 2 版が同時にリンクされる（workspace Cargo.toml の S6-M19）。
 quick-xml = "0.37"
+# 入力専用の JPEG XL / AVIF デコーダ。どちらも純 Rust（C ライブラリ不要）。
+# jxl-oxide の `image` は image::ImageDecoder 実装を有効にする。`rayon` は入れない
+# （1 枚の中は並列にしない。理由は core/src/decode/mod.rs の `jxl_decoder`）
+jxl-oxide = { version = "0.12", default-features = false, features = ["image"] }
+# x86/x86_64 では内部の rav1d がアセンブリを使うため **ビルドに nasm が要る**（README）。
+# 既定の `binary` は CLI 用の PNG 出力で、ライブラリ利用には不要
+avif-decode = { version = "3", default-features = false }
+# AVIF の画像データと色深度を取り出すため（avif-decode が内部で使う版と揃える）
+avif-parse = "2"
+# JPEG XL の Brotli 圧縮 Exif（`brob`）を上限つきで展開するため（jxl-oxide が使う版と揃える）
+brotli-decompressor = "5"
 
 [dev-dependencies]
 tempfile = "3"
