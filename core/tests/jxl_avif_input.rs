@@ -10,6 +10,13 @@
 //! | `exif_brob.jxl` | `exif_o6.jxl` と同じだが Exif を Brotli 圧縮ボックス（`brob`）に入れたもの |
 //! | `rotated.jxl` | コードストリームの向きが 6（90 度時計回りで正立）。ffmpeg が書いた Exif はポインタが壊れているので読み取りの検証には使わない |
 //! | `exif_o6.avif` | `irot` なし。Exif に Make/Model と Orientation=6 |
+//! | `split.jxl` | `exif_o6.jxl` のコードストリームを `jxlp` 2 つに分けたもの（Exif あり） |
+//! | `broken_brob.jxl` | Brotli として壊れた `brob`（種類は Exif）を持つ |
+//! | `exif_bomb.jxl` | 展開すると 8MiB になる Exif の `brob` を持つ |
+//! | `nested.jxl` | コンテナの `jxlc` の中にさらにコンテナ（`brob` の Exif ＋ `jxlc`）を入れた不正なもの |
+//! | `over_limit.jxl` | 14000x13000 の単色の非可逆。出力が 546MB で、上限の 512MB を超える |
+//! | `lossy_24mp.jxl` | 6000x4000 の非可逆。左半分が赤・右半分が青 |
+//! | `orient_N.avif` | 64x32 を 4 分割（左上=赤、右上=緑、左下=青、右下=黄）し、Exif の向き N を Pillow が `irot`/`imir` に変換して書いたもの |
 //!
 //! JPEG XL はコードストリームの向き、AVIF は `irot`/`imir` が正で、
 //! **どちらも Exif の Orientation は無視する**（適用すると二重回転になる）。
@@ -35,6 +42,14 @@ fn is_red(p: Rgba<u8>) -> bool {
 
 fn is_blue(p: Rgba<u8>) -> bool {
     p[2] > 200 && p[0] < 60 && p[1] < 60
+}
+
+fn is_green(p: Rgba<u8>) -> bool {
+    p[1] > 200 && p[0] < 60 && p[2] < 60
+}
+
+fn is_yellow(p: Rgba<u8>) -> bool {
+    p[0] > 200 && p[1] > 200 && p[2] < 60
 }
 
 fn quality_config() -> ProcessingConfig {
@@ -148,6 +163,10 @@ fn jxl_codestream_orientation_is_applied_exactly_once() {
 
 #[test]
 fn jxl_exif_orientation_is_ignored() {
+    // 前提: Exif は読めている（読めずに無視されたのなら、このテストは何も確かめていない）
+    let info = read_exif_info(&fixture("exif_o6.jxl")).unwrap();
+    assert_eq!(info.camera_make.as_deref(), Some("TestMake"));
+
     let img = open_image_oriented(&fixture("exif_o6.jxl")).unwrap();
     assert_eq!(img.dimensions(), (40, 20));
     assert!(is_red(img.get_pixel(5, 10)));
@@ -213,6 +232,8 @@ fn format_is_detected_from_content_not_extension() {
     for (src, disguised) in [
         ("exif_o6.jxl", "jxl_as.png"),
         ("exif_o6.avif", "avif_as.jpg"),
+        ("exif_o6.jxl", "jxl_as.avif"),
+        ("exif_o6.avif", "avif_as.jxl"),
     ] {
         let path = dir.path().join(disguised);
         std::fs::copy(fixture(src), &path).unwrap();
@@ -222,4 +243,180 @@ fn format_is_detected_from_content_not_extension() {
             "{disguised}"
         );
     }
+}
+
+#[test]
+fn jpeg_named_as_avif_is_still_decoded() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("jpeg_as.avif");
+    std::fs::copy(fixture("exif-only.jpg"), &path).unwrap();
+    let expected = image::open(fixture("exif-only.jpg")).unwrap().dimensions();
+    assert_eq!(open_image_oriented(&path).unwrap().dimensions(), expected);
+    assert_eq!(image_dimensions_oriented(&path).unwrap(), expected);
+}
+
+#[test]
+fn lossy_jxl_at_a_typical_camera_resolution_is_converted() {
+    let img = open_image_oriented(&fixture("lossy_24mp.jxl")).unwrap();
+    assert_eq!(img.dimensions(), (6000, 4000));
+    assert!(is_red(img.get_pixel(1500, 2000)));
+    assert!(is_blue(img.get_pixel(4500, 2000)));
+
+    let out = tempfile::tempdir().unwrap();
+    let result = process_image(
+        &fixture("lossy_24mp.jxl"),
+        out.path(),
+        &quality_config(),
+        None,
+        None,
+    )
+    .unwrap();
+    assert_eq!(
+        image::open(&result.output_path).unwrap().dimensions(),
+        (6000, 4000)
+    );
+}
+
+/// Exif の向き N で表示したときの 4 隅の色（左上, 右上, 左下, 右下）。元は 赤 緑 / 青 黄
+fn expected_corners(orientation: u16) -> [&'static str; 4] {
+    match orientation {
+        1 => ["red", "green", "blue", "yellow"],
+        2 => ["green", "red", "yellow", "blue"], // 左右反転
+        3 => ["yellow", "blue", "green", "red"], // 180 度
+        4 => ["blue", "yellow", "red", "green"], // 上下反転
+        5 => ["red", "blue", "green", "yellow"], // 転置
+        6 => ["blue", "red", "yellow", "green"], // 時計回り 90 度
+        7 => ["yellow", "green", "blue", "red"], // 反転置
+        8 => ["green", "yellow", "red", "blue"], // 反時計回り 90 度
+        _ => unreachable!(),
+    }
+}
+
+fn color_name(p: Rgba<u8>) -> &'static str {
+    if is_red(p) {
+        "red"
+    } else if is_green(p) {
+        "green"
+    } else if is_blue(p) {
+        "blue"
+    } else if is_yellow(p) {
+        "yellow"
+    } else {
+        "other"
+    }
+}
+
+#[test]
+fn avif_orientation_follows_irot_and_imir() {
+    let out = tempfile::tempdir().unwrap();
+    for orientation in 1..=8u16 {
+        let path = fixture(&format!("orient_{orientation}.avif"));
+        let expected_size = if orientation >= 5 { (32, 64) } else { (64, 32) };
+
+        let img = open_image_oriented(&path).unwrap();
+        assert_eq!(img.dimensions(), expected_size, "orientation {orientation}");
+        let (w, h) = img.dimensions();
+        let corners = [
+            (w / 4, h / 4),
+            (w * 3 / 4, h / 4),
+            (w / 4, h * 3 / 4),
+            (w * 3 / 4, h * 3 / 4),
+        ]
+        .map(|(x, y)| color_name(img.get_pixel(x, y)));
+        assert_eq!(
+            corners,
+            expected_corners(orientation),
+            "orientation {orientation}"
+        );
+
+        assert_eq!(
+            image_dimensions_oriented(&path).unwrap(),
+            expected_size,
+            "orientation {orientation}"
+        );
+        let result = process_image(&path, out.path(), &quality_config(), None, None).unwrap();
+        assert_eq!(
+            image::open(&result.output_path).unwrap().dimensions(),
+            expected_size,
+            "orientation {orientation}"
+        );
+    }
+}
+
+#[test]
+fn split_jxl_codestream_is_decoded() {
+    let img = open_image_oriented(&fixture("split.jxl")).unwrap();
+    assert_eq!(img.dimensions(), (40, 20));
+    assert!(is_red(img.get_pixel(5, 10)));
+    assert!(is_blue(img.get_pixel(35, 10)));
+    let info = read_exif_info(&fixture("split.jxl")).unwrap();
+    assert_eq!(info.camera_make.as_deref(), Some("TestMake"));
+}
+
+#[test]
+fn broken_auxiliary_box_does_not_affect_pixels_or_dimensions() {
+    let path = fixture("broken_brob.jxl");
+    let img = open_image_oriented(&path).unwrap();
+    assert_eq!(img.dimensions(), (40, 20));
+    assert!(is_red(img.get_pixel(5, 10)));
+    assert_eq!(image_dimensions_oriented(&path).unwrap(), (40, 20));
+    // Exif は読めないので無いものとして扱う（エラーにはしない）
+    assert_eq!(read_exif_info(&path).unwrap().camera_make, None);
+}
+
+#[test]
+fn oversized_compressed_exif_is_ignored() {
+    // 前提: 同じ形（brob に入った Exif）で大きさが普通なら読める
+    let normal = read_exif_info(&fixture("exif_brob.jxl")).unwrap();
+    assert_eq!(normal.camera_make.as_deref(), Some("TestMake"));
+
+    let path = fixture("exif_bomb.jxl");
+    assert_eq!(read_exif_info(&path).unwrap().camera_make, None);
+    assert_eq!(open_image_oriented(&path).unwrap().dimensions(), (40, 20));
+}
+
+#[test]
+fn jxl_whose_output_exceeds_the_memory_limit_is_rejected() {
+    let path = fixture("over_limit.jxl");
+    // 寸法はヘッダだけで読めるので一覧には出る
+    assert_eq!(image_dimensions_oriented(&path).unwrap(), (14000, 13000));
+    assert!(open_image_oriented(&path).is_err());
+    let out = tempfile::tempdir().unwrap();
+    assert!(process_image(&path, out.path(), &quality_config(), None, None).is_err());
+}
+
+#[test]
+fn dimensions_are_read_from_the_header_alone() {
+    let dir = tempfile::tempdir().unwrap();
+
+    // JPEG XL: コードストリームのヘッダより後ろを切り落とす
+    let jxl = std::fs::read(fixture("lossy_24mp.jxl")).unwrap();
+    let truncated_jxl = dir.path().join("head.jxl");
+    std::fs::write(&truncated_jxl, &jxl[..200]).unwrap();
+
+    // AVIF: 画像データ（mdat）の中身を切り落とす
+    let avif = std::fs::read(fixture("orient_6.avif")).unwrap();
+    let mdat = avif.windows(4).position(|w| w == b"mdat").unwrap();
+    let truncated_avif = dir.path().join("head.avif");
+    std::fs::write(&truncated_avif, &avif[..mdat + 4]).unwrap();
+
+    for (path, expected) in [(&truncated_jxl, (6000, 4000)), (&truncated_avif, (32, 64))] {
+        // 前提: 画素は本当に読めない
+        assert!(open_image_oriented(path).is_err(), "{}", path.display());
+        assert_eq!(
+            image_dimensions_oriented(path).unwrap(),
+            expected,
+            "{}",
+            path.display()
+        );
+    }
+}
+
+#[test]
+fn container_nested_in_a_codestream_box_is_rejected() {
+    // jxlc の中身はコードストリームでなければならない。受け入れると、内側の brob が
+    // 上限なしで展開される経路が開く
+    let path = fixture("nested.jxl");
+    assert!(open_image_oriented(&path).is_err());
+    assert!(image_dimensions_oriented(&path).is_err());
 }

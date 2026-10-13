@@ -2523,8 +2523,6 @@ version = "1.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "25f15eb830aa77a7f21148d72e153562a26bfe570139bd4922eab1908dd499d3"
 dependencies = [
- "rayon",
- "rayon-core",
  "tracing",
 ]
 
@@ -3368,6 +3366,7 @@ dependencies = [
  "avif-decode",
  "avif-parse",
  "base64 0.23.1",
+ "brotli-decompressor",
  "clap",
  "dirs 7.0.0",
  "image",
