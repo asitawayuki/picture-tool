@@ -18,8 +18,19 @@
 //!
 //! デコーダ内部の作業領域はこの 512MB に含めない（JPEG XL は 1 画素あたり出力の数倍を使い、
 //! 含めると 20MP 前後の普通の写真が開けなくなる）。ただし作業領域が宣言された寸法より
-//! 大きくなりうる箇所には、それぞれ別に上限を置く（[`JXL_WORKING_BYTES_PER_PIXEL`]、
-//! [`frame_size_limits`]）。
+//! 大きくなりうる箇所には、それぞれ別に上限を置く（[`JXL_WORKING_BYTES_PER_PIXEL`]）。
+//!
+//! AVIF は 2 段で判定する:
+//! 1. **デコード前**: AV1 のシーケンスヘッダが宣言する寸法（主画像とアルファのアイテムごと）から
+//!    出力の大きさを見積もり、512MB を超えれば弾く（[`frame_size_limits`]）。通過したら、
+//!    その宣言寸法を `frame_size_limit` として libdav1d に強制させる。宣言より大きい
+//!    フレームはデコーダが確保前に拒否するので、宣言が上限の根拠になる
+//! 2. **変換前**: 実際にデコードされた画像の大きさで、YUV→RGB 変換の出力が 512MB を
+//!    超えないか再度確かめる（`yuv.rs`）
+//!
+//! 残る上限: libdav1d 内部の作業領域（ピクチャ本体・フィルムグレインの複製・参照フレーム）は
+//! 「宣言寸法 × 深度 × 参照フレーム数」まで使いうるが、この 512MB には含めていない。
+//! 内部の作業領域を含めた予算は別の設計（姉妹 spec）で扱う。
 
 mod av1;
 mod avif;
@@ -230,10 +241,9 @@ fn frame_size_limits(
 /// 扱えるよう `Err` に変える。`metadata::write_metadata` と同じ方針。
 ///
 /// **捕まえられるのは呼び出したスレッドで起きた panic だけ。** そのため jxl-oxide には
-/// スレッドプールを使わせない（[`jxl_decoder`]）。rav1d（AVIF）は avif-decode が自前の
-/// ワーカースレッドを起こし、その数を変える API がない。ワーカーで panic すると
-/// 呼び出し側が止まる可能性は残る（rav1d は dav1d の移植で、入力から panic に至る経路は
-/// 確認できていない）。
+/// スレッドプールを使わせない（[`jxl_decoder`]）。libdav1d（AVIF）のワーカーは C のスレッドで
+/// Rust の panic は起きない（`n_threads = 1` でワーカーも起こさない）。dav1d クレート側の
+/// panic（予約値の `unreachable!()` 等）は呼び出したスレッドで起き、ここで捕まえる。
 fn guarded<T>(f: impl FnOnce() -> Result<T>) -> Result<T> {
     std::panic::catch_unwind(std::panic::AssertUnwindSafe(f))
         .unwrap_or_else(|_| Err(anyhow!("decoder panicked on malformed input")))

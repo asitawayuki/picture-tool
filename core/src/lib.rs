@@ -24,7 +24,9 @@
 //!   [`ProcessResult::warnings`] や `ExifFrameOutput::warnings` /
 //!   `ExifFramePreview::warnings`、[`metadata::write_metadata`] の戻り値に積んで
 //!   呼び出し元へ返す。出すか捨てるかは境界（CLI は stderr、GUI は
-//!   `gui/src/commands.rs`）が決める。
+//!   `gui/src/commands.rs`）が決める。**例外**: 外部ライブラリが壊れた入力で stderr に
+//!   書くことは止められない（libdav1d のログ、`decode` の `guarded` が捕まえた panic の
+//!   既定 hook のメッセージ）。これは core の `eprintln!` ではなく、既知の制限として許容する。
 //! - **変換は元の画像ファイルを上書きしない。** 削除は `delete_originals` を
 //!   立てたときだけ。唯一の例外が [`metadata::write_metadata`] で、これは
 //!   元ファイルのメタデータセグメントのみを差し替える（画素は再エンコード

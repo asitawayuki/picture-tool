@@ -18,12 +18,43 @@ Instagram投稿用の画像一括変換ツール。写真を4:5アスペクト�
 
 ### 前提条件
 
-- [Rust](https://rustup.rs/) 1.98以降（AVIF デコーダ `avif-decode` の要件）
-- [NASM](https://nasm.us/)（x86/x86_64 でのビルド時。AVIF デコーダ内部の rav1d がアセンブリを使う）
+- [Rust](https://rustup.rs/) 1.90以降（AVIF のコンテナ解析クレート `avif-parse` の要件）
+- [libdav1d](https://code.videolan.org/videolan/dav1d) 1.3以降（AVIF の AV1 デコーダ。C 製）。入手方法は OS で異なる
+  - Linux: システムの libdav1d の開発パッケージを動的リンクする。Fedora は `sudo dnf install libdav1d-devel`、
+    Ubuntu は 24.04 以降で `sudo apt install libdav1d-dev`（Debian 12 の dav1d は 1.0 で要件を満たさない）
+  - Windows: dav1d を git clone して meson / ninja で静的ビルドする（下の「Windows での AVIF デコーダのビルド」）
+  - macOS: `brew install dav1d`（動的リンク。**未検証**）
+- [NASM](https://nasm.us/)（x86/x86_64 でのビルド時。libdav1d を内部ビルドするとき（Windows）にアセンブリのビルドで使う）
   - Windows: `winget install NASM.NASM`（インストーラは PATH を通さないので、`nasm.exe` のあるフォルダーを PATH に追加する）
   - Debian/Ubuntu: `sudo apt install nasm` / macOS: `brew install nasm`
 - [Bun](https://bun.sh/)（フロントエンドビルド用）
 - Tauri v2の[システム依存](https://v2.tauri.app/start/prerequisites/)（GUI使用時）
+
+#### Windows での AVIF デコーダのビルド
+
+> **未検証**: この手順は設計に基づいて書いたもので、Windows の実機ではまだ試していません。
+> 通らなかった場合は、下の各項目（特に pkg-config とネットワーク）を疑ってください。
+
+Windows では libdav1d を `dav1d-sys` クレートが内部でビルドします（dav1d を git clone し、meson と ninja で静的ライブラリにする）。
+そのため次が要ります。
+
+- meson、ninja、git、NASM（上記）、C コンパイラ（MSVC）
+- **pkg-config の実行ファイル**（内部ビルドの最後で pkg-config を呼ぶため、Windows の標準環境では別途導入が要る）
+- **ビルド時のネットワーク接続**（`code.videolan.org` から dav1d を取得する）
+
+環境変数 `SYSTEM_DEPS_DAV1D_BUILD_INTERNAL=always` を、**ビルドのたびに**ビルドするシェルで設定します。
+PowerShell の例:
+
+```powershell
+$env:SYSTEM_DEPS_DAV1D_BUILD_INTERNAL = "always"
+cargo build --release
+```
+
+`.cargo/config.toml` の `[env]` には置きません。`[env]` は OS で分岐できず、Linux の動的リンクと両立しないためです。
+
+ビルドが「pkg-config が dav1d を見つけない」という趣旨のエラーで止まったときは、その表示を信用せず、
+**ビルドログを遡って git や meson の失敗を探してください**。`dav1d-sys` のビルドスクリプトは外部コマンドの
+終了コードを見ないため、git clone や meson が失敗しても先へ進み、最後にこの見当違いのエラーで止まります。
 
 ### インストール
 
@@ -178,6 +209,14 @@ picture-tool-rust/
 - 読み込み失敗した画像はスキップして継続
 - JPEG XL / AVIF の向きは画像本体の情報（JPEG XL はコードストリーム、AVIF は `irot` / `imir`）に従い、Exif の Orientation は使わない
 - 既知の制限: AVIF の切り抜き（`clap`）・グリッド分割された画像・アニメーション（`avis`）には対応しない。HDR・広色域の JPEG XL / AVIF は色管理せず 8bit に落とすため、色がずれることがある
+- AVIF についての既知の制限（デコーダを libdav1d に替えたことによるもの）
+  - 壊れた AVIF を読むと、libdav1d のログや内部エラーのメッセージが stderr に出ることがある（読み込みは 1 枚の失敗として扱われ、処理は続く）
+  - ★（評価）の読み書きは JPEG のみ。JPEG XL / AVIF は常に「未評価」になる
+  - 主ブランド（`ftyp` の major brand）が `avif` 以外の AVIF は開けない（互換ブランドだけに `avif` があるものを含む）
+  - 仕様に反する次のファイルは開けない: 行列係数が予約値 3 の AVIF、1 つの AV1 データにシーケンスヘッダが 2 個以上ある AVIF、
+    アルファの寸法が主画像と違う AVIF
+  - Linux の配布物（`make release` の deb / rpm / AppImage）は、実行時にシステムの libdav1d（1.3 以上）が要る。
+    パッケージの依存としては宣言していないので、入っていない環境では起動時にライブラリが見つからないと言われる
 
 ### 終了コード（CLI）
 

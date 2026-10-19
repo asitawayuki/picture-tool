@@ -185,7 +185,7 @@ pub fn preset_name(raw: &str) -> Result<String, String> {
 /// メタデータを読み書きしてよい JPEG として検証し、実体のパスを返す
 ///
 /// `readable_image` より**強い**。メタデータ編集の対象は JPEG だけで
-/// （spec §スコープ）、PNG / WebP は core の `metadata` が扱わない。
+/// （spec §スコープ）、PNG / WebP / JPEG XL / AVIF は core の `metadata` が扱わない。
 pub fn readable_jpeg(raw: &str) -> Result<PathBuf, String> {
     let resolved = readable_image(raw)?;
     let is_jpeg = resolved
