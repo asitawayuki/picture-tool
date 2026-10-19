@@ -472,3 +472,121 @@ fn malformed_avif_is_an_error_not_an_abort() {
     let err = open_err("crash.avif");
     assert!(err.contains("AV1 decoding failed"), "{err}");
 }
+
+/// 画素一致の期待値（スカラー経路）。**作り直す手段はない**（avif-decode を外したため）。
+/// 期待値は、移植したコードを `yuv` の SIMD 経路でビルドして差し替え前とバイト一致を確かめた後に、
+/// スカラー経路で作ったもの（plan 2026-10-19 の実施メモ Task 5）。
+/// **ワークスペースの別クレートが `yuv` を既定 feature で依存に加えると SIMD 経路が黙って有効になり、
+/// AVX2 の機械でここが落ちる**（core/Cargo.toml の `yuv` の行）。
+/// 色型は spec「出力の画素形式」から先に決めたもの（8bit は `Rgb8`/`Rgba8`/`Luma8`。`ColorType` の Debug 名では `L8`/`L16`。グレー＋アルファは
+/// `Rgba8`、10/12bit は 16bit 版。アルファ付きの深度は主画像の深度で決まる）。
+const PIXELS: &[(&str, &str, u32, u32, u64)] = &[
+    // (ファイル, 色型, 幅, 高さ, FNV-1a 64)
+    ("p8_420_lim_unspec.avif", "Rgb8", 33, 17, 0xa992329c6830b030),
+    ("p8_422_full_709.avif", "Rgb8", 33, 17, 0x5805ae471bbbe7fb),
+    ("p8_444_lim_601.avif", "Rgb8", 33, 17, 0xb0f19889a565efb0),
+    ("p8_444_full_fcc.avif", "Rgb8", 33, 17, 0x0c7966043911105b),
+    ("p8_444_lim_ycgco.avif", "Rgb8", 33, 17, 0x0258fb7ad7886f94),
+    (
+        "p8_444_full_identity.avif",
+        "Rgb8",
+        33,
+        17,
+        0xbc3d72f431f4695b,
+    ),
+    ("p10_420_lim_709.avif", "Rgb16", 33, 17, 0xf0a5112000135169),
+    (
+        "p10_444_full_unspec.avif",
+        "Rgb16",
+        33,
+        17,
+        0x92164bbcf45bd5c1,
+    ),
+    (
+        "p10_444_full_identity.avif",
+        "Rgb16",
+        33,
+        17,
+        0x7ccf9fd4c8ac0d4d,
+    ),
+    ("p12_422_lim_601.avif", "Rgb16", 33, 17, 0x4706a56db29c2531),
+    ("gray8_full.avif", "L8", 33, 17, 0x41011ca0581d6f41),
+    ("gray10_lim.avif", "L16", 33, 17, 0xf7fda3f920e51138),
+    (
+        "p8_420_lim_709_a8.avif",
+        "Rgba8",
+        33,
+        17,
+        0xe33cd2ae824fa3c0,
+    ),
+    (
+        "p10_420_lim_709_a10.avif",
+        "Rgba16",
+        33,
+        17,
+        0xbf6e1fe36ca6c1e5,
+    ),
+    (
+        "p10_420_lim_709_a8.avif",
+        "Rgba16",
+        33,
+        17,
+        0x8d335d27311cd800,
+    ),
+    (
+        "p8_420_lim_709_a10.avif",
+        "Rgba8",
+        33,
+        17,
+        0x2482b6cc5b9c137b,
+    ),
+    (
+        "p8_420_lim_709_a420.avif",
+        "Rgba8",
+        33,
+        17,
+        0xe33cd2ae824fa3c0,
+    ),
+    ("a8_on_gray8.avif", "Rgba8", 33, 17, 0x0e93c835e68a3cf6),
+    ("a8_premul.avif", "Rgba8", 33, 17, 0x93e916e2e64e8583),
+    ("two_frames.avif", "Rgb8", 33, 17, 0xceca7fafe869b122),
+];
+
+/// FNV-1a 64bit。入力は 色型の名前（UTF-8）・幅（LE 4 バイト）・高さ（LE 4 バイト）・サンプル列
+/// （16bit は各サンプルを LE 2 バイト）。`DefaultHasher` は版で変わりうるので使わない
+fn fnv1a(img: &image::DynamicImage) -> u64 {
+    use image::DynamicImage as D;
+    let mut bytes = format!("{:?}", img.color()).into_bytes();
+    bytes.extend(img.width().to_le_bytes());
+    bytes.extend(img.height().to_le_bytes());
+    match img {
+        D::ImageLuma8(b) => bytes.extend_from_slice(b.as_raw()),
+        D::ImageRgb8(b) => bytes.extend_from_slice(b.as_raw()),
+        D::ImageRgba8(b) => bytes.extend_from_slice(b.as_raw()),
+        D::ImageLuma16(b) => bytes.extend(b.as_raw().iter().flat_map(|s| s.to_le_bytes())),
+        D::ImageRgb16(b) => bytes.extend(b.as_raw().iter().flat_map(|s| s.to_le_bytes())),
+        D::ImageRgba16(b) => bytes.extend(b.as_raw().iter().flat_map(|s| s.to_le_bytes())),
+        other => panic!("想定外の色型: {:?}", other.color()),
+    }
+    bytes.iter().fold(0xcbf2_9ce4_8422_2325_u64, |h, &b| {
+        (h ^ u64::from(b)).wrapping_mul(0x0000_0100_0000_01b3)
+    })
+}
+
+#[test]
+fn avif_pixels_match_the_recorded_output() {
+    assert_eq!(PIXELS.len(), 20, "画素一致の対象は 20 枚");
+    for &(name, color, w, h, hash) in PIXELS {
+        let img = open_image_oriented(&avif(name)).unwrap();
+        assert_eq!(
+            (
+                format!("{:?}", img.color()).as_str(),
+                img.width(),
+                img.height()
+            ),
+            (color, w, h),
+            "{name}"
+        );
+        assert_eq!(fnv1a(&img), hash, "{name}: {:#018x}", fnv1a(&img));
+    }
+}
