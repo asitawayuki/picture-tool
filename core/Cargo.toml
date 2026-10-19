@@ -36,14 +36,27 @@ img-parts = "=0.4.0"
 # **0.37 系であることが重要**: little_exif 0.6.23 が quick-xml 0.37.5 に依存しており、
 # 0.42 を足すと同じクレートの 2 版が同時にリンクされる（workspace Cargo.toml の S6-M19）。
 quick-xml = "0.37"
-# 入力専用の JPEG XL / AVIF デコーダ。どちらも純 Rust（C ライブラリ不要）。
-# jxl-oxide の `image` は image::ImageDecoder 実装を有効にする。`rayon` は入れない
+# 入力専用の JPEG XL デコーダ。純 Rust（C ライブラリ不要）。
+# `image` は image::ImageDecoder 実装を有効にする。`rayon` は入れない
 # （1 枚の中は並列にしない。理由は core/src/decode/mod.rs の `jxl_decoder`）
 jxl-oxide = { version = "0.12", default-features = false, features = ["image"] }
-# x86/x86_64 では内部の rav1d がアセンブリを使うため **ビルドに nasm が要る**（README）。
-# 既定の `binary` は CLI 用の PNG 出力で、ライブラリ利用には不要
-avif-decode = { version = "3", default-features = false }
-# AVIF の画像データと色深度を取り出すため（avif-decode が内部で使う版と揃える）
+# AVIF の AV1 デコーダ（C 版 libdav1d のバインディング）。壊れた入力を 1 枚の Err にするため
+# avif-decode（rav1d）から差し替えた。**rav1d を依存に戻さない**: rav1d は `dav1d_open` などを
+# 同じ名前の C ABI で公開しており、同居するとリンカーが黙って rav1d 側を使う
+# （`cargo tree -p picture-tool-core -i rav1d` が空であること）。
+# Linux はシステムの libdav1d（1.3 以上）を pkg-config で動的リンクする。Windows と CI は
+# `SYSTEM_DEPS_DAV1D_BUILD_INTERNAL=always` で内部ビルドし、x86/x86_64 のアセンブリのため
+# **そのビルドに nasm が要る**（README）
+dav1d = "0.11"
+# YUV→RGB 変換（core/src/decode/yuv.rs）。**SIMD を切ってスカラー経路に固定する**: SIMD 経路は
+# 実行する CPU で出力が変わり（AVX2 とスカラーで 8bit 最大 2 階調）、画素一致を照合できない。
+# 版を `=` で固定するのは、`cargo update` だけで丸めが変わって出力が変わりうるため。
+# **ワークスペースの別クレートが既定 feature で `yuv` を足すと、feature の統合で SIMD が
+# 黙って有効になり、画素一致のテストが AVX2 の機械で落ちる**
+yuv = { version = "=0.8.19", default-features = false }
+# 10/12bit の平面を `&[u16]` として読むため（image が既に依存している版）
+bytemuck = "1"
+# AVIF の画像データと色深度を取り出すため
 avif-parse = "2"
 # JPEG XL の Brotli 圧縮 Exif（`brob`）を上限つきで展開するため（jxl-oxide が使う版と揃える）
 brotli-decompressor = "5"

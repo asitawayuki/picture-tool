@@ -461,3 +461,14 @@ fn avif_with_two_sequence_headers_in_one_item_is_rejected() {
     // アイテムごとに 1 個（合計 2 個）の正常なアルファ付きは開ける
     assert!(open_image_oriented(&avif("p8_420_lim_709_a8.avif")).is_ok());
 }
+
+/// 差し替え前（avif-decode / rav1d）はテストバイナリごと abort した（実施メモ Task 2）
+#[test]
+fn malformed_avif_is_an_error_not_an_abort() {
+    // 前提: 壊す前の元ファイルは開ける（壊した箇所が理由で Err になっている）
+    assert!(open_image_oriented(&avif("base_64x32.avif")).is_ok());
+    // Task 2 で abort を再現できたのは crash.avif の 1 件だけ。理由はタイルデータの破損で、
+    // コンテナの解析ではなく AV1 のデコードで落ちる
+    let err = open_err("crash.avif");
+    assert!(err.contains("AV1 decoding failed"), "{err}");
+}

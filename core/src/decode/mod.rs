@@ -21,9 +21,11 @@
 //! 大きくなりうる箇所には、それぞれ別に上限を置く（[`JXL_WORKING_BYTES_PER_PIXEL`]、
 //! [`frame_size_limits`]）。
 
+mod av1;
 mod avif;
 mod isobmff;
 mod jxl;
+mod yuv;
 
 use anyhow::{Context, Result, anyhow, ensure};
 use image::{DynamicImage, ImageDecoder as _, ImageReader};
@@ -86,7 +88,7 @@ pub(crate) fn open(path: &Path, format: Format) -> Result<DynamicImage> {
             let data = std::fs::read(path)?;
             let layout = avif::read_layout(Cursor::new(&data))?;
             let parsed = avif_parse::read_avif(&mut data.as_slice())?;
-            let _limits = frame_size_limits(
+            let limits = frame_size_limits(
                 avif::declared(&parsed.primary_item)?,
                 parsed
                     .alpha_item
@@ -94,8 +96,16 @@ pub(crate) fn open(path: &Path, format: Format) -> Result<DynamicImage> {
                     .map(avif::declared)
                     .transpose()?,
             )?;
-            let decoded = avif_decode::Decoder::from_avif(&data)?.to_image()?;
-            Ok(layout.apply(avif_to_dynamic(decoded)?))
+            let color = av1::decode(&parsed.primary_item, limits.primary)?;
+            let alpha = match (&parsed.alpha_item, limits.alpha) {
+                (Some(a), Some(limit)) => Some(av1::decode(a, limit)?),
+                _ => None,
+            };
+            Ok(layout.apply(yuv::to_image(
+                &color,
+                alpha.as_ref(),
+                parsed.premultiplied_alpha,
+            )?))
         }),
         Format::Other => Ok(ImageReader::open(path)?.with_guessed_format()?.decode()?),
     }
@@ -171,7 +181,6 @@ const JXL_WORKING_BYTES_PER_PIXEL: u64 = 64;
 const JXL_WORKING_BASE: u64 = 64 << 20;
 
 /// AVIF のデコーダに渡す `frame_size_limit`（画素数）。主画像とアルファで別々に持つ
-#[cfg_attr(not(test), allow(dead_code))]
 #[derive(Debug)]
 struct FrameSizeLimits {
     primary: u32,
@@ -228,60 +237,6 @@ fn frame_size_limits(
 fn guarded<T>(f: impl FnOnce() -> Result<T>) -> Result<T> {
     std::panic::catch_unwind(std::panic::AssertUnwindSafe(f))
         .unwrap_or_else(|_| Err(anyhow!("decoder panicked on malformed input")))
-}
-
-fn avif_to_dynamic(decoded: avif_decode::Image) -> Result<DynamicImage> {
-    use avif_decode::Image as A;
-    fn buffer<P: image::Pixel>(
-        width: usize,
-        height: usize,
-        data: Vec<P::Subpixel>,
-    ) -> Result<image::ImageBuffer<P, Vec<P::Subpixel>>> {
-        let (w, h) = (u32::try_from(width)?, u32::try_from(height)?);
-        image::ImageBuffer::from_raw(w, h, data).context("AVIF pixel buffer size mismatch")
-    }
-    Ok(match decoded {
-        A::Rgb8(img) => {
-            let (px, w, h) = img.into_contiguous_buf();
-            DynamicImage::ImageRgb8(buffer(
-                w,
-                h,
-                px.iter().flat_map(|p| [p.r, p.g, p.b]).collect(),
-            )?)
-        }
-        A::Rgba8(img) => {
-            let (px, w, h) = img.into_contiguous_buf();
-            DynamicImage::ImageRgba8(buffer(
-                w,
-                h,
-                px.iter().flat_map(|p| [p.r, p.g, p.b, p.a]).collect(),
-            )?)
-        }
-        A::Rgb16(img) => {
-            let (px, w, h) = img.into_contiguous_buf();
-            DynamicImage::ImageRgb16(buffer(
-                w,
-                h,
-                px.iter().flat_map(|p| [p.r, p.g, p.b]).collect(),
-            )?)
-        }
-        A::Rgba16(img) => {
-            let (px, w, h) = img.into_contiguous_buf();
-            DynamicImage::ImageRgba16(buffer(
-                w,
-                h,
-                px.iter().flat_map(|p| [p.r, p.g, p.b, p.a]).collect(),
-            )?)
-        }
-        A::Gray8(img) => {
-            let (px, w, h) = img.into_contiguous_buf();
-            DynamicImage::ImageLuma8(buffer(w, h, px.iter().map(|p| p.value()).collect())?)
-        }
-        A::Gray16(img) => {
-            let (px, w, h) = img.into_contiguous_buf();
-            DynamicImage::ImageLuma16(buffer(w, h, px.iter().map(|p| p.value()).collect())?)
-        }
-    })
 }
 
 #[cfg(test)]
