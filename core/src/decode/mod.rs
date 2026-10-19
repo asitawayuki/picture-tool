@@ -312,6 +312,22 @@ mod tests {
     }
 
     #[test]
+    fn frame_size_limits_sums_primary_and_alpha_into_one_budget() {
+        // 主画像 150M 画素 8bit は 450,000,000 バイト、アルファ 150M 画素 8bit は
+        // 150,000,000 バイト。どちらも単独では上限 536,870,912 の内側で、合計 600MB だけが超える
+        let primary = || d(150_000_000, 8);
+        let alpha = || d(150_000_000, 8);
+        // 前提: それぞれ単独では通る（これが崩れると、下の Err は別の理由で出ていることになる）
+        assert!(frame_size_limits(primary(), None).is_ok());
+        assert!(frame_size_limits(d(64 * 64, 8), Some(alpha())).is_ok());
+        let err = frame_size_limits(primary(), Some(alpha())).unwrap_err();
+        assert!(
+            format!("{err:#}").contains("AVIF declares a size over the 512MB output limit"),
+            "{err:#}"
+        );
+    }
+
+    #[test]
     fn frame_size_limits_rejects_before_the_limit_would_wrap() {
         // 65536x65536 = 2^32。u32 に入らず、0（無制限）にもならないまま 512MB 判定で落ちる
         let err = frame_size_limits(d(1 << 32, 8), None).unwrap_err();
