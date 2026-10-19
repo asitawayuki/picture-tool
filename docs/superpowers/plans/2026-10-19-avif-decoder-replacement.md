@@ -263,25 +263,25 @@ avif-decode がまだある状態で行う。ここで保存した出力が、Ta
 - Produces: `core/tests/fixtures/avif/` の各ファイル（上の表）
 - Produces: `docs/tmp/avif-baseline/<名前>.bin`（画素一致の 20 枚の、差し替え前の `--dump`。コミットしない）
 
-- [ ] **Step 1: `core/examples/avif_probe.rs` を書く**
+- [x] **Step 1: `core/examples/avif_probe.rs` を書く**
 
 `picture_tool_core::open_image_oriented` を呼ぶだけ。引数解析は手書きでよい（依存を足さない）。
 `--dump` の書き出しは `img.as_bytes()` ではなく、16bit をサンプルごとに `to_le_bytes` で書く（A-7 と同じ並び）。
 
-- [ ] **Step 2: `make_avif_decoder.py` を書く**
+- [x] **Step 2: `make_avif_decoder.py` を書く**
 
 冒頭の docstring に、使い方（`uv run --no-project --with pillow python make_avif_decoder.py <出力先>`）、
 使ったツールと版（ffmpeg 8.1.3 / libaom-av1、Pillow 12.3.0）、各ファイルの中身の表への参照（`tests/jxl_avif_input.rs` 冒頭）を書く。
 `crash*.avif` は元ファイル名と破壊したオフセット・元の値を表示する。中間ファイルは出力先に残さない。
 
-- [ ] **Step 3: 生成して、書かれた値を確かめる**
+- [x] **Step 3: 生成して、書かれた値を確かめる**
 
 Run: `cd core/tests/fixtures && uv run --no-project --with pillow python make_avif_decoder.py avif`
 Expected: 表の全ファイルができ、スクリプト内の assert（行列・範囲・深度・間引き・シーケンスヘッダの数）がすべて通る。
 `alpha_huge.avif` のエンコードは数 GB のメモリと数分を要しうる。**作れなかったときは別の寸法・方法に黙って変えず、止めて報告する**
 （宣言を書き換えた代用品はガードを外しても別の理由で落ちるので、テストの意味がなくなる。spec「テスト」）
 
-- [ ] **Step 4: 差し替え前の core で、正常なファイルが開け、`crash*.avif` が abort することを確かめる**
+- [x] **Step 4: 差し替え前の core で、正常なファイルが開け、`crash*.avif` が abort することを確かめる**
 
 ```bash
 cargo build -p picture-tool-core --example avif_probe
@@ -297,7 +297,7 @@ Expected:
 
 結果をすべて「実施メモ / Task 2」に貼る。
 
-- [ ] **Step 5: 差し替え前の出力を保存する**
+- [x] **Step 5: 差し替え前の出力を保存する**
 
 ```bash
 mkdir -p docs/tmp/avif-baseline
@@ -307,7 +307,7 @@ grep -o -m1 'avx2' /proc/cpuinfo; grep -m1 'model name' /proc/cpuinfo
 
 Expected: 20 個の `.bin`。CPU の型番と AVX2 の有無を実施メモに書く（Task 5 は同じ機械で行う）。
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add core/examples/avif_probe.rs core/tests/fixtures/make_avif_decoder.py core/tests/fixtures/avif
@@ -340,7 +340,7 @@ git commit   # 件名例: test: AVIF デコーダの差し替え: 画素一致�
   この間はフィールドが lib のビルドで読まれず dead_code で `-D warnings` が落ちるので、`FrameSizeLimits` に
   `#[cfg_attr(not(test), allow(dead_code))]` を付ける（Task 4 Step 8 で外す）
 
-- [ ] **Step 1: 単体テストを書く**
+- [x] **Step 1: 単体テストを書く**
 
 `avif.rs`:
 
@@ -406,7 +406,7 @@ fn frame_size_limits_rejects_before_the_limit_would_wrap() {
 }
 ```
 
-- [ ] **Step 2: 結合テストを書く（`core/tests/jxl_avif_input.rs`）**
+- [x] **Step 2: 結合テストを書く（`core/tests/jxl_avif_input.rs`）**
 
 ```rust
 fn avif(name: &str) -> PathBuf { fixture(&format!("avif/{name}")) }
@@ -434,19 +434,19 @@ fn avif_with_two_sequence_headers_in_one_item_is_rejected() {
 }
 ```
 
-- [ ] **Step 3: 落ちることを確かめる**
+- [x] **Step 3: 落ちることを確かめる**
 
 Run: `cargo test -p picture-tool-core`
 Expected: 新しい関数がないのでコンパイルエラー（`declared` / `frame_size_limits` が未定義）
 
-- [ ] **Step 4: 実装する**
+- [x] **Step 4: 実装する**
 
 `avif.rs` のモジュールコメント 2 行目（「AV1 デコーダ（rav1d）が確保しうるフレームの最大寸法」）を
 「アイテムの AV1 データのシーケンスヘッダの数（av1-avif §2.1「exactly one」）」に直す。`reserve_avif` のコメントの内容は
 `frame_size_limits` のコメントへ、spec「メモリの上限」の理由（数を 1 に限る理由、アルファを主画像の深度で数える理由、
 `frame_size_limit` の 0 が無制限なので判定を先に通す理由、アルファに min を渡す理由）を短く書く。
 
-- [ ] **Step 5: 通ることを確かめ、ガードを 1 つずつ外して理由が変わることを実測する**
+- [x] **Step 5: 通ることを確かめ、ガードを 1 つずつ外して理由が変わることを実測する**
 
 Run: `cargo test -p picture-tool-core` → PASS。続けて次の 3 つを 1 つずつ一時的に外して `--test jxl_avif_input` を走らせ、
 落ちるテストと、そのとき返った `Err` の文面（または `Ok`）を実施メモ「Task 3: ガードを外したとき」に記録して戻す:
@@ -456,7 +456,7 @@ Run: `cargo test -p picture-tool-core` → PASS。続けて次の 3 つを 1 つ
 
 Run: `make check` → exit 0
 
-- [ ] **Step 6: Commit**（件名例: `fix: AVIF デコーダの差し替え: デコード前の上限をアイテムごとの宣言寸法で判定する`）
+- [x] **Step 6: Commit**（件名例: `fix: AVIF デコーダの差し替え: デコード前の上限をアイテムごとの宣言寸法で判定する`）
 
 ---
 
@@ -485,7 +485,7 @@ let alpha = match (&parsed.alpha_item, limits.alpha) {
 Ok(layout.apply(yuv::to_image(&color, alpha.as_ref(), parsed.premultiplied_alpha)?))
 ```
 
-- [ ] **Step 1: 依存を入れ替える**
+- [x] **Step 1: 依存を入れ替える**
 
 `core/Cargo.toml`: `avif-decode` の行とコメントを消し、次を足す（コメントは spec の理由を短く）:
 - `dav1d = "0.11"` — C 版 libdav1d。rav1d と同居させない理由、Linux はシステムの libdav1d（1.3 以上）、Windows・CI は `SYSTEM_DEPS_DAV1D_BUILD_INTERNAL=always`、nasm はその内部ビルドのため
@@ -495,14 +495,14 @@ Ok(layout.apply(yuv::to_image(&color, alpha.as_ref(), parsed.premultiplied_alpha
 
 Run: `cargo tree -p picture-tool-core -i rav1d` → `error: package ID specification \`rav1d\` did not match any packages`（空）
 
-- [ ] **Step 1b: CI を内部ビルドにする**
+- [x] **Step 1b: CI を内部ビルドにする**
 
 `ci.yml`: apt に `meson`・`ninja-build` を足し、`nasm` の理由のコメントを「libdav1d の内部ビルド（x86_64 のアセンブリ）」に直す。
 ジョブの `env` に `SYSTEM_DEPS_DAV1D_BUILD_INTERNAL: always`。コメントに「22.04 の apt の libdav1d は 1.3 未満で使えない。
 内部ビルドなら Windows と同じ仕組みを CI が毎回通す」。runner は ubuntu-22.04 のまま（22.04 の apt の meson 0.61 は dav1d 1.5.0 の `meson_version: '>= 0.49.0'` を満たす）。
 依存の入れ替えと同じコミットに入れる（分けると、このタスクのコミットが CI で通らない）。ローカルでの確認は Step 9 で行う。
 
-- [ ] **Step 2: 周回のループの単体テストを書く（`av1.rs`）**
+- [x] **Step 2: 周回のループの単体テストを書く（`av1.rs`）**
 
 ループを、dav1d の `Decoder` に依らない関数に切り出してテストする:
 
@@ -573,7 +573,7 @@ fn decoder_errors_are_returned() { /* get が Err(dav1d::Error::InvalidArgument)
 ```
 
 
-- [ ] **Step 3: `frame_size_limit` の配線の単体テストを書く（`av1.rs`）**
+- [x] **Step 3: `frame_size_limit` の配線の単体テストを書く（`av1.rs`）**
 
 ```rust
 #[test]
@@ -587,7 +587,7 @@ fn frame_size_limit_is_enforced_by_the_decoder() {
 }
 ```
 
-- [ ] **Step 4: abort の回帰テストを書く（`jxl_avif_input.rs`）**
+- [x] **Step 4: abort の回帰テストを書く（`jxl_avif_input.rs`）**
 
 ```rust
 /// 差し替え前（avif-decode / rav1d）はテストバイナリごと abort した（実施メモ Task 2）
@@ -599,12 +599,12 @@ fn malformed_avif_is_an_error_not_an_abort() {
 }
 ```
 
-- [ ] **Step 5: 落ちることを確かめる**
+- [x] **Step 5: 落ちることを確かめる**
 
 Run: `cargo test -p picture-tool-core`
 Expected: `av1::decode` / `drain` / `yuv::to_image` が未定義でコンパイルエラー
 
-- [ ] **Step 6: `av1.rs` を実装する**
+- [x] **Step 6: `av1.rs` を実装する**
 
 `decode`: `Settings` に Global Constraints の 4 つだけを設定して `Decoder::with_settings`。`send_data(av1.to_vec(), None, None, None)`
 （`T: 'static` が要るので複製する。AVIF の圧縮データは小さい）の結果で `pending` の初期値を決め（`Ok`=偽、`Again`=真、他は `Err`）、
@@ -612,7 +612,7 @@ Expected: `av1::decode` / `drain` / `yuv::to_image` が未定義でコンパイ�
 （`get_picture` も `send_pending_data` も `&mut self` なので、2 つのクロージャが同時に可変で捕まえるとコンパイルできない）。
 モジュールコメントに、周回で打ち切る理由（送り残りのバイト数が公開 API で観測できない）と、最後の 1 枚を取る理由（A-1）を書く。
 
-- [ ] **Step 7: `yuv.rs` を移植する**
+- [x] **Step 7: `yuv.rs` を移植する**
 
 移植元: avif-decode 3.0.0 の `src/lib.rs` `to_image`、`src/image.rs`、`src/rav1d.rs` の `single_plane_img` / `matrix_coefficients` / `range`
 （`~/.cargo/registry/src/*/avif-decode-3.0.0/`）。規則は spec「YUV→RGB 変換」の表がすべて。実装上の決定:
@@ -632,12 +632,12 @@ Expected: `av1::decode` / `drain` / `yuv::to_image` が未定義でコンパイ�
 - `has_alpha` は `alpha.is_some()`
 - 冒頭にライセンス文（Global Constraints）と、「移植元と、読んでよいアクセサの制限」のコメント
 
-- [ ] **Step 8: `mod.rs` を繋ぎ替える**
+- [x] **Step 8: `mod.rs` を繋ぎ替える**
 
 `Format::Avif` を Interfaces のとおりにし、`avif_to_dynamic` と `reserve_avif` の残りを消す。`mod av1; mod yuv;` を足す。
 Task 3 で `FrameSizeLimits` に付けた `#[cfg_attr(not(test), allow(dead_code))]` を外す。
 
-- [ ] **Step 9: 通ることを確かめる**
+- [x] **Step 9: 通ることを確かめる**
 
 Run: `cargo test -p picture-tool-core`
 Expected: PASS（既存の `jxl_avif_input` 19 件を含む。向きの 8 件は図柄の色で照合しているので、画素のわずかな違いでは落ちない）
@@ -650,7 +650,7 @@ Run: ローカルで CI と同じ内部ビルドを試す（meson/ninja は uv �
 Expected: PASS。`target/internal-dav1d/debug/examples/avif_probe` を `ldd` して `libdav1d.so` がないこと
 （`target/` を共有したまま並行ビルドしない）
 
-- [ ] **Step 10: ガードを外して落ちることを実測する**
+- [x] **Step 10: ガードを外して落ちることを実測する**
 
 1 つずつ外して戻し、実施メモ「Task 4: ガードを外したとき」に記録する:
 1. `set_frame_size_limit` の呼び出し → `frame_size_limit_is_enforced_by_the_decoder` が落ちる
@@ -659,7 +659,7 @@ Expected: PASS。`target/internal-dav1d/debug/examples/avif_probe` を `ldd` し
 
 Run: `make check` → exit 0
 
-- [ ] **Step 11: Commit**（件名例: `fix: AVIF デコーダの差し替え: AV1 のデコードを libdav1d に替え、壊れた AVIF で abort しないようにする`）
+- [x] **Step 11: Commit**（件名例: `fix: AVIF デコーダの差し替え: AV1 のデコードを libdav1d に替え、壊れた AVIF で abort しないようにする`）
 
 本文に、rav1d と同居させない理由と `cargo tree -i rav1d` が空であることを書く。
 
@@ -671,7 +671,7 @@ Run: `make check` → exit 0
 - Test: `core/tests/jxl_avif_input.rs`
 - Modify（一時的、コミットしない）: `core/Cargo.toml` の `yuv` の行
 
-- [ ] **Step 1: `yuv` を既定 feature にして、差し替え前の出力とバイト一致することを確かめる**
+- [x] **Step 1: `yuv` を既定 feature にして、差し替え前の出力とバイト一致することを確かめる**
 
 `core/Cargo.toml` の `yuv` を一時的に `yuv = "=0.8.19"` にし、Task 2 と同じ機械で:
 
@@ -687,11 +687,11 @@ Expected: 20 件すべて `same`。**1 件でも違えば移植の誤り**（A-6
 コードを直す（期待値を合わせにいかない）。移植のコードに原因が見つからず、デコーダ（rav1d と libdav1d）の YUV 出力の違いと
 疑われるときは、そこで止めて利用者に報告する（Task 4 では直せず、spec の目的「画素単位で一致」の扱いを決め直す必要があるため）。結果を実施メモ「Task 5: 移植の照合」に貼る。
 
-- [ ] **Step 2: `yuv` の行を `default-features = false` に戻す**
+- [x] **Step 2: `yuv` の行を `default-features = false` に戻す**
 
 Run: `git diff core/Cargo.toml` → 差分なし
 
-- [ ] **Step 3: 画素一致のテストを書く**
+- [x] **Step 3: 画素一致のテストを書く**
 
 ```rust
 /// 画素一致の期待値（スカラー経路）。**作り直す手段はない**（avif-decode を外したため）。
@@ -718,7 +718,7 @@ fn avif_pixels_match_the_recorded_output() {
 `PIXELS` には画素一致の 20 枚すべてを並べる。色型の期待（`Rgb8` / `Rgba16` / `Luma8` …）は spec「出力の画素形式」の表から決めて
 先に書き、ハッシュは一度走らせて失敗メッセージから写す（Step 1 を通ったコードの出力なので、ここで写してよい）。
 
-- [ ] **Step 4: 通ることを確かめ、罠を戻して落ちることを実測する**
+- [x] **Step 4: 通ることを確かめ、罠を戻して落ちることを実測する**
 
 Run: `cargo test -p picture-tool-core --test jxl_avif_input` → PASS
 
@@ -730,7 +730,7 @@ Run: `cargo test -p picture-tool-core --test jxl_avif_input` → PASS
 
 Run: `make check` → exit 0
 
-- [ ] **Step 5: Commit**（件名例: `test: AVIF デコーダの差し替え: 移植した色変換の画素一致を固定する`）
+- [x] **Step 5: Commit**（件名例: `test: AVIF デコーダの差し替え: 移植した色変換の画素一致を固定する`）
 
 ---
 
@@ -740,13 +740,13 @@ Run: `make check` → exit 0
 - Modify: `README.md`、`core/src/decode/mod.rs`、`core/src/lib.rs`、
   `gui/src/security.rs:188`、`gui-frontend/src/App.svelte:140-142`、`docs/superpowers/specs/2026-09-08-grid-filtering-design.md:284`
 
-- [ ] **Step 1: Rust の最低版を求める**
+- [x] **Step 1: Rust の最低版を求める**
 
 Run: `cargo metadata --format-version 1 | jq -r '[.packages[] | select(.rust_version != null) | .rust_version] | sort_by(split(".") | map(tonumber)) | last'`
 Expected: 1 つの版（2026-10-19 時点の調査では avif-parse 1.90 が最大の見込み）。README の「Rust 1.98以降（avif-decode の要件）」を
 「Rust <版>以降（<そのクレート> の要件）」に直す
 
-- [ ] **Step 2: README**
+- [x] **Step 2: README**
 
 spec「文書」の README の項目をすべて。Windows の手順は **Task 1 の実施メモにある、実際に要ったもの**で書く。必ず含めるもの:
 `SYSTEM_DEPS_DAV1D_BUILD_INTERNAL=always` をビルドのたびにシェルで設定すること（`.cargo/config.toml` に置かない理由も 1 行）、
@@ -756,7 +756,7 @@ git / meson の失敗を探すこと。Linux は Fedora `libdav1d-devel` / Ubunt
 **Linux の配布物（`make release` の deb / rpm / AppImage）は実行時にシステムの libdav1d（1.3 以上）を要する**ことも既知の制限に書く
 （パッケージの依存には宣言しない。宣言は後日の対応とする。利用者判断 2026-10-19）。
 
-- [ ] **Step 3: コメント**
+- [x] **Step 3: コメント**
 
 - `mod.rs` 冒頭「メモリの上限」: AVIF は 2 段（デコード前は宣言寸法、変換前は実画像）、`frame_size_limit` をデコーダに強制させること、
   残る上限（デコーダ内部は「宣言寸法 × 深度 × 参照フレーム数」まで。姉妹 spec で扱う）。`[`reserve_avif`]` へのリンクを `[`frame_size_limits`]` に
@@ -769,7 +769,7 @@ git / meson の失敗を探すこと。Linux は Fedora `libdav1d-devel` / Ubunt
 
 Run: `make check` → exit 0
 
-- [ ] **Step 4: Commit**（件名例: `docs: AVIF デコーダの差し替え: ビルド要件と既知の制限を libdav1d に合わせる`）
+- [x] **Step 4: Commit**（件名例: `docs: AVIF デコーダの差し替え: ビルド要件と既知の制限を libdav1d に合わせる`）
 
 ---
 
@@ -779,21 +779,21 @@ Run: `make check` → exit 0
 - Modify: `core/src/decode/jxl.rs:111-114`、`core/src/decode/mod.rs`（`jxl_decoder`）
 - Test: `jxl.rs` の `#[cfg(test)]`
 
-- [ ] **Step 1: テストを書く**
+- [x] **Step 1: テストを書く**
 
 `jxl.rs` の既存テストの組み方に合わせ、**本体が 4 バイト未満の `brob` の後に正しい `Exif` 箱を置いたコンテナ**で
 `raw_exif` が後ろの Exif を読めること（現行は `read_exif_exact` が次の箱のヘッダを食って読めない）を確かめるテストを書く。
 前提として、同じコンテナから短い `brob` を除くと読めることも assert する。
 
-- [ ] **Step 2: 落ちることを確かめる** — Run: `cargo test -p picture-tool-core jxl` → 新しいテストが FAIL
+- [x] **Step 2: 落ちることを確かめる** — Run: `cargo test -p picture-tool-core jxl` → 新しいテストが FAIL
 
-- [ ] **Step 3: 実装する** — `brob` の本体長が 4 未満なら種類を読まずにその箱を飛ばす（種類が Exif でない `brob` と同じ扱い）。
+- [x] **Step 3: 実装する** — `brob` の本体長が 4 未満なら種類を読まずにその箱を飛ばす（種類が Exif でない `brob` と同じ扱い）。
   `jxl_decoder` の `width * height * JXL_WORKING_BYTES_PER_PIXEL + JXL_WORKING_BASE` を `saturating_mul` / `saturating_add` にする
   （上限値そのものは姉妹 spec で見直す。コメントに一言）
 
-- [ ] **Step 4: 通ることを確かめる** — Run: `make check` → exit 0
+- [x] **Step 4: 通ることを確かめる** — Run: `make check` → exit 0
 
-- [ ] **Step 5: Commit**（件名例: `fix: AVIF デコーダの差し替え: JPEG XL の短い brob で後続の箱を読み違えないようにする`）
+- [x] **Step 5: Commit**（件名例: `fix: AVIF デコーダの差し替え: JPEG XL の短い brob で後続の箱を読み違えないようにする`）
 
 ---
 
@@ -803,7 +803,7 @@ Run: `make check` → exit 0
 - Create: `core/tests/fixtures/fuzz_avif.py`
 - Modify: `docs/README.md`、本 plan の「実施メモ」
 
-- [ ] **Step 1: ファズを書いて走らせる**
+- [x] **Step 1: ファズを書いて走らせる**
 
 `fuzz_avif.py <probe> <出力dir> <元の AVIF...>`: 元ファイルごとに 130 件以上、ランダムに 1〜4 バイトを書き換えたものを作り
 （乱数の種を固定し、引数で表示する）、1 件ずつ probe を子プロセスで開き、**終了コード 0 / 1 以外・シグナル・10 秒のタイムアウト**を数える。
@@ -822,12 +822,12 @@ Expected: abort・signal・timeout が **0 件**。Ok / Err の件数と種を�
 - **利用者が Windows で `cargo test -p picture-tool-core --test jxl_avif_input` を通す**（Task 1 の手順と同じ環境変数で）。
   画素一致が Windows の CPU でも同じハッシュになることがここで確かめられる。結果を実施メモに記録
 
-- [ ] **Step 3: 索引と実施メモ**
+- [x] **Step 3: 索引と実施メモ**
 
 `docs/README.md` の「直近の実装計画」の先頭に本 plan を足す（内容: 全 8 タスク、A-1〜A-10、ガードを外したときの実測、ファズの結果）。
 実施メモの「spec と食い違った点」に A-1・A-2・A-3 を要約して書く。
 
-- [ ] **Step 4: Commit**（件名例: `docs: AVIF デコーダの差し替え: ファズの結果と実施メモを残す`）
+- [x] **Step 4: Commit**（件名例: `docs: AVIF デコーダの差し替え: ファズの結果と実施メモを残す`）
 
 ---
 
@@ -860,20 +860,87 @@ Expected: abort・signal・timeout が **0 件**。Ok / Err の件数と種を�
 
 ## 実施メモ
 
-（実施時に追記する）
-
 ### Task 1: Windows での内部ビルド
+
+未実施。利用者が Windows で確認できない状況のため、確認なしで進めた（利用者判断 2026-10-19）。README の Windows 手順は spec の記述から書き、未検証と明記した。spec の完了条件「利用者が Windows で `jxl_avif_input` を通す」は未達。
 
 ### Task 2: 差し替え前の確認
 
+- 環境: CPU は `13th Gen Intel(R) Core(TM) i9-13900H`（AVX2 あり。Task 5 も同じ機械）。生成は `uv run --no-project --with pillow==12.3.0 python make_avif_decoder.py avif`（約 4 秒の本体、alpha_huge を含めた全体は 6.5 秒、ピーク RSS 4.8GB）。生成は決定的（2 回の生成で全ファイルがバイト単位で一致）。`--with pillow` だけだと今は 13.0.0 になるので 12.3.0 に固定（13.0.0 でも base のバイト列は同一）
+- 差し替え前の core で開いた結果: 画素一致の 20 枚・base_64x32・two_seqhdr は `Ok`（two_seqhdr は現行が受け入れる）、over_limit は `Err … Memory limit exceeded`
+- **alpha_huge.avif は ffmpeg で作れない。** ffmpeg 8.1.3 の `av_image_check_size2` が `(w+128)*(h+128) >= INT_MAX/8` を固定で拒否し、23200x23200 は `Picture size 23200x23200 is invalid`（`-max_pixels` では外せない。14000x13000 は内側なので作れた）。アルファだけ `aomenc`（libaom 3.13.3、`--allintra --monochrome --cpu-used=9 --end-usage=q --cq-level=30 --limit=1 --obu`、入力は `Cmono XCOLORRANGE=FULL` の y4m）で実際にエンコードし、主画像（64x64、ffmpeg）と組んだ。宣言だけを書き換えたものではない
+- alpha_huge の差し替え前の結果: `Err … invalid alpha size`、**3:07.20、ピーク RSS 818,164 KB**（debug ビルドの probe）。主画像の宣言だけで 512MB 判定をし、アルファは「宣言を超えうる最大寸法 ×4」の判定しか受けないので通り、rav1d が 23200x23200 を実際にデコードしてから avif-decode が寸法の不一致で落とす。Task 3 のガードが防ぐ対象
+- **crash.avif**: frame OBU ペイロードの中央（タイルデータ）の 340・341（元 0x18,0xEF）を 0xFF にしたもの。差し替え前の core で rav1d `src/decode.rs:4997:33` の `Option::unwrap()` on `None` → `thread caused non-unwinding panic. aborting.`、exit=134
+- 外した crash 候補とその理由（Pillow 12.3.0 / libavif 1.4.2 のベースで、2 バイトを 0xFF にする位置を 277〜388 で 1 つずつ走査）:
+  - `crash_seqhdr`（シーケンスヘッダ OBU ペイロード先頭 279・280）→ `Err … seq_profile`。abort しない
+  - `crash_framehdr`（frame OBU ペイロードの 3・4 バイト目 292・293）→ `Ok`。abort しない
+  - frame OBU ペイロード先頭（290・291）と spike の 299・300 → いずれも `Ok`。シーケンスヘッダ・OBU ヘッダの範囲（277-289）と frame ペイロード先頭（290-296）は abort しない。abort するのはタイルデータの範囲（297, 298, 301, 305, … 340, … 384）だけ
+  - spike のベースは今のどの版とも一致しない。Pillow 12.0.0 / 11.3.0（libavif 1.3.0）のベースは 342 バイトで中身が違い、そちらでは 299・300 は abort するが、frame ペイロード先頭は `Ok`
+- `p8_420_lim_709_a420` と `p8_420_lim_709_a8` は出力が同じ（主画像が同じで、アルファの Y 面も同じになり、クロマはアルファに使われない）。a420 の役割はクロマを持つアルファの経路（YuvPlanes8）を通すことで、別の面を読めば一致しなくなるので意味は保たれる
+- 差し替え前の出力 `docs/tmp/avif-baseline/*.bin`（20 個、`.gitignore` 済み）の sha256 先頭 16 桁は task-2-report に残した
+- ffmpeg の癖: testsrc2 は寸法を偶数に丸める / RGB→gray は範囲を pc に固定する / `-colorspace ycgco` ではエンコーダが開けないので `-aom-params matrix-coefficients=ycgco` を使う（`p8_444_lim_601` と `_ycgco` は YUV データが同じで行列の値だけ違う） / gbrp では CP=1・TC=13 が自動で付き範囲は full に固定される
+
 ### Task 3: ガードを外したとき
+
+1. `declared` の数の確認を外す: `avif_with_two_sequence_headers_in_one_item_is_rejected` が落ちる。`two_seqhdr.avif` が `Ok`（`expect_err` で panic）
+2. アルファの `reserve` を外す: `avif_alpha_is_counted_against_the_output_limit` が落ちる。probe は `Err … invalid alpha size`、経過 2:59.39、ピーク RSS 818,296 KB。前提 assert（64x64）は通る。テストの経過は 105.84 秒
+3. 主画像の `reserve` を外す: `avif_over_the_output_limit_is_rejected_before_decoding` が落ちる。`over_limit.avif` は `Ok 14000x13000 Rgb8`（実際にデコードされ、23.3 秒、ピーク RSS 1,091,828 KB）
+- ガードがあるとき: alpha_huge は 0.00 秒・7.8MB で `AVIF declares a size over the 512MB output limit: Memory limit exceeded`。over_limit も同じ文言。two_seqhdr は `exactly one sequence header (found 2)`
+- RED は厳密には踏んでいない（実装を先に書いてからテストを足した）。旧 `short_payload`（OBU サイズ欄は正しく中身だけ足りない）は数え上げでは Err にならない（数は 1）ので、テストを「数は 1 で `declared` が Err」に直した
 
 ### Task 4: ガードを外したとき
 
+- `cargo tree -p picture-tool-core -i rav1d`:
+  ```
+  error: package ID specification `rav1d` did not match any packages
+
+  help: a package with a similar name exists: `dav1d`
+  ```
+- crash.avif（システムの libdav1d 1.5.4、動的リンク）: `Err Failed to open image: …/crash.avif: AV1 decoding failed: Invalid argument`、exit=1。内部ビルドの probe でも同じ。他のフィクスチャも全件 probe に通した（20 枚・base・orient_1..8・exif_o6 は Ok、over_limit・alpha_huge は 512MB の Err、two_seqhdr は `exactly one sequence header (found 2)`）
+- 内部ビルド: meson 1.12.1 / ninja 1.13.2（uv の venv）を PATH に足し、`SYSTEM_DEPS_DAV1D_BUILD_INTERNAL=always cargo test -p picture-tool-core --target-dir target/internal-dav1d` が exit 0（code.videolan.org からの clone も成功）。`ldd` は `libgcc_s` / `libm` / `libc` / `ld-linux` だけで `libdav1d.so` なし（通常ビルドの probe は `libdav1d.so.7 => /lib64/libdav1d.so.7`）。`nm` で `T dav1d_open` がバイナリ内に定義されている
+- ガードを外したとき:
+  1. `set_frame_size_limit` の呼び出しを外す → `frame_size_limit_is_enforced_by_the_decoder` が FAILED。`decode(.., 2047)` が `Ok(Picture { .. w: 64, h: 32 .. })` を返して `unwrap_err()` で panic。ガードがあるときの 2047 は `AV1 decoding failed` の Err
+  2. `drain` の周回の上限を外す（`loop`）→ `a_stalled_decoder_is_cut_off` が FAILED（0.00s、`drain did not stop at 216 rounds`）。初回の測定は偽の `get` に自分で止まる仕組みがなく、i32 のカウンタが 2^31 回で overflow して 14.83s で panic した（上限の欠落ではなくカウンタの overflow で落ちていた）ので、Fix round 1 でテストを直した
+  3. アルファの `reserve` を外す（alpha_huge）→ 理由が変わる。probe は `Err … AV1 decoding failed: Unknown error -34`（0.00s、最大 RSS 7.5MB。libdav1d が stderr に `Frame size 23200x23200 exceeds limit 4096`。4096 は `min(アルファの宣言, 主画像の宣言 64x64)`）、`avif_alpha_is_counted_against_the_output_limit` が FAILED。差し替え前は同条件で約 3 分・818MB
+- Fix round 1（アルファの寸法）: `write_alpha` が幅と高さの両方を比べる（`invalid alpha size`）。単体テスト `alpha_of_a_different_size_is_rejected`（dav1d の `Picture` は公開コンストラクタがないので、平面の幾何を `Geometry` に分けて dav1d なしで呼べるようにした）。RED は修正前の実装で `unwrap_err()` on an `Ok` value。高さの比較だけを外すと 2x1 で `range end index 2 out of range for slice of length 0` の panic になる（範囲外読み出しの防止にもなっている）
+- 画素一致の予備確認: スカラー（コミットする設定）は 20 件中 7 件が差し替え前と一致、13 件は違う。`yuv` を一時的に既定 feature（SIMD）にすると 20/20 がバイト単位で一致（Task 5 で正式に確認）
+- avif-decode との順序の違い: 主画像の変換とアルファのデコードが両方失敗するファイルでは、出る理由が違いうる（本実装はアルファを先にデコードする）。アルファは Y 平面だけを読む（avif-decode は U/V まで検査していたが、libdav1d の出力で落ちることはない）。深度 16 は avif-decode が受け入れていたが 8/10/12 以外は Err（AV1 は 12bit まで）
+
 ### Task 5: 移植の照合
+
+- `core/Cargo.toml` の `yuv` を一時的に `yuv = "=0.8.19"`（既定 feature。`cargo tree -e features -i yuv` で `avx` が有効なことを確認）にして `avif_probe --dump` を 20 件走らせ、`docs/tmp/avif-baseline/*.bin` と `cmp`: **20/20 すべて同一**。A-6（アルファ別デコーダ）と A-1（two_frames）も一致。`git checkout core/Cargo.toml` で戻し、差分は空
+- 参考（スカラー経路）: 同じ 20 件を差し替え前と比べると **13 件が不一致、7 件（グレー・identity・ycgco・p12 など）が一致。** 不一致の大きさは 8bit が最大 ±2、two_frames は ±1、10bit は 16bit 値で最大 192、a8_premul は最大 128。SIMD とスカラーの丸めの違いで、spec が「SIMD は CPU で出力が変わるのでスカラーに固定」とした前提どおり。常設ハッシュはスカラー出力を固定する。スカラー側が差し替え前と一致するとは主張しない
+- 色型の Debug 名はグレーが `L8` / `L16`（`Luma8` ではない）。テストの色型文字列と FNV 入力はこの名前。全 20 件が先に書いた色型・33x17 で通った。a8 と a420 のハッシュが同一（0xe33cd2ae824fa3c0）なのは Task 2 のとおり
 
 ### Task 5: 罠を戻したとき
 
+各罠は `yuv.rs` / `av1.rs` に 1 箇所だけ入れ、`avif_probe --dump` で全 20 件の失敗集合を取り、テストの最初の失敗メッセージも取った。入れた変更は戻し済み。
+
+1. 行列「なし」を BT.709（`matrix()` の `Unspecified | Reserved => Matrix::Bt709`）: 落ちたのは `p8_420_lim_unspec.avif` と `p10_444_full_unspec.avif` のみ（予測どおり。グレーは落ちない）。`p8_420_lim_unspec.avif: 0xf44d45f0329eb1b2`
+2. アルファの未指定を値として比べる（アルファ側を `unwrap_or(Bt601)` で `Some` 扱い）: 予測は a420 の 1 件だったが、実際は **7 件**（a8_on_gray8, a8_premul, p10_420_lim_709_a10, p10_420_lim_709_a8, p8_420_lim_709_a10, p8_420_lim_709_a420, p8_420_lim_709_a8）が `alpha image has color info` で Err。アルファ付きの 7 件はいずれもアルファの行列が未指定（2）で、主画像が 709 または未指定のため、「なし」を値扱いすると全部が拒否される（a420 だけが未指定アルファではない）。テストは `open_image_oriented(..).unwrap()` の panic として最初の 1 件で落ちる
+3. 16bit 化を左シフトだけ（`*v <<= shift`）: 落ちたのは p10_420_lim_709, p10_420_lim_709_a10, p10_420_lim_709_a8, p10_444_full_unspec, p10_444_full_identity, p12_422_lim_601（予測どおり。gray10_lim は `luma16`（全域スケール）を通るので落ちない）。`p10_420_lim_709.avif: 0x02d843eb0d47ceb4`
+4. `drain` が最初の 1 枚で返す（`Ok(picture) => return Ok(picture)`）: 落ちたのは `two_frames.avif` のみ。`two_frames.avif: 0xe5fd19e577827d85`。0 件の罠はなし
+
 ### Task 8: ファズ
 
+- スクリプト: `core/tests/fixtures/fuzz_avif.py`。種は `--seed`（既定 20261019、実行時に表示）。元ファイルごとに独立の乱数列（種 XOR ファイル名の crc32）なので、引数の順序や個数で結果が変わらない
+- 実行（ローカル、debug の probe、約 6 秒）: `uv run --no-project python core/tests/fixtures/fuzz_avif.py target/debug/examples/avif_probe <scratch>/fuzz <元 13 枚>`
+- 元ファイル 13 枚（深度・間引き・アルファ・フレーム数を散らした）: p8_420_lim_unspec, p8_444_lim_ycgco, p8_422_full_709, p10_420_lim_709, p10_444_full_identity, p12_422_lim_601, gray8_full, gray10_lim, p8_420_lim_709_a8, p10_420_lim_709_a10, a8_premul, two_frames, p8_444_full_fcc。各 130 件、1〜4 バイトをランダムに書き換え
+- 結果: **`TOTAL ok=591 err=1099 abort=0 signal=0 timeout=0 n=1690`**。abort・signal・timeout は 0 件。ファイルごとの Ok / Err（61/69, 69/61, 27/103, 64/66, 47/83, 12/118, 44/86, 41/89, 45/85, 53/77, 53/77, 10/120, 65/65）
+- 参考: 元ファイルは 500〜1000 バイトの小さなもので、ランダムな書き換えでは Err が 65% を占める。abort を再現した書き換え（crash.avif）は Task 4 以降 `Err … AV1 decoding failed: Invalid argument` になる（ファズが abort を検出できる条件の確認は Task 2 の差し替え前の abort による）
+
+### 完了条件の確認（Task 8 Step 2、ローカル分）
+
+- `cargo tree -p picture-tool-core -i rav1d` → `error: package ID specification 'rav1d' did not match any packages`（rav1d はどこからも引かれていない）
+- `make check` → exit 0
+- `cd gui-frontend && bun run e2e` → 110 passed（2.0m）
+- **未実施**: push して CI（内部ビルドを含む）が通ること / 利用者が Windows で `jxl_avif_input` を通すこと（Task 1 と同じ理由で未実施）。画素一致が Windows の CPU でも同じハッシュになるかは未確認
+
 ### spec と食い違った点
+
+- **A-1（最後の 1 枚）**: spec は「最初に出てきた 1 枚」。avif-decode は最後の 1 枚（レイヤー付きは最後が完全な画像で、フィルムグレインも最後にだけ掛かる）。最後を返す。Task 5 の罠 4（最初の 1 枚で返す）で `two_frames.avif` だけが落ちることを実測
+- **A-2（周回の上限）**: 「バイト数 + 16」ではなく `2 × バイト数 + 16`。最後まで取り続けるため、「フレームが出る」周回でも終わらなくなる。正常な周回は「1 バイト以上消費」か「1 枚出る」のどちらかで、どちらもバイト数以下の回数。有限で必ず終わる性質は同じ
+- **A-3（寸法上限のテスト）**: 13000×13000 の 8bit RGB は 507,000,000 バイトで上限 536,870,912 を下回り通る。フィクスチャは 14000×13000（546,000,000 バイト）
+- **crash.avif の位置**: spec は frame OBU ペイロード先頭の 2 バイト（spike では 299・300）。今のベース（Pillow 12.3.0 / libavif 1.4.2）ではどちらも `Ok` で、abort するのはタイルデータの書き換え（340・341、元 0x18,0xEF）。同じ rav1d `decode.rs:4997` の箇所で落ちる。crash.avif はタイルデータにした
+- **アルファの寸法の検査**: spec どおり幅と高さの両方を比べる。avif-decode は行の幅だけを比べていた（高さが違っても Err にならず残りの行は仮置きのアルファ）。意図した違いで、正常なファイルには影響しない
+- **Windows の確認（Task 1）は未実施**（利用者判断）。spec の完了条件は未達
