@@ -133,12 +133,15 @@ mod tests {
     #[test]
     fn a_stalled_decoder_is_cut_off() {
         // データを消費もせずフレームも出さないデコーダでも、有限回で Err になる
-        let mut calls = 0;
+        const CAP: usize = 2 * 100 + 16;
+        let mut calls: usize = 0;
         let err = drain::<u8>(
             100,
             true,
             || {
                 calls += 1;
+                // 上限がなければ drain は終わらない。テストを止めるため、上限を超えたら落とす
+                assert!(calls <= CAP, "drain did not stop at {CAP} rounds");
                 Err(E::Again)
             },
             || Err(E::Again),
@@ -148,7 +151,7 @@ mod tests {
             format!("{err:#}").contains("AV1 decoder made no progress"),
             "{err:#}"
         );
-        assert_eq!(calls, 2 * 100 + 16);
+        assert_eq!(calls, CAP);
     }
 
     #[test]

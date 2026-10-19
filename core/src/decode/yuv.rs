@@ -62,8 +62,8 @@ pub(super) fn to_image(
     let mut img = if gray {
         let y = PlaneData::new(color, Component::Y, depth)?;
         match depth {
-            Depth::Eight => gray_image(y.u8(), &y, depth, range, has_alpha),
-            _ => gray_image(&y.u16(), &y, depth, range, has_alpha),
+            Depth::Eight => gray_image(y.u8(), &y.geom, depth, range, has_alpha),
+            _ => gray_image(&y.u16(), &y.geom, depth, range, has_alpha),
         }
     } else {
         let conv = conversion(matrix(color).unwrap_or(Matrix::Bt601))?;
@@ -75,7 +75,7 @@ pub(super) fn to_image(
             [Component::Y, Component::U, Component::V].map(|c| PlaneData::new(color, c, depth));
         let (y, u, v) = (y?, u?, v?);
         if depth == Depth::Eight {
-            let planar = planar(y.u8(), u.u8(), v.u8(), &y, &u, &v);
+            let planar = planar(y.u8(), u.u8(), v.u8(), &y.geom, &u.geom, &v.geom);
             let convert = |dst: &mut [u8], stride, alpha| {
                 convert8(&planar, dst, stride, layout, conv, yuv_range, alpha)
             };
@@ -86,7 +86,7 @@ pub(super) fn to_image(
             }
         } else {
             let (y16, u16_, v16) = (y.u16(), u.u16(), v.u16());
-            let planar = planar(&y16, &u16_, &v16, &y, &u, &v);
+            let planar = planar(&y16, &u16_, &v16, &y.geom, &u.geom, &v.geom);
             let convert = |dst: &mut [u16], stride, alpha| {
                 convert16(&planar, dst, stride, layout, depth, conv, yuv_range, alpha)
             };
@@ -111,8 +111,17 @@ pub(super) fn to_image(
         let y = PlaneData::new(alpha, Component::Y, alpha_depth)?;
         let range = alpha.color_range();
         match alpha_depth {
-            Depth::Eight => write_alpha(&mut img, y.u8(), &y, alpha_depth, range, premultiplied)?,
-            _ => write_alpha(&mut img, &y.u16(), &y, alpha_depth, range, premultiplied)?,
+            Depth::Eight => {
+                write_alpha(&mut img, y.u8(), &y.geom, alpha_depth, range, premultiplied)?
+            }
+            _ => write_alpha(
+                &mut img,
+                &y.u16(),
+                &y.geom,
+                alpha_depth,
+                range,
+                premultiplied,
+            )?,
         }
     }
     Ok(img)
@@ -145,13 +154,19 @@ impl Depth {
     }
 }
 
-/// 1 つの平面と、その幾何（サンプル単位）
-struct PlaneData {
-    plane: dav1d::Plane,
+/// 平面の幾何（サンプル単位）
+#[derive(Debug, Clone, Copy)]
+struct Geometry {
     width: usize,
     height: usize,
     /// サンプル単位の行の間隔
     stride: usize,
+}
+
+/// 1 つの平面と、その幾何
+struct PlaneData {
+    plane: dav1d::Plane,
+    geom: Geometry,
 }
 
 impl PlaneData {
@@ -188,9 +203,11 @@ impl PlaneData {
         );
         Ok(Self {
             plane,
-            width,
-            height,
-            stride,
+            geom: Geometry {
+                width,
+                height,
+                stride,
+            },
         })
     }
 
@@ -219,9 +236,9 @@ fn planar<'a, T: Copy + std::fmt::Debug>(
     y: &'a [T],
     u: &'a [T],
     v: &'a [T],
-    yd: &PlaneData,
-    ud: &PlaneData,
-    vd: &PlaneData,
+    yd: &Geometry,
+    ud: &Geometry,
+    vd: &Geometry,
 ) -> YuvPlanarImage<'a, T> {
     // 寸法は `Picture` の u32 から作ったもので、stride は平面の長さ以下なので u32 に収まる
     YuvPlanarImage {
@@ -416,7 +433,7 @@ fn luma16(v: u16, depth: Depth, range: YUVRange) -> u16 {
 /// アルファ付きはアルファを 0 の仮置きにした `Rgba`
 fn gray_image<T: Copy + Into<u16>>(
     samples: &[T],
-    y: &PlaneData,
+    y: &Geometry,
     depth: Depth,
     range: YUVRange,
     has_alpha: bool,
@@ -450,23 +467,27 @@ fn gray_image<T: Copy + Into<u16>>(
 
 /// アルファの Y 平面を `img` のアルファに書く（移植元 `write_alpha8` / `write_alpha16`）
 ///
-/// 移植元は行を `zip` で突き合わせ、行の長さ（幅）だけを比べる。高さが違っても Err にせず、
-/// 短いほうの行数だけ書く（残りの行は仮置きのアルファのまま）。差し替え前と同じ出力にするため、
-/// これも移植元のとおりにしてある。
+/// **ここは意図して移植元と違う。** アルファは主画像と同じ寸法でなければならず、幅と高さの
+/// どちらが違っても Err にする（spec「アルファの寸法」）。移植元は行を `zip` で突き合わせて
+/// 幅だけを比べ、高さが違うものは短いほうの行数だけ書いて Ok にしていた。正常なファイルは
+/// 寸法が等しいので、出力の画素はこの違いの影響を受けない。
 fn write_alpha<T: Copy + Into<u16>>(
     img: &mut DynamicImage,
     samples: &[T],
-    y: &PlaneData,
+    y: &Geometry,
     depth: Depth,
     range: YUVRange,
     premultiplied: bool,
 ) -> Result<()> {
-    ensure!(y.width == img.width() as usize, "invalid alpha size");
+    ensure!(
+        y.width == img.width() as usize && y.height == img.height() as usize,
+        "invalid alpha size"
+    );
     let rows = |row: usize| &samples[row * y.stride..][..y.width];
     match img {
         DynamicImage::ImageRgba8(buf) => {
             let row_len = buf.width() as usize * 4;
-            for (row, out) in buf.chunks_exact_mut(row_len).take(y.height).enumerate() {
+            for (row, out) in buf.chunks_exact_mut(row_len).enumerate() {
                 for (px, &v) in out.as_chunks_mut::<4>().0.iter_mut().zip(rows(row)) {
                     px[3] = (luma16(v.into(), depth, range) >> 8) as u8;
                 }
@@ -477,7 +498,7 @@ fn write_alpha<T: Copy + Into<u16>>(
         }
         DynamicImage::ImageRgba16(buf) => {
             let row_len = buf.width() as usize * 4;
-            for (row, out) in buf.chunks_exact_mut(row_len).take(y.height).enumerate() {
+            for (row, out) in buf.chunks_exact_mut(row_len).enumerate() {
                 for (px, &v) in out.as_chunks_mut::<4>().0.iter_mut().zip(rows(row)) {
                     px[3] = luma16(v.into(), depth, range);
                 }
@@ -510,6 +531,46 @@ fn unpremultiply16(row: &mut [u16]) {
             for c in &mut px[..3] {
                 *c = (u32::from(*c) * 0xFFFF / u32::from(a)).min(0xFFFF) as u16;
             }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// 2x2 の不透明な白（主画像の変換が済んだ状態）に、`w`x`h` の 8bit 全レンジのアルファを書く
+    fn write(w: usize, h: usize) -> Result<DynamicImage> {
+        let mut img = DynamicImage::ImageRgba8(ImageBuffer::from_pixel(2, 2, Rgba([255; 4])));
+        let samples = vec![128u8; w * h];
+        let geom = Geometry {
+            width: w,
+            height: h,
+            stride: w,
+        };
+        write_alpha(
+            &mut img,
+            &samples,
+            &geom,
+            Depth::Eight,
+            YUVRange::Full,
+            false,
+        )?;
+        Ok(img)
+    }
+
+    #[test]
+    fn alpha_of_a_different_size_is_rejected() {
+        // 前提: 同じ寸法なら書ける（アルファが 128 に置き換わる）
+        let ok = write(2, 2).unwrap();
+        assert!(ok.to_rgba8().pixels().all(|p| p[3] == 128));
+        // 移植元は行を zip して幅だけを比べていたので、高さだけ違うものを Ok にしていた
+        for (w, h) in [(2, 1), (2, 3), (1, 2), (3, 2)] {
+            let err = write(w, h).unwrap_err();
+            assert!(
+                format!("{err:#}").contains("invalid alpha size"),
+                "{w}x{h}: {err:#}"
+            );
         }
     }
 }
