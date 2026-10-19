@@ -1137,7 +1137,7 @@ mod tests {
 
     /// **★の読み取り失敗で一覧ごと失敗しない。**
     ///
-    /// グリッドは PNG / WebP も並べるし、壊れた JPEG も混ざる。
+    /// グリッドは PNG / WebP / JPEG XL / AVIF も並べるし、壊れた JPEG も混ざる。
     /// ★は一覧表示の副作用であって、一覧そのものの前提ではない
     #[test]
     fn list_survives_files_whose_rating_cannot_be_read() {

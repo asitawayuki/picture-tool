@@ -1,6 +1,6 @@
-//! AVIF の、avif-parse / avif-decode が扱わない部分
+//! AVIF の、avif-parse が扱わない部分
 //!
-//! - 主画像の寸法（`ispe`）と向き（`irot` / `imir`）。どちらのクレートもこれらを読まない
+//! - 主画像の寸法（`ispe`）と向き（`irot` / `imir`）。avif-parse はこれらを読まない
 //! - アイテムの AV1 データのシーケンスヘッダの数（av1-avif §2.1「exactly one」）と、その宣言寸法
 
 use super::isobmff;

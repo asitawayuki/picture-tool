@@ -24,9 +24,8 @@ Instagram投稿用の画像一括変換ツール。写真を4:5アスペクト�
     Ubuntu は 24.04 以降で `sudo apt install libdav1d-dev`（Debian 12 の dav1d は 1.0 で要件を満たさない）
   - Windows: dav1d を git clone して meson / ninja で静的ビルドする（下の「Windows での AVIF デコーダのビルド」）
   - macOS: `brew install dav1d`（動的リンク。**未検証**）
-- [NASM](https://nasm.us/)（x86/x86_64 でのビルド時。libdav1d を内部ビルドするとき（Windows）にアセンブリのビルドで使う）
+- [NASM](https://nasm.us/)（**Windows のみ**。libdav1d を内部ビルドするときにアセンブリのビルドで使う。Linux / macOS はシステムの libdav1d を動的リンクするので不要）
   - Windows: `winget install NASM.NASM`（インストーラは PATH を通さないので、`nasm.exe` のあるフォルダーを PATH に追加する）
-  - Debian/Ubuntu: `sudo apt install nasm` / macOS: `brew install nasm`
 - [Bun](https://bun.sh/)（フロントエンドビルド用）
 - Tauri v2の[システム依存](https://v2.tauri.app/start/prerequisites/)（GUI使用時）
 

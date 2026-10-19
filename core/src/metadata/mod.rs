@@ -1015,7 +1015,7 @@ mod tests {
 
     /// **非 JPEG は意図的に非対称にする。**
     ///
-    /// `list_images` は PNG / WebP も並べる。★の読み取りは一覧表示の副作用なので、
+    /// `list_images` は PNG / WebP / JPEG XL / AVIF も並べる。★の読み取りは一覧表示の副作用なので、
     /// PNG が混ざっているだけで一覧が失敗したり警告が出たりしてはいけない。
     #[test]
     fn non_jpeg_is_deliberately_asymmetric() {

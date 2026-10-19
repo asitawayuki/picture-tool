@@ -197,6 +197,8 @@ impl PlaneData {
         ensure!(stride >= width && width != 0, "invalid AV1 plane stride");
 
         let plane = p.plane(component);
+        // dav1d クレートの Plane は同じ stride と height から長さを作るので、この検査は
+        // 実際には失敗しない。本当の防御は直前の stride の検査。検査自体は念のため残す
         ensure!(
             plane.len() >= stride_bytes * height,
             "AV1 plane is shorter than its geometry"
