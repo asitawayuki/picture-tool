@@ -13,11 +13,16 @@ jobs:
     # webkit2gtk-4.1 / libsoup-3.0 が標準リポジトリで手に入る最古の LTS に合わせる
     runs-on: ubuntu-22.04
 
+    # core の AVIF デコーダ（libdav1d）は内部ビルドする。22.04 の apt の libdav1d は 1.3 未満で
+    # 使えない。内部ビルドなら Windows と同じ仕組みを CI が毎回通す（meson・ninja・nasm が要る）
+    env:
+      SYSTEM_DEPS_DAV1D_BUILD_INTERNAL: always
+
     steps:
       - uses: actions/checkout@v7
 
       # gui クレート（Tauri v2）を Linux でビルドするために必須。
-      # nasm は core の AVIF デコーダ（rav1d のアセンブリ）用
+      # meson・ninja-build・nasm は libdav1d の内部ビルド（x86_64 のアセンブリ）用
       - name: Install Tauri system dependencies
         run: |
           sudo apt-get update
@@ -31,7 +36,9 @@ jobs:
             curl \
             wget \
             file \
-            nasm
+            nasm \
+            meson \
+            ninja-build
 
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable

@@ -17,6 +17,13 @@
 //! | `over_limit.jxl` | 14000x13000 の単色の非可逆。出力が 546MB で、上限の 512MB を超える |
 //! | `lossy_24mp.jxl` | 6000x4000 の非可逆。左半分が赤・右半分が青 |
 //! | `orient_N.avif` | 64x32 を 4 分割（左上=赤、右上=緑、左下=青、右下=黄）し、Exif の向き N を Pillow が `irot`/`imir` に変換して書いたもの |
+//! | `avif/*.avif` | `tests/fixtures/make_avif_decoder.py` が生成した、AVIF デコーダ差し替え用の 25 件。以下の行はその内訳 |
+//! | `avif/<主画像>[_<アルファ>].avif`（20 件） | 画素一致用で、元画像は 33x17 の非単色の図柄。名前は `p<深度>_<間引き>_<lim/full>_<行列>`（`gray<深度>_...` は 4:0:0）に、アルファ付きなら `_a<深度>` などが続く。行列・範囲・深度の全組はスクリプトの表を参照 |
+//! | `avif/base_64x32.avif` | 4 色の 64x32。`crash.avif` の元 |
+//! | `avif/crash.avif` | `base_64x32.avif` のタイルデータ内（オフセット 340・341）を壊したもの。abort の回帰。計画の frame OBU ペイロード先頭の位置は、現行の base では abort しない |
+//! | `avif/over_limit.avif` | 14000x13000 の単色 8bit 4:2:0。出力が 546MB で 512MB を超える |
+//! | `avif/alpha_huge.avif` | 主画像 64x64、アルファは実際にエンコードした 23200x23200。主画像だけなら上限の内側 |
+//! | `avif/two_seqhdr.avif` | 1 アイテムの AV1 データにシーケンスヘッダを 2 個持つ（`p8_420_lim_unspec.avif` の主画像データの複製） |
 //!
 //! JPEG XL はコードストリームの向き、AVIF は `irot`/`imir` が正で、
 //! **どちらも Exif の Orientation は無視する**（適用すると二重回転になる）。
@@ -419,4 +426,167 @@ fn container_nested_in_a_codestream_box_is_rejected() {
     let path = fixture("nested.jxl");
     assert!(open_image_oriented(&path).is_err());
     assert!(image_dimensions_oriented(&path).is_err());
+}
+
+fn avif(name: &str) -> PathBuf {
+    fixture(&format!("avif/{name}"))
+}
+
+fn open_err(name: &str) -> String {
+    format!("{:#}", open_image_oriented(&avif(name)).expect_err(name))
+}
+
+#[test]
+fn avif_over_the_output_limit_is_rejected_before_decoding() {
+    assert!(
+        open_err("over_limit.avif").contains("AVIF declares a size over the 512MB output limit")
+    );
+}
+
+#[test]
+fn avif_alpha_is_counted_against_the_output_limit() {
+    // 前提: 主画像だけなら上限の内側（64x64）
+    assert_eq!(
+        image_dimensions_oriented(&avif("alpha_huge.avif")).unwrap(),
+        (64, 64)
+    );
+    assert!(
+        open_err("alpha_huge.avif").contains("AVIF declares a size over the 512MB output limit")
+    );
+}
+
+#[test]
+fn avif_with_two_sequence_headers_in_one_item_is_rejected() {
+    assert!(open_err("two_seqhdr.avif").contains("exactly one sequence header (found 2)"));
+    // アイテムごとに 1 個（合計 2 個）の正常なアルファ付きは開ける
+    assert!(open_image_oriented(&avif("p8_420_lim_709_a8.avif")).is_ok());
+}
+
+/// 差し替え前（avif-decode / rav1d）はテストバイナリごと abort した（実施メモ Task 2）
+#[test]
+fn malformed_avif_is_an_error_not_an_abort() {
+    // 前提: 壊す前の元ファイルは開ける（壊した箇所が理由で Err になっている）
+    assert!(open_image_oriented(&avif("base_64x32.avif")).is_ok());
+    // Task 2 で abort を再現できたのは crash.avif の 1 件だけ。理由はタイルデータの破損で、
+    // コンテナの解析ではなく AV1 のデコードで落ちる
+    let err = open_err("crash.avif");
+    assert!(err.contains("AV1 decoding failed"), "{err}");
+}
+
+/// 画素一致の期待値（スカラー経路）。**作り直す手段はない**（avif-decode を外したため）。
+/// 期待値は、移植したコードを `yuv` の SIMD 経路でビルドして差し替え前とバイト一致を確かめた後に、
+/// スカラー経路で作ったもの（plan 2026-10-19 の実施メモ Task 5）。
+/// **ワークスペースの別クレートが `yuv` を既定 feature で依存に加えると SIMD 経路が黙って有効になり、
+/// AVX2 の機械でここが落ちる**（core/Cargo.toml の `yuv` の行）。
+/// 色型は spec「出力の画素形式」から先に決めたもの（8bit は `Rgb8`/`Rgba8`/`Luma8`。`ColorType` の Debug 名では `L8`/`L16`。グレー＋アルファは
+/// `Rgba8`、10/12bit は 16bit 版。アルファ付きの深度は主画像の深度で決まる）。
+const PIXELS: &[(&str, &str, u32, u32, u64)] = &[
+    // (ファイル, 色型, 幅, 高さ, FNV-1a 64)
+    ("p8_420_lim_unspec.avif", "Rgb8", 33, 17, 0xa992329c6830b030),
+    ("p8_422_full_709.avif", "Rgb8", 33, 17, 0x5805ae471bbbe7fb),
+    ("p8_444_lim_601.avif", "Rgb8", 33, 17, 0xb0f19889a565efb0),
+    ("p8_444_full_fcc.avif", "Rgb8", 33, 17, 0x0c7966043911105b),
+    ("p8_444_lim_ycgco.avif", "Rgb8", 33, 17, 0x0258fb7ad7886f94),
+    (
+        "p8_444_full_identity.avif",
+        "Rgb8",
+        33,
+        17,
+        0xbc3d72f431f4695b,
+    ),
+    ("p10_420_lim_709.avif", "Rgb16", 33, 17, 0xf0a5112000135169),
+    (
+        "p10_444_full_unspec.avif",
+        "Rgb16",
+        33,
+        17,
+        0x92164bbcf45bd5c1,
+    ),
+    (
+        "p10_444_full_identity.avif",
+        "Rgb16",
+        33,
+        17,
+        0x7ccf9fd4c8ac0d4d,
+    ),
+    ("p12_422_lim_601.avif", "Rgb16", 33, 17, 0x4706a56db29c2531),
+    ("gray8_full.avif", "L8", 33, 17, 0x41011ca0581d6f41),
+    ("gray10_lim.avif", "L16", 33, 17, 0xf7fda3f920e51138),
+    (
+        "p8_420_lim_709_a8.avif",
+        "Rgba8",
+        33,
+        17,
+        0xe33cd2ae824fa3c0,
+    ),
+    (
+        "p10_420_lim_709_a10.avif",
+        "Rgba16",
+        33,
+        17,
+        0xbf6e1fe36ca6c1e5,
+    ),
+    (
+        "p10_420_lim_709_a8.avif",
+        "Rgba16",
+        33,
+        17,
+        0x8d335d27311cd800,
+    ),
+    (
+        "p8_420_lim_709_a10.avif",
+        "Rgba8",
+        33,
+        17,
+        0x2482b6cc5b9c137b,
+    ),
+    (
+        "p8_420_lim_709_a420.avif",
+        "Rgba8",
+        33,
+        17,
+        0xe33cd2ae824fa3c0,
+    ),
+    ("a8_on_gray8.avif", "Rgba8", 33, 17, 0x0e93c835e68a3cf6),
+    ("a8_premul.avif", "Rgba8", 33, 17, 0x93e916e2e64e8583),
+    ("two_frames.avif", "Rgb8", 33, 17, 0xceca7fafe869b122),
+];
+
+/// FNV-1a 64bit。入力は 色型の名前（UTF-8）・幅（LE 4 バイト）・高さ（LE 4 バイト）・サンプル列
+/// （16bit は各サンプルを LE 2 バイト）。`DefaultHasher` は版で変わりうるので使わない
+fn fnv1a(img: &image::DynamicImage) -> u64 {
+    use image::DynamicImage as D;
+    let mut bytes = format!("{:?}", img.color()).into_bytes();
+    bytes.extend(img.width().to_le_bytes());
+    bytes.extend(img.height().to_le_bytes());
+    match img {
+        D::ImageLuma8(b) => bytes.extend_from_slice(b.as_raw()),
+        D::ImageRgb8(b) => bytes.extend_from_slice(b.as_raw()),
+        D::ImageRgba8(b) => bytes.extend_from_slice(b.as_raw()),
+        D::ImageLuma16(b) => bytes.extend(b.as_raw().iter().flat_map(|s| s.to_le_bytes())),
+        D::ImageRgb16(b) => bytes.extend(b.as_raw().iter().flat_map(|s| s.to_le_bytes())),
+        D::ImageRgba16(b) => bytes.extend(b.as_raw().iter().flat_map(|s| s.to_le_bytes())),
+        other => panic!("想定外の色型: {:?}", other.color()),
+    }
+    bytes.iter().fold(0xcbf2_9ce4_8422_2325_u64, |h, &b| {
+        (h ^ u64::from(b)).wrapping_mul(0x0000_0100_0000_01b3)
+    })
+}
+
+#[test]
+fn avif_pixels_match_the_recorded_output() {
+    assert_eq!(PIXELS.len(), 20, "画素一致の対象は 20 枚");
+    for &(name, color, w, h, hash) in PIXELS {
+        let img = open_image_oriented(&avif(name)).unwrap();
+        assert_eq!(
+            (
+                format!("{:?}", img.color()).as_str(),
+                img.width(),
+                img.height()
+            ),
+            (color, w, h),
+            "{name}"
+        );
+        assert_eq!(fnv1a(&img), hash, "{name}: {:#018x}", fnv1a(&img));
+    }
 }

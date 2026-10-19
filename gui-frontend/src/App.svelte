@@ -138,8 +138,8 @@
   // 編集対象が変わったら読み込む
   $effect(() => {
     // 非 JPEG では読みに行かない。read_image_metadata は readable_jpeg で
-    // PNG / WebP を弾くので、無条件に呼ぶと情報モードで PNG をクリックするたびに
-    // エラートーストが出る（グリッドは PNG / WebP も並べる）
+    // PNG / WebP / JPEG XL / AVIF を弾くので、無条件に呼ぶと情報モードで PNG をクリックするたびに
+    // エラートーストが出る（グリッドは PNG / WebP / JPEG XL / AVIF も並べる）
     const target = editingPath !== null && editingIsJpeg ? editingPath : null;
     // `untrack` で囲む ── `load` はストアの $state を書くので、
     // 囲まないと自分の書き込みで再実行されうる

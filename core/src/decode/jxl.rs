@@ -109,9 +109,14 @@ pub(super) fn raw_exif(mut r: impl Read + Seek) -> Result<Option<Vec<u8>>> {
         let payload = match &header.kind {
             b"Exif" => read_capped(r.by_ref().take(len))?,
             b"brob" => {
+                // 本体が種類（4 バイト）より短い brob は壊れている。種類を読むと次の箱の
+                // ヘッダを食うので、読まずに丸ごと飛ばす（種類が Exif でない brob と同じ扱い）
+                let Some(len) = len.checked_sub(4) else {
+                    isobmff::skip(&mut r, len)?;
+                    continue;
+                };
                 let mut inner_kind = [0u8; 4];
                 r.read_exact(&mut inner_kind)?;
-                let len = len.saturating_sub(4);
                 if &inner_kind != b"Exif" {
                     isobmff::skip(&mut r, len)?;
                     continue;
@@ -214,5 +219,23 @@ mod tests {
         );
         // 素のコードストリームには Exif を入れる場所がない
         assert_eq!(raw_exif(Cursor::new(vec![0xFF, 0x0A])).unwrap(), None);
+    }
+
+    #[test]
+    fn exif_is_read_after_a_brob_shorter_than_its_kind_field() {
+        // brob の本体は先頭 4 バイトが元の箱の種類。それより短い brob は壊れているが、
+        // 箱の長さは信用できるので、飛ばして後ろの箱を読めなければならない
+        let exif = boxed(b"Exif", b"\0\0\0\x02xxII*\0");
+        let without_brob = [CONTAINER_SIGNATURE, &exif].concat();
+        let with_short_brob = [CONTAINER_SIGNATURE, &boxed(b"brob", b"ab"), &exif].concat();
+        // 前提: 短い brob が無ければ読める（テストの Exif 箱自体は正しい）
+        assert_eq!(
+            raw_exif(Cursor::new(without_brob)).unwrap().unwrap(),
+            b"II*\0".to_vec()
+        );
+        assert_eq!(
+            raw_exif(Cursor::new(with_short_brob)).unwrap().unwrap(),
+            b"II*\0".to_vec()
+        );
     }
 }

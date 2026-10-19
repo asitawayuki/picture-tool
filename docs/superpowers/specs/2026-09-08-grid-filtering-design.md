@@ -281,7 +281,7 @@ pub fn read_metadata_fast(path: &Path) -> Result<MetadataRead>
 
 #### 非 JPEG は意図的に非対称にする
 
-`list_images` は PNG / WebP も並べる（`is_supported_image` は `jpg|jpeg|png|webp`）。
+`list_images` は PNG / WebP / JPEG XL / AVIF も並べる（`is_supported_image` は `jpg|jpeg|png|webp|jxl|avif`）。
 
 | 経路 | PNG / WebP |
 |---|---|
