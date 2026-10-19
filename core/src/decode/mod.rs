@@ -19,7 +19,7 @@
 //! デコーダ内部の作業領域はこの 512MB に含めない（JPEG XL は 1 画素あたり出力の数倍を使い、
 //! 含めると 20MP 前後の普通の写真が開けなくなる）。ただし作業領域が宣言された寸法より
 //! 大きくなりうる箇所には、それぞれ別に上限を置く（[`JXL_WORKING_BYTES_PER_PIXEL`]、
-//! [`reserve_avif`]）。
+//! [`frame_size_limits`]）。
 
 mod avif;
 mod isobmff;
@@ -86,7 +86,14 @@ pub(crate) fn open(path: &Path, format: Format) -> Result<DynamicImage> {
             let data = std::fs::read(path)?;
             let layout = avif::read_layout(Cursor::new(&data))?;
             let parsed = avif_parse::read_avif(&mut data.as_slice())?;
-            reserve_avif(&parsed)?;
+            let _limits = frame_size_limits(
+                avif::declared(&parsed.primary_item)?,
+                parsed
+                    .alpha_item
+                    .as_deref()
+                    .map(avif::declared)
+                    .transpose()?,
+            )?;
             let decoded = avif_decode::Decoder::from_avif(&data)?.to_image()?;
             Ok(layout.apply(avif_to_dynamic(decoded)?))
         }),
@@ -159,28 +166,48 @@ const JXL_WORKING_BYTES_PER_PIXEL: u64 = 64;
 /// 寸法によらない作業領域（小さい画像でも要るぶん）
 const JXL_WORKING_BASE: u64 = 64 << 20;
 
-/// AVIF の画素バッファの確保に先立って、寸法で弾く
-///
-/// 宣言された最大寸法は他形式と同じく出力 512MB で判定する。加えて、フレームヘッダが
-/// 宣言を超えて取りうる最大寸法（[`avif::max_frame_pixels`]）も見る。普通のエンコーダは
-/// 寸法を最小のビット数で書くので、この最大は縦横それぞれ宣言の 2 倍未満、面積で 4 倍未満に
-/// 収まる。上限を 4 倍にしておけば、宣言で通るファイルをここで落とすことはない。
-fn reserve_avif(parsed: &avif_parse::AvifData) -> Result<()> {
-    const WORST_CASE_FACTOR: u64 = 4;
-    let meta = parsed.primary_item_metadata()?;
-    let channels = if parsed.alpha_item.is_some() { 4 } else { 3 };
-    let bytes_per_sample = if meta.bit_depth > 8 { 2 } else { 1 };
-    let declared = u64::from(meta.max_frame_width.get()) * u64::from(meta.max_frame_height.get());
-    image::Limits::default().reserve(declared * channels * bytes_per_sample)?;
+/// AVIF のデコーダに渡す `frame_size_limit`（画素数）。主画像とアルファで別々に持つ
+#[cfg_attr(not(test), allow(dead_code))]
+#[derive(Debug)]
+struct FrameSizeLimits {
+    primary: u32,
+    alpha: Option<u32>,
+}
 
-    let mut worst = image::Limits::default();
-    worst.max_alloc = worst.max_alloc.map(|max| max * WORST_CASE_FACTOR);
-    worst.reserve(avif::max_frame_pixels(&parsed.primary_item)? * channels * bytes_per_sample)?;
-    if let (Some(alpha), Some(alpha_meta)) = (&parsed.alpha_item, parsed.alpha_item_metadata()?) {
-        let bytes_per_sample = if alpha_meta.bit_depth > 8 { 2 } else { 1 };
-        worst.reserve(avif::max_frame_pixels(alpha)? * bytes_per_sample)?;
+/// AVIF のデコードに先立って、宣言された寸法で弾き、デコーダに渡す `frame_size_limit` を決める
+///
+/// 判定は出力の画素バッファ（主画像 RGB ＋ アルファ 1 チャンネル）の合計を 1 つの
+/// `Limits::default()`（512MB）に数える。理由:
+/// - シーケンスヘッダの数は [`avif::declared`] が 1 に限っている。宣言の最大寸法より大きい
+///   フレームは `frame_size_limit` でデコーダが拒否するので、宣言が上限の根拠になる
+/// - アルファの深度は主画像のものを使う。変換後の出力は主画像の深度で作られるため
+/// - `frame_size_limit` は 0 が無制限なので、`u32` に収まらない値や 0 を渡す前に、
+///   必ず 512MB 判定を先に通す（`u32::try_from` はその後）。判定を通れば 2^32 画素未満である
+/// - アルファには `min(アルファの宣言, 主画像の宣言)` を渡す。アルファは主画像と同じ寸法で
+///   なければならず、主画像より大きい宣言を許す理由がない
+fn frame_size_limits(
+    primary: avif::Declared,
+    alpha: Option<avif::Declared>,
+) -> Result<FrameSizeLimits> {
+    let bytes_per_sample: u64 = if primary.bit_depth > 8 { 2 } else { 1 };
+    let mut budget = image::Limits::default();
+    let over =
+        |e| anyhow::Error::new(e).context("AVIF declares a size over the 512MB output limit");
+    budget
+        .reserve(primary.pixels.saturating_mul(3 * bytes_per_sample))
+        .map_err(over)?;
+    if let Some(alpha) = &alpha {
+        budget
+            .reserve(alpha.pixels.saturating_mul(bytes_per_sample))
+            .map_err(over)?;
     }
-    Ok(())
+    let limit = |pixels: u64| u32::try_from(pixels).context("AVIF declares too many pixels");
+    Ok(FrameSizeLimits {
+        primary: limit(primary.pixels)?,
+        alpha: alpha
+            .map(|a| limit(a.pixels.min(primary.pixels)))
+            .transpose()?,
+    })
 }
 
 /// JPEG XL / AVIF のデコーダを panic から隔離する
@@ -275,5 +302,53 @@ mod tests {
         );
         assert_eq!(sniff_bytes(&[0xFF, 0xD8, 0xFF]), Format::Other);
         assert_eq!(sniff_bytes(&[]), Format::Other);
+    }
+
+    fn d(pixels: u64, bit_depth: u8) -> avif::Declared {
+        avif::Declared { pixels, bit_depth }
+    }
+
+    #[test]
+    fn frame_size_limits_passes_the_declared_sizes() {
+        let l = frame_size_limits(d(2048, 8), None).unwrap();
+        assert_eq!((l.primary, l.alpha), (2048, None));
+        // アルファは主画像との小さいほう
+        let l = frame_size_limits(d(4096, 8), Some(d(1_000_000, 8))).unwrap();
+        assert_eq!(l.alpha, Some(4096));
+        let l = frame_size_limits(d(4096, 8), Some(d(1024, 8))).unwrap();
+        assert_eq!(l.alpha, Some(1024));
+    }
+
+    #[test]
+    fn frame_size_limits_counts_alpha_and_depth_against_one_budget() {
+        let over = |r: Result<FrameSizeLimits>| {
+            format!("{:#}", r.unwrap_err())
+                .contains("AVIF declares a size over the 512MB output limit")
+        };
+        // 100M 画素: 8bit なら 300MB で通り、10bit なら 600MB で落ちる
+        assert!(frame_size_limits(d(100_000_000, 8), None).is_ok());
+        assert!(over(frame_size_limits(d(100_000_000, 10), None)));
+        // 主画像 64x64 ＋ アルファ 23200x23200（1 チャンネルでも合計が上限を超える）
+        assert!(over(frame_size_limits(
+            d(64 * 64, 8),
+            Some(d(23200 * 23200, 8))
+        )));
+        // アルファは主画像の深度で数える: 主 10bit なら 2 バイト
+        // 8bit は 300,012,288 バイトで通り、10bit は 600,024,576 バイトで超える
+        assert!(frame_size_limits(d(64 * 64, 8), Some(d(300_000_000, 8))).is_ok());
+        assert!(over(frame_size_limits(
+            d(64 * 64, 10),
+            Some(d(300_000_000, 8))
+        )));
+    }
+
+    #[test]
+    fn frame_size_limits_rejects_before_the_limit_would_wrap() {
+        // 65536x65536 = 2^32。u32 に入らず、0（無制限）にもならないまま 512MB 判定で落ちる
+        let err = frame_size_limits(d(1 << 32, 8), None).unwrap_err();
+        assert!(
+            format!("{err:#}").contains("AVIF declares a size over the 512MB output limit"),
+            "{err:#}"
+        );
     }
 }

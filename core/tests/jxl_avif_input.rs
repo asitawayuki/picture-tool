@@ -17,6 +17,13 @@
 //! | `over_limit.jxl` | 14000x13000 の単色の非可逆。出力が 546MB で、上限の 512MB を超える |
 //! | `lossy_24mp.jxl` | 6000x4000 の非可逆。左半分が赤・右半分が青 |
 //! | `orient_N.avif` | 64x32 を 4 分割（左上=赤、右上=緑、左下=青、右下=黄）し、Exif の向き N を Pillow が `irot`/`imir` に変換して書いたもの |
+//! | `avif/*.avif` | `tests/fixtures/make_avif_decoder.py` が生成した、AVIF デコーダ差し替え用の 25 件。元画像は 33x17 の非単色の図柄。以下の行はその内訳 |
+//! | `avif/<主画像>[_<アルファ>].avif`（20 件） | 画素一致用。名前は `p<深度>_<間引き>_<lim/full>_<行列>`（`gray<深度>_...` は 4:0:0）に、アルファ付きなら `_a<深度>` などが続く。行列・範囲・深度の全組はスクリプトの表を参照 |
+//! | `avif/base_64x32.avif` | 4 色の 64x32。`crash.avif` の元 |
+//! | `avif/crash.avif` | `base_64x32.avif` のタイルデータ内（オフセット 340・341）を壊したもの。abort の回帰。計画の frame OBU ペイロード先頭の位置は、現行の base では abort しない |
+//! | `avif/over_limit.avif` | 14000x13000 の単色 8bit 4:2:0。出力が 546MB で 512MB を超える |
+//! | `avif/alpha_huge.avif` | 主画像 64x64、アルファは実際にエンコードした 23200x23200。主画像だけなら上限の内側 |
+//! | `avif/two_seqhdr.avif` | 1 アイテムの AV1 データにシーケンスヘッダを 2 個持つ（`p8_420_lim_unspec.avif` の主画像データの複製） |
 //!
 //! JPEG XL はコードストリームの向き、AVIF は `irot`/`imir` が正で、
 //! **どちらも Exif の Orientation は無視する**（適用すると二重回転になる）。
@@ -419,4 +426,38 @@ fn container_nested_in_a_codestream_box_is_rejected() {
     let path = fixture("nested.jxl");
     assert!(open_image_oriented(&path).is_err());
     assert!(image_dimensions_oriented(&path).is_err());
+}
+
+fn avif(name: &str) -> PathBuf {
+    fixture(&format!("avif/{name}"))
+}
+
+fn open_err(name: &str) -> String {
+    format!("{:#}", open_image_oriented(&avif(name)).expect_err(name))
+}
+
+#[test]
+fn avif_over_the_output_limit_is_rejected_before_decoding() {
+    assert!(
+        open_err("over_limit.avif").contains("AVIF declares a size over the 512MB output limit")
+    );
+}
+
+#[test]
+fn avif_alpha_is_counted_against_the_output_limit() {
+    // 前提: 主画像だけなら上限の内側（64x64）
+    assert_eq!(
+        image_dimensions_oriented(&avif("alpha_huge.avif")).unwrap(),
+        (64, 64)
+    );
+    assert!(
+        open_err("alpha_huge.avif").contains("AVIF declares a size over the 512MB output limit")
+    );
+}
+
+#[test]
+fn avif_with_two_sequence_headers_in_one_item_is_rejected() {
+    assert!(open_err("two_seqhdr.avif").contains("exactly one sequence header (found 2)"));
+    // アイテムごとに 1 個（合計 2 個）の正常なアルファ付きは開ける
+    assert!(open_image_oriented(&avif("p8_420_lim_709_a8.avif")).is_ok());
 }
