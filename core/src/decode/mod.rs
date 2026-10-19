@@ -149,8 +149,12 @@ fn jxl_decoder(path: &Path) -> Result<JxlDecoder<impl Read>> {
     )?;
     let (width, height) = decoder.dimensions();
     let mut limits = image::Limits::no_limits();
-    limits.max_alloc =
-        Some(u64::from(width) * u64::from(height) * JXL_WORKING_BYTES_PER_PIXEL + JXL_WORKING_BASE);
+    // 上限値そのものの見直しは別の spec で扱う。ここでは算術が溢れないようにするだけ
+    limits.max_alloc = Some(
+        (u64::from(width) * u64::from(height))
+            .saturating_mul(JXL_WORKING_BYTES_PER_PIXEL)
+            .saturating_add(JXL_WORKING_BASE),
+    );
     decoder.set_limits(limits)?;
     Ok(decoder)
 }
