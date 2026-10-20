@@ -1304,6 +1304,9 @@ spike は直していない。品質 50 未満の PSNR は上のとおり `jpeg-
   `over_limit.png`（12000×12000）が 36 秒かけて変換まで通り、最大 RSS は 2.1GB。戻すと `Err` で即座に返る。
   `reserve` を入れる前（現行の `decode()`）でもこのテストは通ることを Step 3 で確かめた。
 - `over_limit.png` は 559,177 バイト（Pillow 12.3 の `optimize=True`）。
+- `decode::open`（`open_image_oriented` 経由のサムネイル・プレビュー）にも ICC 変換がかかるようになった（spec「5」が意図した変化。警告は捨てる）。
+- moxcms の解析と変換の作成は `catch_unwind` で包み、panic を警告にして画素を変換せずに返す。行の変換の途中の panic は包まず、
+  `Format::Other` の経路全体を `guarded` で包んで 1 枚の `Err` にする。panic する ICC は見つかっていないのでテストは無い。
 - ProPhoto の色域外 3 色は大小関係だけを見る。パッチ 1・2 は変換前の値でも大小関係が正解と同じで、
   この検査で差が出るのはパッチ 0（変換前 `[200,60,59]`）と 4 色目の値の比較。
 

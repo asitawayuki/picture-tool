@@ -136,7 +136,9 @@ pub(crate) fn open_with_warnings(
                 parsed.premultiplied_alpha,
             )?))
         }),
-        Format::Other => {
+        // ICC の解析・変換（moxcms）は信頼できない入力に対する新しい攻撃面なので、JPEG XL / AVIF と同じく
+        // panic を 1 枚の `Err` にする（解析と変換の作成の panic は `to_srgb` が警告にする。ここは保険）
+        Format::Other => guarded(|| {
             let mut decoder = ImageReader::open(path)?
                 .with_guessed_format()?
                 .into_decoder()?;
@@ -155,7 +157,7 @@ pub(crate) fn open_with_warnings(
                 path,
                 &mut warnings,
             ))
-        }
+        }),
     }
     .with_context(|| format!("Failed to open image: {}", path.display()))?;
     Ok((img, warnings))

@@ -58,7 +58,7 @@ pub(crate) fn to_srgb(
     let Some(icc) = icc else {
         return img;
     };
-    let profile = match ColorProfile::new_from_slice(icc) {
+    let profile = match no_panic(|| ColorProfile::new_from_slice(icc).map_err(|e| e.to_string())) {
         Ok(p) => p,
         Err(e) => {
             warnings.push(format!(
@@ -126,20 +126,35 @@ fn convert_in_place(img: &mut DynamicImage, profile: &ColorProfile) -> Result<()
     };
     let row_len = width * layout.channels();
     let err = |e: moxcms::CmsError| e.to_string();
+    // 行の変換（`transform_rows`）は包まない: 途中で panic すると一部の行だけ変換された画素が残るので、
+    // そこは呼び出し元の `decode::guarded` で 1 枚の `Err` にする
     match samples {
         Samples::U8(s) => {
-            let t = profile
-                .create_transform_8bit(layout, &dst, layout, options)
-                .map_err(err)?;
+            let t = no_panic(|| {
+                profile
+                    .create_transform_8bit(layout, &dst, layout, options)
+                    .map_err(err)
+            })?;
             transform_rows(s, row_len, t.as_ref())
         }
         Samples::U16(s) => {
-            let t = profile
-                .create_transform_16bit(layout, &dst, layout, options)
-                .map_err(err)?;
+            let t = no_panic(|| {
+                profile
+                    .create_transform_16bit(layout, &dst, layout, options)
+                    .map_err(err)
+            })?;
             transform_rows(s, row_len, t.as_ref())
         }
     }
+}
+
+/// 信頼できない ICC を扱う moxcms の処理（解析と変換の作成）の panic を `Err` に変える
+///
+/// moxcms の解析は信頼できない入力に対する新しい攻撃面であり、panic でバッチを止めず、
+/// ICC の失敗として警告にして画素を変換せずに続けるため（spec 2026-10-20「付随処理の失敗」）。
+fn no_panic<T>(f: impl FnOnce() -> Result<T, String>) -> Result<T, String> {
+    std::panic::catch_unwind(std::panic::AssertUnwindSafe(f))
+        .unwrap_or_else(|_| Err("moxcms panicked on the ICC profile".to_string()))
 }
 
 /// グレーの変換先: sRGB の白色点と TRC を持つ Gray のプロファイル
