@@ -518,3 +518,313 @@ fn png_whose_output_exceeds_the_memory_limit_is_rejected() {
     };
     assert!(process_image(&input, out.path(), &config, None, None).is_err());
 }
+
+// ---- 出力の Exif（spec「Exif」: 位置情報と個体識別タグを消し、それ以外を残す） ----
+
+/// `bytes` を `name` として書き、`mode` の品質 90 で書き出す。出力のバイト列と結果を返す
+fn export_bytes(
+    name: &str,
+    bytes: &[u8],
+    mode: ConversionMode,
+) -> (picture_tool_core::ProcessResult, Vec<u8>) {
+    let dir = tempfile::tempdir().unwrap();
+    let input = dir.path().join(name);
+    std::fs::write(&input, bytes).unwrap();
+    export_path(&input, mode)
+}
+
+fn export_path(input: &Path, mode: ConversionMode) -> (picture_tool_core::ProcessResult, Vec<u8>) {
+    let out = tempfile::tempdir().unwrap();
+    let config = ProcessingConfig {
+        mode,
+        bg_color: BackgroundColor::White,
+        quality: 90,
+        max_size_mb: 8,
+        delete_originals: false,
+        max_width: None,
+    };
+    let result = process_image(input, out.path(), &config, None, None).unwrap();
+    let bytes = std::fs::read(&result.output_path).unwrap();
+    (result, bytes)
+}
+
+/// 出力（またはテスト入力）を kamadak-exif で読み直す。読めなければ失敗
+fn read_exif(bytes: &[u8]) -> exif::Exif {
+    exif::Reader::new()
+        .read_from_container(&mut std::io::Cursor::new(bytes))
+        .expect("Exif を警告なしで読み直せない")
+}
+
+/// Exif が無いこと（読めないのではなく、無い）
+fn assert_no_exif(bytes: &[u8]) {
+    match exif::Reader::new().read_from_container(&mut std::io::Cursor::new(bytes)) {
+        Err(exif::Error::NotFound(_)) => {}
+        other => panic!("Exif が無いはずが: {:?}", other.map(|e| e.fields().count())),
+    }
+}
+
+fn has(exif: &exif::Exif, tag: exif::Tag) -> bool {
+    exif.get_field(tag, exif::In::PRIMARY).is_some()
+}
+
+fn value_of(exif: &exif::Exif, tag: exif::Tag) -> String {
+    let f = exif
+        .get_field(tag, exif::In::PRIMARY)
+        .unwrap_or_else(|| panic!("{tag} が無い"));
+    format!("{:?}", f.value)
+}
+
+fn uint_of(exif: &exif::Exif, tag: exif::Tag) -> u32 {
+    exif.get_field(tag, exif::In::PRIMARY)
+        .unwrap_or_else(|| panic!("{tag} が無い"))
+        .value
+        .get_uint(0)
+        .unwrap_or_else(|| panic!("{tag} が整数でない"))
+}
+
+const IDENTIFYING: [exif::Tag; 5] = [
+    exif::Tag::BodySerialNumber,
+    exif::Tag::LensSerialNumber,
+    exif::Tag::CameraOwnerName,
+    exif::Tag::Artist,
+    common::exif::XP_AUTHOR,
+];
+
+const SHOOTING: [exif::Tag; 5] = [
+    exif::Tag::Make,
+    exif::Tag::Model,
+    exif::Tag::ExposureTime,
+    exif::Tag::DateTimeOriginal,
+    exif::Tag::Copyright,
+];
+
+fn camera_jpeg(orientation: u16, w: u32, h: u32) -> Vec<u8> {
+    common::exif::jpeg_with_exif(w, h, &common::exif::camera_tiff(orientation, w, h))
+}
+
+#[test]
+fn location_and_identifying_tags_are_removed() {
+    let input = camera_jpeg(1, 200, 100);
+    let src = read_exif(&input);
+    // 前提: 入力には GPS も個体識別タグも全部ある
+    assert!(src.fields().any(|f| f.tag.context() == exif::Context::Gps));
+    for tag in IDENTIFYING {
+        assert!(has(&src, tag), "前提が崩れている: 入力に {tag} が無い");
+    }
+
+    let (result, out) = export_bytes("camera.jpg", &input, ConversionMode::Crop);
+    assert!(result.warnings.is_empty(), "{:?}", result.warnings);
+    let exif = read_exif(&out);
+    let gps: Vec<_> = exif
+        .fields()
+        .filter(|f| f.tag.context() == exif::Context::Gps)
+        .map(|f| f.tag)
+        .collect();
+    assert!(gps.is_empty(), "位置情報が残っている: {gps:?}");
+    let left: Vec<_> = IDENTIFYING.into_iter().filter(|&t| has(&exif, t)).collect();
+    assert!(left.is_empty(), "個体識別タグが残っている: {left:?}");
+}
+
+#[test]
+fn shooting_information_is_kept() {
+    let input = camera_jpeg(1, 200, 100);
+    let src = read_exif(&input);
+    let (result, out) = export_bytes("camera.jpg", &input, ConversionMode::Crop);
+    assert!(result.warnings.is_empty(), "{:?}", result.warnings);
+    let exif = read_exif(&out);
+    for tag in SHOOTING {
+        assert_eq!(
+            value_of(&exif, tag),
+            value_of(&src, tag),
+            "{tag} が入力と違う"
+        );
+    }
+    // 値そのものも、入力に入れたとおり（入力の作り方の誤りで両方が同じに崩れていないこと）
+    assert_eq!(
+        exif.get_field(exif::Tag::Make, exif::In::PRIMARY)
+            .unwrap()
+            .display_value()
+            .to_string(),
+        format!("\"{}\"", common::exif::MAKE)
+    );
+}
+
+/// crop モードは向きに関係なく縦長の 4:5 を出すので、縦横の入れ替わりは quality モードで確かめる
+#[test]
+fn orientation_is_reset_to_1() {
+    let input = camera_jpeg(6, 120, 80);
+    assert_eq!(
+        uint_of(&read_exif(&input), exif::Tag::Orientation),
+        6,
+        "前提"
+    );
+    let (result, out) = export_bytes("rotated.jpg", &input, ConversionMode::Quality);
+    assert!(result.warnings.is_empty(), "{:?}", result.warnings);
+    assert_eq!(uint_of(&read_exif(&out), exif::Tag::Orientation), 1);
+    let decoded = image::load_from_memory(&out).unwrap();
+    assert_eq!(
+        (decoded.width(), decoded.height()),
+        (80, 120),
+        "画素が回転済みでない"
+    );
+}
+
+#[test]
+fn pixel_dimensions_are_the_output_size() {
+    let input = camera_jpeg(1, 200, 100);
+    let (result, out) = export_bytes("camera.jpg", &input, ConversionMode::Crop);
+    assert!(result.warnings.is_empty(), "{:?}", result.warnings);
+    let decoded = image::load_from_memory(&out).unwrap();
+    let (w, h) = (decoded.width(), decoded.height());
+    // 前提: 出力の寸法は入力（200×100）と違う
+    assert_ne!((w, h), (200, 100));
+    let exif = read_exif(&out);
+    assert_eq!(uint_of(&exif, exif::Tag::PixelXDimension), w);
+    assert_eq!(uint_of(&exif, exif::Tag::PixelYDimension), h);
+}
+
+#[test]
+fn thumbnail_and_makernote_are_removed() {
+    let input = camera_jpeg(1, 200, 100);
+    let src = read_exif(&input);
+    // 前提: 入力にはサムネイルと MakerNote がある
+    assert!(src.fields().any(|f| f.ifd_num == exif::In::THUMBNAIL));
+    assert!(has(&src, exif::Tag::MakerNote));
+
+    let (result, out) = export_bytes("camera.jpg", &input, ConversionMode::Crop);
+    assert!(result.warnings.is_empty(), "{:?}", result.warnings);
+    let exif = read_exif(&out);
+    let thumb: Vec<_> = exif
+        .fields()
+        .filter(|f| f.ifd_num == exif::In::THUMBNAIL)
+        .map(|f| f.tag)
+        .collect();
+    assert!(thumb.is_empty(), "IFD1 が残っている: {thumb:?}");
+    assert!(!has(&exif, exif::Tag::MakerNote), "MakerNote が残っている");
+}
+
+#[test]
+fn unknown_values_are_dropped_and_the_rest_is_kept() {
+    let mut fields = common::exif::camera_fields(1, 200, 100);
+    fields.push(exif::Field {
+        tag: exif::Tag::Software,
+        ifd_num: exif::In::PRIMARY,
+        value: exif::Value::Ascii(vec![b"Tool".to_vec()]),
+    });
+    let tiff = common::exif::with_unknown_type(common::exif::tiff(&fields, None), 0x0131);
+    let input = common::exif::jpeg_with_exif(200, 100, &tiff);
+    // 前提: 入力の Software は Unknown として読まれる
+    let src = read_exif(&input);
+    assert!(matches!(
+        src.get_field(exif::Tag::Software, exif::In::PRIMARY)
+            .map(|f| &f.value),
+        Some(exif::Value::Unknown(99, _, _))
+    ));
+
+    let (result, out) = export_bytes("unknown.jpg", &input, ConversionMode::Crop);
+    assert!(result.warnings.is_empty(), "{:?}", result.warnings);
+    let exif = read_exif(&out);
+    assert!(
+        !has(&exif, exif::Tag::Software),
+        "Unknown のタグが残っている"
+    );
+    assert_eq!(
+        value_of(&exif, exif::Tag::Make),
+        value_of(&src, exif::Tag::Make)
+    );
+}
+
+#[test]
+fn oversized_exif_is_dropped_with_a_warning() {
+    let mut fields = common::exif::camera_fields(1, 200, 100);
+    fields.push(exif::Field {
+        tag: exif::Tag::UserComment,
+        ifd_num: exif::In::PRIMARY,
+        value: exif::Value::Undefined(vec![b'x'; 70_000], 0),
+    });
+    let input = common::exif::png_with_exif(200, 100, &common::exif::tiff(&fields, None));
+    // 前提: 入力の Exif は正当に読め、UserComment は 70,000 バイト
+    let src = read_exif(&input);
+    match &src
+        .get_field(exif::Tag::UserComment, exif::In::PRIMARY)
+        .unwrap()
+        .value
+    {
+        exif::Value::Undefined(v, _) => assert_eq!(v.len(), 70_000),
+        other => panic!("前提が崩れている: {other:?}"),
+    }
+
+    let (result, out) = export_bytes("long_comment.png", &input, ConversionMode::Crop);
+    assert_no_exif(&out);
+    assert_eq!(result.warnings.len(), 1, "{:?}", result.warnings);
+    assert!(
+        result.warnings[0].starts_with("Writing without EXIF: EXIF of"),
+        "{:?}",
+        result.warnings
+    );
+}
+
+#[test]
+fn input_without_exif_writes_no_exif_and_no_warning() {
+    let input = common::exif::plain_jpeg(200, 100);
+    assert_no_exif(&input);
+    let (result, out) = export_bytes("plain.jpg", &input, ConversionMode::Crop);
+    assert!(result.warnings.is_empty(), "{:?}", result.warnings);
+    assert_no_exif(&out);
+}
+
+#[test]
+fn broken_exif_is_dropped_with_a_warning() {
+    let mut input = camera_jpeg(1, 200, 100);
+    // 前提: 壊す前は読める
+    read_exif(&input);
+    // SOI(2) + APP1 のマーカーと長さ(4) + "Exif\0\0"(6) の後ろが TIFF ヘッダ
+    assert_eq!(&input[12..16], b"MM\0\x2a");
+    input[12..16].copy_from_slice(b"XX\0\0");
+
+    let (result, out) = export_bytes("broken.jpg", &input, ConversionMode::Crop);
+    assert_no_exif(&out);
+    assert_eq!(result.warnings.len(), 1, "{:?}", result.warnings);
+    assert!(
+        result.warnings[0].starts_with("Writing without EXIF: failed to read"),
+        "{:?}",
+        result.warnings
+    );
+}
+
+fn fixture(name: &str) -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures")
+        .join(name)
+}
+
+#[test]
+fn jxl_and_avif_exif_is_carried_over() {
+    for name in ["exif_o6.jxl", "exif_o6.avif"] {
+        let (result, out) = export_path(&fixture(name), ConversionMode::Crop);
+        assert!(result.warnings.is_empty(), "{name}: {:?}", result.warnings);
+        let exif = read_exif(&out);
+        assert_eq!(uint_of(&exif, exif::Tag::Orientation), 1, "{name}");
+        assert_eq!(
+            exif.get_field(exif::Tag::Make, exif::In::PRIMARY)
+                .unwrap_or_else(|| panic!("{name}: Make が無い"))
+                .display_value()
+                .to_string(),
+            "\"TestMake\"",
+            "{name}"
+        );
+    }
+}
+
+/// JPEG XL の Exif が壊れていても、黙って捨てずに警告にする（spec「読めなかったことは warnings に積む」）
+#[test]
+fn broken_jxl_exif_is_dropped_with_a_warning() {
+    let (result, out) = export_path(&fixture("broken_brob.jxl"), ConversionMode::Crop);
+    assert_no_exif(&out);
+    assert_eq!(result.warnings.len(), 1, "{:?}", result.warnings);
+    assert!(
+        result.warnings[0].starts_with("Writing without EXIF: failed to read"),
+        "{:?}",
+        result.warnings
+    );
+}

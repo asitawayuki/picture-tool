@@ -179,11 +179,15 @@ pub(crate) fn dimensions(path: &Path, format: Format) -> Result<(u32, u32)> {
     .with_context(|| format!("Failed to read image dimensions: {}", path.display()))
 }
 
-/// JPEG XL の Exif ボックスを `exif` クレートで読める生 TIFF として取り出す。無ければ `None`
-pub(crate) fn jxl_raw_exif(path: &Path) -> Option<Vec<u8>> {
+/// JPEG XL の Exif ボックスを `exif` クレートで読める生 TIFF として取り出す。
+/// 無い（または上限を超えて大きい）ときは `Ok(None)`、箱が壊れているときは `Err`
+pub(crate) fn jxl_exif(path: &Path) -> Result<Option<Vec<u8>>> {
     guarded(|| jxl::raw_exif(BufReader::new(File::open(path)?)))
-        .ok()
-        .flatten()
+}
+
+/// [`jxl_exif`] の `Err` を「無い」に畳んだもの（撮影情報の表示用。壊れていても黙って無いものとする）
+pub(crate) fn jxl_raw_exif(path: &Path) -> Option<Vec<u8>> {
+    jxl_exif(path).ok().flatten()
 }
 
 /// コードストリームだけを渡した jxl-oxide のデコーダ（ヘッダまで読んだ状態）

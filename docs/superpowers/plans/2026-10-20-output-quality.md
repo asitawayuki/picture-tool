@@ -1312,6 +1312,70 @@ spike は直していない。品質 50 未満の PSNR は上のとおり `jpeg-
 
 ### Task 7: Exif（実写真で残ったタグ）
 
+- 書き出しは kamadak-exif 0.6.1 の `experimental::Writer`。エンディアンは元の Exif に合わせる。IFD は本体（`In::PRIMARY`）だけを書く。
+- **IFD へのポインタ（`ExifIFDPointer`・`GPSInfoIFDPointer`・`InteropIFDPointer`）は kamadak-exif の `Reader` がフィールドとして返さない**
+  （`tiff.rs` の `parse_ifd` が子 IFD を辿るだけで、エントリには積まない）。`Writer` も中身から作り直す。
+  そのため GPS は `Context::Gps` で消せば足り、構造タグの定数にある 2 つのポインタは実際には現れない（spec の列挙に合わせて置いてある）。
+  単体テストの前提もポインタではなく「Exif / Interop の Context のフィールドがある」で書いた。
+- **本計画の判断**: TIFF のタグに入った XMP（0x02BC）・IPTC-NAA（0x83BB）・Photoshop の画像リソース（0x8649。IPTC を含む）も消す。
+  spec「XMP と IPTC は写さない」が Exif の中に入った XMP / IPTC にも及ぶと読んだ（LrC の XMP は位置情報を持ちうる）。
+  オフセット系は spec の 3 つに `StripOffsets`/`StripByteCounts`/`TileOffsets`/`TileByteCounts`/`FreeOffsets`/`FreeByteCounts`/
+  `JPEGInterchangeFormat`/`JPEGInterchangeFormatLength` を足し、本体 IFD・Exif IFD のどちらでも番号で照合する。
+- `PixelX/YDimension` は元が SHORT で値が収まれば SHORT のまま、そうでなければ LONG。
+- **JPEG XL**: `decode::jxl_exif`（`Result<Option<Vec<u8>>>`）を足し、`output_exif::load` はこれを使う。`jxl_raw_exif` は
+  `jxl_exif(..).ok().flatten()` の包みとして残した（`read_exif_info` が使う）。`broken_brob.jxl` は「failed to read」の警告 1 件になる
+  （`broken_jxl_exif_is_dropped_with_a_warning`。`load` を `jxl_raw_exif` に戻すと落ちることを確かめた）。
+  **`exif_bomb.jxl`（展開後 8MiB）は `jxl::raw_exif` が上限超えを `Ok(None)` にするので、警告なしで Exif なしになる**（未対応）。
+- `MAX_EXIF_TIFF_LEN = 65_527` は `jpeg-encoder` の実際の判定と一致することを単体テスト（`max_exif_tiff_len_is_the_encoder_limit`。
+  65,527 は `Ok`、65,528 は `Err`）で固定した。
+- **RED**: `output_quality.rs` の Exif のテスト 11 件のうち、実装前に 10 件が落ちた（前提の assert はすべて通った上で、出力に Exif が無い／警告が 0 件）。
+  `input_without_exif_writes_no_exif_and_no_warning` は実装前から通る（現行も Exif を書かないため。回帰の固定として残す）。
+- **実装を壊して落ちることを確かめた**（1 つずつ戻して確認）:
+
+  | 壊したところ | 落ちたテスト |
+  |---|---|
+  | GPS を消さない | `location_and_identifying_tags_are_removed` |
+  | 個体識別 5 タグを消さない | `location_and_identifying_tags_are_removed` |
+  | IFD1 を消さない | `thumbnail_and_makernote_are_removed` |
+  | `MakerNote` を消さない | `thumbnail_and_makernote_are_removed` |
+  | `Value::Unknown` を落とさない | `unknown_values_are_dropped_and_the_rest_is_kept` |
+  | `Orientation` を 1 にしない | `orientation_is_reset_to_1`・`jxl_and_avif_exif_is_carried_over` |
+  | `PixelXDimension` を書き換えない | `pixel_dimensions_are_the_output_size` |
+  | `MAX_EXIF_TIFF_LEN` の判定を外す | `oversized_exif_is_dropped_with_a_warning`（エンコーダの `Err` で 1 枚が失敗する） |
+  | JPEG XL を `jxl_raw_exif` で読む | `broken_jxl_exif_is_dropped_with_a_warning` |
+  | 「書かない場合」の判定を外す | `only_structural_tags_left_means_no_exif`・`removed_tags_do_not_count_as_something_to_write` |
+  | Interop の中身を構造に数えない | 同上 |
+  | オフセット系を消さない | `offset_tags_are_removed` |
+  | XMP / IPTC を消さない | `xmp_and_iptc_in_tiff_tags_are_removed` |
+  | `ColorSpace` を 1 にしない | `color_space_becomes_srgb` |
+  | エンディアンを固定する | `byte_order_follows_the_source` |
+
+- kamadak-exif の読み取りは `catch_unwind` で包んでいない。同じ入力を既存の `read_exif_info` が包まずに読んでいるので、新しい危険は増えていない。
+- **実写真**（crop モード・品質 90 の CLI。出力を kamadak-exif 0.6.1 の `read_from_container` で読み直し、どちらも `Ok`。exiv2 0.28 でも stderr 0 行）:
+  - `DSC00097.JPG`（撮って出し。ILCE-7CM2）: 入力 63 フィールド → 出力 52 フィールド。消えたのは `MakerNote` と IFD1 の 10 個
+    （`Compression`・`ImageDescription`・`JPEGInterchangeFormat`・`JPEGInterchangeFormatLength`・`Orientation`・`ResolutionUnit`・`Software`・
+    `XResolution`・`YCbCrPositioning`・`YResolution`）。GPS とシリアル番号は入力に無かった。`PixelXDimension` は 3504 → 1869、`PixelYDimension` は 2336（出力 1869×2336）。
+    残ったタグ: Tiff/Make・Model・Orientation（1）・XResolution・YResolution・ResolutionUnit・Software・DateTime・YCbCrPositioning・PrintIM（0xC4A5）、
+    Exif/ExposureTime・FNumber・ExposureProgram・PhotographicSensitivity・SensitivityType・RecommendedExposureIndex・ExifVersion・DateTimeOriginal・
+    DateTimeDigitized・OffsetTime・OffsetTimeOriginal・OffsetTimeDigitized・ComponentsConfiguration・CompressedBitsPerPixel・BrightnessValue・
+    ExposureBiasValue・MaxApertureValue・MeteringMode・LightSource・Flash・FocalLength・SubSecTime・SubSecTimeOriginal・SubSecTimeDigitized・
+    FlashpixVersion・ColorSpace・PixelXDimension・PixelYDimension・CustomRendered・ExposureMode・WhiteBalance・DigitalZoomRatio・
+    FocalLengthIn35mmFilm・SceneCaptureType・Contrast・Saturation・Sharpness・LensSpecification・LensModel・CompositeImage、
+    Interop/InteroperabilityIndex・InteroperabilityVersion。
+  - `20260328-DSC05024.jpg`（LrC の書き出し）: 入力 55 フィールド → 出力 48 フィールド。消えたのは `Artist` と IFD1 の 6 個
+    （`Compression`・`JPEGInterchangeFormat`・`JPEGInterchangeFormatLength`・`ResolutionUnit`・`XResolution`・`YResolution`）。
+    入力に `Orientation`・`PixelX/YDimension`・GPS は無く、出力にも足されていない。`Copyright` は残る。
+    残ったタグ: Tiff/Make・Model・XResolution・YResolution・ResolutionUnit・Software・DateTime・Copyright、
+    Exif/ExposureTime・FNumber・ExposureProgram・PhotographicSensitivity・SensitivityType・RecommendedExposureIndex・ExifVersion・DateTimeOriginal・
+    DateTimeDigitized・OffsetTime・OffsetTimeOriginal・OffsetTimeDigitized・ShutterSpeedValue・ApertureValue・BrightnessValue・ExposureBiasValue・
+    MaxApertureValue・MeteringMode・LightSource・Flash・FocalLength・SubSecTimeOriginal・SubSecTimeDigitized・ColorSpace・FocalPlaneXResolution・
+    FocalPlaneYResolution・FocalPlaneResolutionUnit・FileSource・SceneType・CustomRendered・ExposureMode・WhiteBalance・DigitalZoomRatio・
+    FocalLengthIn35mmFilm・SceneCaptureType・Contrast・Saturation・Sharpness・LensSpecification・LensModel。
+  - 型は保たれる（exiv2 で `ISOSpeedRatings` は Short のまま、`PixelXDimension` は入力どおり Long）。
+- **Orientation 6 の実写真は手元に無い**ので、`DSC00097.JPG` の写しに exiv2 で `Exif.Image.Orientation 6` を書いて作った。
+  quality モードの出力は 2336×3504・Orientation 1。Exif の向きに従う表示（`magick -auto-orient`）でも 2336×3504 のままで、
+  縮小して目で見ると 90° 時計回りに 1 回だけ回った絵（空が右）だった。二重には回らない。
+
 ### Task 8: ロゴ（直す前に戻したとき・利用者の了承）
 
 ### Task 9: 文字の合成（直す前に戻したとき）

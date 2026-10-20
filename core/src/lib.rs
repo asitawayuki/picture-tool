@@ -40,6 +40,7 @@ mod encode;
 pub mod exif_frame;
 pub mod metadata;
 pub mod model_map;
+mod output_exif;
 
 use anyhow::{Context, Result};
 use image::{DynamicImage, GenericImageView, RgbaImage};
@@ -392,9 +393,21 @@ pub fn process_image(
         }
     };
 
+    let format = decode::sniff(input_path)?;
+    // 出力に載せる Exif の元。読めなければ Exif なしで書く（spec「付随処理の失敗」）
+    let source_exif = match output_exif::load(input_path, format) {
+        Ok(exif) => exif,
+        Err(e) => {
+            warnings.push(format!(
+                "Writing without EXIF: failed to read EXIF from {}: {e}",
+                input_path.display()
+            ));
+            None
+        }
+    };
+
     // ICC は sRGB へ変換済み（アルファを持ったまま変換してから、下で背景色へ合成する）
-    let (img, decode_warnings) =
-        decode::open_with_warnings(input_path, decode::sniff(input_path)?)?;
+    let (img, decode_warnings) = decode::open_with_warnings(input_path, format)?;
     warnings.extend(decode_warnings);
     let img = apply_orientation(img, exif.orientation);
     // JPEG にアルファは無い。モードを問わず、ここで背景色へ合成して確定させる
@@ -467,6 +480,27 @@ pub fn process_image(
         _ => converted,
     };
 
+    // 寸法が確定した後に組み立てる（PixelX/YDimension を出力の寸法にするため）
+    let output_exif = source_exif.and_then(|src| {
+        match output_exif::build(&src, converted.width(), converted.height()) {
+            Ok(Some(tiff)) if tiff.len() > output_exif::MAX_EXIF_TIFF_LEN => {
+                warnings.push(format!(
+                    "Writing without EXIF: EXIF of {} bytes does not fit in a JPEG segment",
+                    tiff.len()
+                ));
+                None
+            }
+            Ok(tiff) => tiff,
+            Err(e) => {
+                warnings.push(format!(
+                    "Writing without EXIF: failed to rebuild EXIF for {}: {e}",
+                    input_path.display()
+                ));
+                None
+            }
+        }
+    });
+
     let max_size_bytes = config.max_size_mb * 1024 * 1024;
     let encoded = encode::encode_within_size_limit(
         &converted.to_rgb8(),
@@ -474,7 +508,7 @@ pub fn process_image(
         max_size_bytes,
         &encode::Embed {
             icc: Some(color::srgb_icc()),
-            exif: None,
+            exif: output_exif.as_deref(),
         },
     )?;
     let output_path = write_new_output_file(input_path, output_folder, &encoded.bytes)?;
