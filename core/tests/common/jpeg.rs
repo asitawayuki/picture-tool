@@ -63,3 +63,27 @@ pub fn sof_sampling(jpeg: &[u8]) -> Vec<(u8, u8)> {
     }
     panic!("SOF が無い");
 }
+
+/// SOS までに現れたマーカーの並び（SOI は含まない）。
+pub fn markers(jpeg: &[u8]) -> Vec<u8> {
+    segments(jpeg).into_iter().map(|(m, _)| m).collect()
+}
+
+/// DHT の `(クラス, テーブル番号, BITS)`。クラスは 0 が DC、1 が AC。
+/// BITS は符号長 1〜16 ごとの符号の数（T.81 B.2.4.2）。
+pub fn dht(jpeg: &[u8]) -> Vec<(u8, u8, [u8; 16])> {
+    let mut tables = Vec::new();
+    for (marker, mut body) in segments(jpeg) {
+        if marker != 0xC4 {
+            continue;
+        }
+        while !body.is_empty() {
+            let (tc, th) = (body[0] >> 4, body[0] & 0x0F);
+            let bits: [u8; 16] = body[1..17].try_into().unwrap();
+            let n: usize = bits.iter().map(|&b| b as usize).sum();
+            tables.push((tc, th, bits));
+            body = &body[17 + n..];
+        }
+    }
+    tables
+}

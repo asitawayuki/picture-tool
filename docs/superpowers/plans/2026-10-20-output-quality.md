@@ -771,6 +771,17 @@ file	quality	bytes	psnr_db	luma_max	chroma_max	sampling
 
 ### Task 2: エンコーダの差し替え
 
+- `jpeg-encoder` 0.7.1 の API は計画どおりの名前で存在した（`set_quantization_tables`・`set_sampling_factor`・`set_chroma_subsampling_method`・
+  `set_optimized_huffman_tables`・`add_icc_profile`・`add_exif_metadata`）。`SamplingFactor` は `PartialEq` を持つのでテストで直接比べられる。
+  `simd` feature は既定で off で、スカラー経路だけが使われる（CPU で出力が変わらない）。`Custom` の値は内部で `clamp(1, 2048)` されるだけで、255 超は検査されない
+- 依存は `core/Cargo.toml` にだけ足した。ワークスペースの `[workspace.dependencies]` は複数クレートが使う依存の置き場で、`jpeg-encoder` は core だけが使う
+- 計画の 5 つの契約テストのうち、品質 20（4:2:0）と 90（4:4:4）は `Encoder::new` の既定（90 未満で 4:2:0）と結果が一致するので、
+  `set_sampling_factor` を消しても通ってしまう。食い違う品質 60 で 4:4:4 を確かめる `quality_60_is_444_although_the_encoder_default_is_420` を足した。
+  `set_sampling_factor` を消すとこれだけが落ち、`set_optimized_huffman_tables(false)` にすると `huffman_tables_are_optimized` だけが落ちることを確かめた
+- 差し替え前のエンコーダで `output_quality.rs` を走らせると、LrC テーブル・4:2:0・ハフマン最適化の 3 件が落ち、品質 90 の 4:4:4 とベースラインの 2 件は通った（現行も満たしている性質）
+- `ChromaSubsamplingMethod::Average` を外しても落ちるテストは無い（ヘッダーに現れない。計画にもテストは無い）
+- `core/tests/common/jpeg.rs` に `markers` と `dht` を足した（`output_is_baseline` と `huffman_tables_are_optimized` 用）
+
 ### Task 3: 目盛りの調整と下限
 
 ### Task 4: サイズ制限の探索

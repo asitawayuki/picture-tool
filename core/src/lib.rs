@@ -35,6 +35,7 @@
 //!   止めない。
 
 mod decode;
+mod encode;
 pub mod exif_frame;
 pub mod metadata;
 pub mod model_map;
@@ -442,7 +443,12 @@ pub fn process_image(
     };
 
     let max_size_bytes = config.max_size_mb * 1024 * 1024;
-    let encoded = encode_within_size_limit(&converted, config.quality, max_size_bytes)?;
+    let encoded = encode::encode_within_size_limit(
+        &converted.to_rgb8(),
+        config.quality,
+        max_size_bytes,
+        &encode::Embed::NONE,
+    )?;
     let output_path = write_new_output_file(input_path, output_folder, &encoded.bytes)?;
 
     let final_size_mb = encoded.bytes.len() as f64 / (1024.0 * 1024.0);
@@ -536,7 +542,7 @@ pub fn generate_thumbnail_base64(path: &Path, max_dimension: u32) -> Result<Stri
         .with_context(|| format!("Failed to open image for thumbnail: {}", path.display()))?;
 
     let thumbnail = img.thumbnail(max_dimension, max_dimension);
-    let jpeg_bytes = encode_jpeg_rgb(&thumbnail.to_rgb8(), 75)?;
+    let jpeg_bytes = encode::encode_jpeg(&thumbnail.to_rgb8(), 75, &encode::Embed::NONE)?;
 
     Ok(base64::engine::general_purpose::STANDARD.encode(&jpeg_bytes))
 }
@@ -582,7 +588,7 @@ pub fn generate_exif_frame_preview_base64(
 
     let exif = read_exif_info(path).unwrap_or_default();
     let framed = exif_frame::render_exif_frame(&thumbnail, &exif, config, bg_color, assets)?;
-    let jpeg_bytes = encode_jpeg_rgb(&framed.image.to_rgb8(), 85)?;
+    let jpeg_bytes = encode::encode_jpeg(&framed.image.to_rgb8(), 85, &encode::Embed::NONE)?;
 
     Ok(ExifFramePreview {
         base64: base64::engine::general_purpose::STANDARD.encode(&jpeg_bytes),
@@ -623,7 +629,7 @@ pub fn generate_full_image_base64(path: &Path, max_width: u32, max_height: u32) 
         img
     };
 
-    let jpeg_bytes = encode_jpeg_rgb(&resized.to_rgb8(), 90)?;
+    let jpeg_bytes = encode::encode_jpeg(&resized.to_rgb8(), 90, &encode::Embed::NONE)?;
 
     Ok(base64::engine::general_purpose::STANDARD.encode(&jpeg_bytes))
 }
@@ -745,67 +751,6 @@ fn write_all_and_flush(file: File, bytes: &[u8]) -> std::io::Result<()> {
     let mut writer = BufWriter::new(file);
     writer.write_all(bytes)?;
     writer.flush()
-}
-
-/// サイズ制限を満たす JPEG バイト列
-struct EncodedJpeg {
-    bytes: Vec<u8>,
-    /// 実際に採用した品質
-    quality: u8,
-    /// `max_size_bytes` を満たせたか（false なら下限品質でも超過している）
-    within_limit: bool,
-}
-
-/// サイズ制限を満たすまで品質を下げながらメモリ上で JPEG にエンコードする
-///
-/// ディスクへの書き出しは確定した1回分だけを呼び出し元が行う。
-/// 試行のたびに書いて消す方式は最大7往復の I/O を生み、一時ファイル名の衝突源でもあった。
-fn encode_within_size_limit(
-    img: &DynamicImage,
-    initial_quality: u8,
-    max_size_bytes: usize,
-) -> Result<EncodedJpeg> {
-    const MIN_QUALITY: u8 = 60;
-    const QUALITY_STEP: u8 = 5;
-
-    let rgb_img = img.to_rgb8();
-    let mut quality = initial_quality;
-
-    loop {
-        let bytes = encode_jpeg_rgb(&rgb_img, quality)?;
-
-        if bytes.len() <= max_size_bytes {
-            return Ok(EncodedJpeg {
-                bytes,
-                quality,
-                within_limit: true,
-            });
-        }
-        if quality <= MIN_QUALITY {
-            return Ok(EncodedJpeg {
-                bytes,
-                quality,
-                within_limit: false,
-            });
-        }
-
-        quality = quality.saturating_sub(QUALITY_STEP).max(MIN_QUALITY);
-    }
-}
-
-/// RgbImage を JPEG バイト列にエンコード
-fn encode_jpeg_rgb(rgb_img: &image::RgbImage, quality: u8) -> Result<Vec<u8>> {
-    let mut bytes = Vec::new();
-    let mut cursor = std::io::Cursor::new(&mut bytes);
-    image::codecs::jpeg::JpegEncoder::new_with_quality(&mut cursor, quality)
-        .encode(
-            rgb_img.as_raw(),
-            rgb_img.width(),
-            rgb_img.height(),
-            image::ExtendedColorType::Rgb8,
-        )
-        .context("Failed to encode JPEG")?;
-    Ok(bytes)
 }
 
 #[cfg(test)]
