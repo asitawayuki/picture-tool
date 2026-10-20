@@ -25,7 +25,7 @@ struct Args {
     #[arg(short, long, default_value = "crop")]
     mode: ConversionMode,
 
-    /// パディング時の背景色 (white, black)
+    /// 背景色 (white, black)。pad の余白と、透過部分の塗りに使う
     #[arg(short, long, default_value = "white")]
     bg_color: BackgroundColor,
 

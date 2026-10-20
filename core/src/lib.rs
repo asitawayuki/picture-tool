@@ -67,7 +67,7 @@ pub enum ConversionMode {
     Quality,
 }
 
-/// パディング時の背景色
+/// 背景色。pad の余白と、透過部分の塗りに使う
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq)]
 #[cfg_attr(feature = "clap", derive(clap::ValueEnum))]
 #[serde(rename_all = "lowercase")]
@@ -346,6 +346,24 @@ pub fn collect_image_files(dir: &Path) -> CollectedImages {
     result
 }
 
+/// アルファを持つ画像を、ストレートアルファの over（`c·a + bg·(1−a)`）で背景色へ合成する。
+/// アルファが無ければそのまま返す。合成したときは `ImageRgb8`。
+fn flatten_alpha(img: DynamicImage, bg: BackgroundColor) -> DynamicImage {
+    if !img.color().has_alpha() {
+        return img;
+    }
+    let bg = bg.to_rgba().0;
+    let mut rgba = img.into_rgba8();
+    for px in rgba.pixels_mut() {
+        let a = u32::from(px[3]);
+        for c in 0..3 {
+            // 四捨五入つきの c·a/255 + bg·(255−a)/255
+            px[c] = ((u32::from(px[c]) * a + u32::from(bg[c]) * (255 - a) + 127) / 255) as u8;
+        }
+    }
+    DynamicImage::ImageRgb8(DynamicImage::ImageRgba8(rgba).into_rgb8())
+}
+
 /// 画像を処理
 pub fn process_image(
     input_path: &Path,
@@ -375,6 +393,9 @@ pub fn process_image(
 
     let img = decode::open(input_path, decode::sniff(input_path)?)?;
     let img = apply_orientation(img, exif.orientation);
+    // JPEG にアルファは無い。モードを問わず、ここで背景色へ合成して確定させる
+    // （pad の余白・Exif フレームの下地と同じ色になる）。
+    let img = flatten_alpha(img, config.bg_color);
 
     // 出力キャンバス幅の上限。quality モードはアスペクト比を変えないため対象外
     // （「幅」を指定しても縦写真の長辺を縛れない / spec §2）。

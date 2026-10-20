@@ -133,3 +133,102 @@ fn output_is_baseline() {
         "プログレッシブ（SOF2）になっている"
     );
 }
+
+// ---- 透過の合成（spec: 透過は背景色で塗ってから書き出す。全モード共通） ----
+
+/// 全画素が `rgba` の RGBA8 PNG を書く
+fn write_flat_rgba_png(path: &Path, w: u32, h: u32, rgba: [u8; 4]) {
+    ImageBuffer::from_pixel(w, h, image::Rgba(rgba))
+        .save(path)
+        .unwrap();
+}
+
+/// `rgba` 一色の `w`×`h` PNG を `mode` / `bg` で書き出し、出力の中央画素を返す。
+/// 品質 100 は 4:4:4 になる（4:2:0 だと色が滲み、許容差 ±6 を保てない）
+fn center_pixel_after_export(
+    mode: ConversionMode,
+    bg: BackgroundColor,
+    w: u32,
+    h: u32,
+    rgba: [u8; 4],
+) -> [u8; 3] {
+    let dir = tempfile::tempdir().unwrap();
+    let out = tempfile::tempdir().unwrap();
+    let input = dir.path().join("flat.png");
+    write_flat_rgba_png(&input, w, h, rgba);
+    let config = ProcessingConfig {
+        mode,
+        bg_color: bg,
+        quality: 100,
+        max_size_mb: 8,
+        delete_originals: false,
+        max_width: None,
+    };
+    let result = process_image(&input, out.path(), &config, None, None).unwrap();
+    let decoded = image::open(PathBuf::from(result.output_path))
+        .unwrap()
+        .to_rgb8();
+    decoded
+        .get_pixel(decoded.width() / 2, decoded.height() / 2)
+        .0
+}
+
+/// ±6 を外れた組み合わせを全部集める（最初の 1 件で止めると、どのモードが壊れているか分からない）
+fn mismatch(actual: [u8; 3], expected: [u8; 3], what: &str) -> Option<String> {
+    let ok = (0..3).all(|c| actual[c].abs_diff(expected[c]) <= 6);
+    (!ok).then(|| format!("{what}: 実際 {actual:?} / 期待 {expected:?}（±6）"))
+}
+
+/// 全モード × 全背景色 × 寸法（pad は余白あり 100×80 と、厳密な 4:5 の 80×100）
+fn all_cases() -> Vec<(ConversionMode, BackgroundColor, u32, u32, String)> {
+    let mut v = Vec::new();
+    for (mode, name, dims) in [
+        (ConversionMode::Crop, "crop", vec![(100, 80)]),
+        (ConversionMode::Quality, "quality", vec![(100, 80)]),
+        (ConversionMode::Pad, "pad", vec![(100, 80), (80, 100)]),
+    ] {
+        for (bg, bg_name) in [
+            (BackgroundColor::White, "white"),
+            (BackgroundColor::Black, "black"),
+        ] {
+            for &(w, h) in &dims {
+                v.push((mode, bg, w, h, format!("{name}/{bg_name}/{w}x{h}")));
+            }
+        }
+    }
+    v
+}
+
+#[test]
+fn transparent_pixels_become_the_background_color() {
+    // 完全に透けた画素の裏は赤。背景色で塗られていれば赤は出ない
+    // 前提: 入力の RGB は赤（塗らずに RGB だけ使えば赤が出る入力である）
+    let hidden = [255, 0, 0, 0];
+    assert_eq!(hidden[..3], [255, 0, 0]);
+    let mut failures = Vec::new();
+    for (mode, bg, w, h, name) in all_cases() {
+        let expected = match bg {
+            BackgroundColor::White => [255, 255, 255],
+            BackgroundColor::Black => [0, 0, 0],
+        };
+        let actual = center_pixel_after_export(mode, bg, w, h, hidden);
+        failures.extend(mismatch(actual, expected, &name));
+    }
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
+}
+
+#[test]
+fn half_transparent_pixels_are_blended_with_the_background() {
+    // (0,255,0) を a=128/255 で重ねる: 白なら (127,255,127)、黒なら (0,128,0)
+    let half = [0, 255, 0, 128];
+    let mut failures = Vec::new();
+    for (mode, bg, w, h, name) in all_cases() {
+        let expected = match bg {
+            BackgroundColor::White => [127, 255, 127],
+            BackgroundColor::Black => [0, 128, 0],
+        };
+        let actual = center_pixel_after_export(mode, bg, w, h, half);
+        failures.extend(mismatch(actual, expected, &name));
+    }
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
+}

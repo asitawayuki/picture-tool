@@ -91,18 +91,19 @@
           { value: "quality", label: "Quality" },
         ]}
       />
-      {#if config.mode === "pad"}
-        <div class="sub">
-          <SegmentedButton
-            bind:value={config.bg_color}
-            label="背景色"
-            options={[
-              { value: "white", label: "白" },
-              { value: "black", label: "黒" },
-            ]}
-          />
-        </div>
-      {/if}
+      <div class="sub">
+        <SegmentedButton
+          bind:value={config.bg_color}
+          label="背景色"
+          options={[
+            { value: "white", label: "白" },
+            { value: "black", label: "黒" },
+          ]}
+        />
+        {#if config.mode !== "pad"}
+          <p class="hint">透過部分をこの色で塗ります</p>
+        {/if}
+      </div>
     </Card>
 
     <Card level={1} title="出力">
