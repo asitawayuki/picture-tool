@@ -1378,6 +1378,13 @@ spike は直していない。品質 50 未満の PSNR は上のとおり `jpeg-
 
 ### Task 8: ロゴ（直す前に戻したとき・利用者の了承）
 
+- 追加したテスト: `wide_svg_logo_is_rasterized_at_the_requested_height` / `extremely_wide_svg_is_bounded_by_the_bar_length` / `white_logo_edges_are_not_darkened`（logo.rs）、`maker_logo_is_drawn_at_its_loaded_size`・`maker_logo_is_not_rescaled_at_draw_time`（mod.rs）
+- 直す前に戻して落ちることを確認した: 縁の demultiply を外すと `white_logo_edges_are_not_darkened`、scale を長辺基準に戻すと `wide_svg_...`、`render_exif_bar` に描画時の `resize` を戻すと `maker_logo_is_not_rescaled_at_draw_time`（高さ 7 のロゴが約 27 行になる）が落ちる。
+  `extremely_wide_svg_...` は scale を高さだけで決める（幅を打ち切らない）変異で落ちる。
+  `maker_logo_is_drawn_at_its_loaded_size` は直す前でも通る（描画時に 0.45×buf_h へ再リサイズしていたため）ので、「再拡大していない」は後者のテストが固定する
+- `maker_logo_height` は `render_exif_frame` とテストだけが使う（`render_exif_bar` は渡されたロゴをそのまま描くため）。`logo_display_h` は削除
+- 比較画像: `docs/tmp/output-quality/logo/logo-{white,black}-{full,1080}.png`（上から 直す前 / 直した後 / 基準）。利用者の了承: 2026-10-20 に得た
+
 ### Task 9: 文字の合成（直す前に戻したとき）
 
 ### Task 10: 完了条件

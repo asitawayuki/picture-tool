@@ -9,47 +9,42 @@ use std::path::{Path, PathBuf};
 struct LogoAssets;
 
 /// バンドルロゴからDynamicImageを読み込み
-pub fn load_bundled_logo(filename: &str, target_size: u32) -> Result<DynamicImage> {
+///
+/// `max` は（最大幅, 最大高さ）。アスペクト比を保ったまま、この箱に収まる大きさで読む。
+/// SVG は表示する寸法で直接ラスタライズし、PNG は縮小 1 回だけで収める（再拡大しない）。
+pub fn load_bundled_logo(filename: &str, max: (u32, u32)) -> Result<DynamicImage> {
     let data = LogoAssets::get(filename)
         .with_context(|| format!("bundled logo not found: {}", filename))?;
     let ext = filename.rsplit('.').next().unwrap_or("");
     match ext {
-        "svg" => load_svg_from_bytes(&data.data, target_size),
+        "svg" => load_svg_from_bytes(&data.data, max),
         _ => {
             let img =
                 image::load_from_memory(&data.data).context("failed to decode bundled logo")?;
-            Ok(img.resize(
-                target_size,
-                target_size,
-                image::imageops::FilterType::Lanczos3,
-            ))
+            Ok(img.resize(max.0, max.1, image::imageops::FilterType::Lanczos3))
         }
     }
 }
 
-/// ロゴファイルを読み込み、指定サイズにリサイズ（アスペクト比維持）
-pub fn load_logo_file(path: &Path, target_size: u32) -> Result<DynamicImage> {
+/// ロゴファイルを読み込み、`max`（最大幅, 最大高さ）に収める（アスペクト比維持）
+pub fn load_logo_file(path: &Path, max: (u32, u32)) -> Result<DynamicImage> {
     let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("");
     let img = match ext.to_lowercase().as_str() {
-        "svg" => load_svg(path, target_size)?,
+        "svg" => load_svg(path, max)?,
         _ => {
             let img = image::open(path).context("failed to open logo file")?;
-            img.resize(
-                target_size,
-                target_size,
-                image::imageops::FilterType::Lanczos3,
-            )
+            img.resize(max.0, max.1, image::imageops::FilterType::Lanczos3)
         }
     };
     Ok(img)
 }
 
-fn load_svg(path: &Path, target_size: u32) -> Result<DynamicImage> {
+fn load_svg(path: &Path, max: (u32, u32)) -> Result<DynamicImage> {
     let svg_data = std::fs::read(path)?;
-    load_svg_from_bytes(&svg_data, target_size)
+    load_svg_from_bytes(&svg_data, max)
 }
 
-fn load_svg_from_bytes(svg_data: &[u8], target_size: u32) -> Result<DynamicImage> {
+fn load_svg_from_bytes(svg_data: &[u8], max: (u32, u32)) -> Result<DynamicImage> {
     let options = usvg::Options::default();
     let tree = usvg::Tree::from_data(svg_data, &options)?;
 
@@ -61,10 +56,11 @@ fn load_svg_from_bytes(svg_data: &[u8], target_size: u32) -> Result<DynamicImage
     if !(orig_w.is_finite() && orig_h.is_finite()) || orig_w <= 0.0 || orig_h <= 0.0 {
         anyhow::bail!("svg has a non-positive canvas size ({}x{})", orig_w, orig_h);
     }
-    if target_size == 0 {
+    if max.0 == 0 || max.1 == 0 {
         anyhow::bail!("svg target size must be greater than 0");
     }
-    let scale = target_size as f32 / orig_w.max(orig_h);
+    // 箱（最大幅 × 最大高さ）に収まる倍率。極端に横長でも幅は max.0 で打ち切られる
+    let scale = (max.0 as f32 / orig_w).min(max.1 as f32 / orig_h);
     let width = (orig_w * scale).round() as u32;
     let height = (orig_h * scale).round() as u32;
 
@@ -74,7 +70,14 @@ fn load_svg_from_bytes(svg_data: &[u8], target_size: u32) -> Result<DynamicImage
     let transform = resvg::tiny_skia::Transform::from_scale(scale, scale);
     resvg::render(&tree, transform, &mut pixmap.as_mut());
 
-    let rgba = image::RgbaImage::from_raw(width, height, pixmap.data().to_vec())
+    // tiny-skia の画素はプリマルチプライド。`RgbaImage` はストレートアルファなので
+    // demultiply しないと、縁の RGB が α 倍に暗く痩せる（白ロゴで目立つ）
+    let mut data = Vec::with_capacity(pixmap.pixels().len() * 4);
+    for p in pixmap.pixels() {
+        let c = p.demultiply();
+        data.extend_from_slice(&[c.red(), c.green(), c.blue(), c.alpha()]);
+    }
+    let rgba = image::RgbaImage::from_raw(width, height, data)
         .context("failed to create image from pixmap")?;
     Ok(DynamicImage::ImageRgba8(rgba))
 }
@@ -115,11 +118,11 @@ pub fn resolve_lens_brand_logo(
     lens_model: &str,
     model_map: &crate::model_map::ModelMap,
     use_light: bool,
-    target_size: u32,
+    max: (u32, u32),
 ) -> Option<DynamicImage> {
     model_map
         .lens_brand_logo(lens_model)
-        .and_then(|logo_file| resolve_and_load_logo(user_dir, logo_file, use_light, target_size))
+        .and_then(|logo_file| resolve_and_load_logo(user_dir, logo_file, use_light, max))
 }
 
 /// ロゴを解決（ユーザーディレクトリ優先 → バンドルフォールバック）
@@ -127,7 +130,7 @@ pub fn resolve_and_load_logo(
     user_dir: Option<&Path>,
     filename: &str,
     use_light: bool,
-    target_size: u32,
+    max: (u32, u32),
 ) -> Option<DynamicImage> {
     let base_name = filename.trim_end_matches(".svg").trim_end_matches(".png");
     // pub API なので model_map 側の検証に依存せず、ここでも自衛する（S4-M8）
@@ -135,7 +138,7 @@ pub fn resolve_and_load_logo(
 
     // 1. ユーザーディレクトリから検索
     if let Some(path) = resolve_logo_file(user_dir, base_name, use_light)
-        && let Ok(img) = load_logo_file(&path, target_size)
+        && let Ok(img) = load_logo_file(&path, max)
     {
         return Some(img);
     }
@@ -152,7 +155,7 @@ pub fn resolve_and_load_logo(
         vec![format!("{}.svg", base_name), format!("{}.png", base_name)]
     };
     for candidate in candidates {
-        if let Ok(img) = load_bundled_logo(&candidate, target_size) {
+        if let Ok(img) = load_bundled_logo(&candidate, max) {
             return Some(img);
         }
     }
@@ -167,7 +170,7 @@ mod tests {
     #[test]
     fn load_svg_logo() {
         let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/test_logo.svg");
-        let img = load_logo_file(&path, 64).unwrap();
+        let img = load_logo_file(&path, (64, 64)).unwrap();
         assert_eq!(img.width(), 64);
         assert_eq!(img.height(), 64);
     }
@@ -178,7 +181,7 @@ mod tests {
         let path = dir.path().join("test.png");
         let img = image::RgbaImage::from_pixel(100, 100, image::Rgba([255, 0, 0, 255]));
         img.save(&path).unwrap();
-        let loaded = load_logo_file(&path, 32).unwrap();
+        let loaded = load_logo_file(&path, (32, 32)).unwrap();
         assert_eq!(loaded.width(), 32);
         assert_eq!(loaded.height(), 32);
     }
@@ -230,7 +233,7 @@ mod tests {
             // light バリアントの実在は個別に検証する
             for candidate in [filename.clone(), format!("{}_light.{}", stem, ext)] {
                 assert!(
-                    load_bundled_logo(&candidate, 64).is_ok(),
+                    load_bundled_logo(&candidate, (64, 64)).is_ok(),
                     "model_map.json references {:?} but bundled asset {:?} is missing or undecodable",
                     filename,
                     candidate
@@ -260,7 +263,7 @@ mod tests {
                 evil
             );
             assert!(
-                resolve_and_load_logo(Some(&logos), evil, false, 32).is_none(),
+                resolve_and_load_logo(Some(&logos), evil, false, (32, 32)).is_none(),
                 "{:?} must not load anything",
                 evil
             );
@@ -272,7 +275,7 @@ mod tests {
     #[test]
     fn zero_sized_svg_is_rejected() {
         let svg = br#"<svg xmlns="http://www.w3.org/2000/svg" width="0" height="0"></svg>"#;
-        let result = load_svg_from_bytes(svg, 64);
+        let result = load_svg_from_bytes(svg, (64, 64));
         assert!(result.is_err(), "zero-sized svg must be an error");
     }
 
@@ -291,5 +294,48 @@ mod tests {
         .unwrap();
         let resolved = resolve_logo_file(Some(dir.path()), "test", true);
         assert!(resolved.unwrap().to_str().unwrap().contains("_light"));
+    }
+
+    /// 仕様: 横長の SVG は表示する高さで直接ラスタライズする（再拡大しない）。
+    /// 長辺 = 幅で読むと高さが 1/5.68 になり、後で約 4.5 倍に拡大されていた。
+    #[test]
+    fn wide_svg_logo_is_rasterized_at_the_requested_height() {
+        let img = load_bundled_logo("sony.svg", (10_000, 19)).unwrap();
+        assert_eq!(img.height(), 19);
+        let expected_w = 19.0 * 5.68;
+        assert!(
+            (img.width() as f32 - expected_w).abs() <= 2.0,
+            "width {} should be about {}",
+            img.width(),
+            expected_w
+        );
+    }
+
+    /// 仕様（Review Focus 4）: 極端に横長でも幅はバーの長さで打ち切られる。
+    #[test]
+    fn extremely_wide_svg_is_bounded_by_the_bar_length() {
+        let svg = br#"<svg xmlns="http://www.w3.org/2000/svg" width="1000" height="1"><rect width="1000" height="1" fill="black"/></svg>"#;
+        let img = load_svg_from_bytes(svg, (500, 40)).unwrap();
+        assert!(img.width() <= 500, "width {} exceeds 500", img.width());
+        assert!(img.height() >= 1);
+    }
+
+    /// 仕様: 白ロゴの縁は、半透明でも RGB が白のまま（プリマルチプライドのままだと α 倍に暗くなる）。
+    #[test]
+    fn white_logo_edges_are_not_darkened() {
+        let svg = br#"<svg xmlns="http://www.w3.org/2000/svg" width="10" height="10"><rect x="0.5" y="0" width="9" height="10" fill="white"/></svg>"#;
+        let img = load_svg_from_bytes(svg, (10, 10)).unwrap().to_rgba8();
+        let edge: Vec<_> = img.pixels().filter(|p| p[3] > 0 && p[3] < 255).collect();
+        assert!(
+            !edge.is_empty(),
+            "precondition failed: no semi-transparent pixel to inspect"
+        );
+        for p in edge {
+            assert!(
+                p[0] >= 254 && p[1] >= 254 && p[2] >= 254,
+                "edge pixel {:?} is darkened",
+                p
+            );
+        }
     }
 }

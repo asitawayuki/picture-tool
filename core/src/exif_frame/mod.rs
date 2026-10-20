@@ -282,15 +282,21 @@ pub fn render_exif_frame(
     let font = text::load_font(config.font.font_path.as_deref())?;
 
     // 9. ロゴ読み込み
-    let logo_size = layout.exif_area_height.min(layout.exif_area_width) * 3 / 5;
-    let logo_size = logo_size.max(16);
+    // 表示する寸法（バーの太さ・長さ）を先に求め、その箱に収まる大きさで直接読む。
+    // 読み込み後に拡大すると、横長の SVG ロゴがぼやける。
+    let bar_thickness = layout.exif_area_height.min(layout.exif_area_width);
+    let bar_length = layout.exif_area_height.max(layout.exif_area_width);
+    let photo_short_side = layout.photo_width.min(layout.photo_height);
+    let (_, secondary_size_base) = bar_font_sizes(bar_thickness, photo_short_side, &config.font);
+    let maker_box = (bar_length, maker_logo_height(bar_thickness));
+    let lens_box = (bar_length, ((secondary_size_base * 1.2) as u32).max(1));
     let user_logos = assets.dirs.user_logos_dir.as_deref();
 
     let maker_logo = if config.items.maker_logo {
         if let Some(ref make) = exif.camera_make {
             if let Some(entry) = model_map.maker_logo(make) {
                 let filename = entry.maker.clone();
-                logo::resolve_and_load_logo(user_logos, &filename, is_dark, logo_size)
+                logo::resolve_and_load_logo(user_logos, &filename, is_dark, maker_box)
             } else {
                 None
             }
@@ -303,7 +309,7 @@ pub fn render_exif_frame(
 
     let lens_logo = if config.items.lens_brand_logo {
         if let Some(ref lens) = exif.lens_model {
-            logo::resolve_lens_brand_logo(user_logos, lens, model_map, is_dark, logo_size)
+            logo::resolve_lens_brand_logo(user_logos, lens, model_map, is_dark, lens_box)
         } else {
             None
         }
@@ -325,7 +331,7 @@ pub fn render_exif_frame(
         secondary_color,
         maker_logo: maker_logo.as_ref(),
         lens_logo: lens_logo.as_ref(),
-        photo_short_side: layout.photo_width.min(layout.photo_height),
+        photo_short_side,
     };
     draw_exif_area(&mut canvas, &layout, &bar);
 
@@ -386,6 +392,23 @@ fn draw_exif_area(canvas: &mut RgbaImage, layout: &layout::PadExifLayout, bar: &
     );
 }
 
+/// フォントサイズの基準（1 段目, 2 段目）。写真の短辺ベースで、バーの太さで頭打ちにする。
+fn bar_font_sizes(buf_h: u32, photo_short_side: u32, font: &FontConfig) -> (f32, f32) {
+    let max_font = buf_h as f32 * 0.4;
+    let primary = (photo_short_side as f32 * font.primary_size)
+        .max(10.0)
+        .min(max_font);
+    let secondary = (photo_short_side as f32 * font.secondary_size)
+        .max(8.0)
+        .min(max_font * 0.75);
+    (primary, secondary)
+}
+
+/// メーカーロゴを表示する高さ（バーの太さの 45%）。
+fn maker_logo_height(buf_h: u32) -> u32 {
+    ((buf_h as f32 * 0.45) as u32).max(1)
+}
+
 /// 横長のExifバーを透明バッファに描画する。
 ///
 /// レイアウト（左から右）:
@@ -395,19 +418,14 @@ fn render_exif_bar(buf_w: u32, buf_h: u32, bar: &ExifBar) -> RgbaImage {
 
     let margin = (buf_h as f32 * 0.1) as u32;
     let separator_width = 2u32;
-    let logo_display_h = ((buf_h as f32 * 0.45) as u32).max(1);
 
     // --- 左: メーカーロゴ + セパレータ ---
     let mut text_start_x = margin;
     if let Some(logo) = bar.maker_logo {
-        let logo_scaled = logo.resize(
-            u32::MAX,
-            logo_display_h,
-            image::imageops::FilterType::Lanczos3,
-        );
-        let logo_y = (buf_h.saturating_sub(logo_scaled.height())) / 2;
-        image::imageops::overlay(&mut buf, &logo_scaled, margin as i64, logo_y as i64);
-        text_start_x = margin + logo_scaled.width() + margin;
+        // ロゴは読み込み時に表示寸法へ収めてある。ここでは再リサイズしない
+        let logo_y = (buf_h.saturating_sub(logo.height())) / 2;
+        image::imageops::overlay(&mut buf, logo, margin as i64, logo_y as i64);
+        text_start_x = margin + logo.width() + margin;
 
         let sep_x = text_start_x;
         let sep_top = buf_h / 6;
@@ -427,34 +445,23 @@ fn render_exif_bar(buf_w: u32, buf_h: u32, bar: &ExifBar) -> RgbaImage {
     }
 
     // --- フォントサイズの基準（写真の短辺ベース、バー高さで頭打ち） ---
-    let max_font = buf_h as f32 * 0.4;
-    let primary_size_base = (bar.photo_short_side as f32 * bar.config.font.primary_size)
-        .max(10.0)
-        .min(max_font);
-    let secondary_size_base = (bar.photo_short_side as f32 * bar.config.font.secondary_size)
-        .max(8.0)
-        .min(max_font * 0.75);
+    let (primary_size_base, secondary_size_base) =
+        bar_font_sizes(buf_h, bar.photo_short_side, &bar.config.font);
 
     // --- 右: レンズブランドロゴ ---
     // テキストをフィットさせる *前* に確定させ、その幅をテキスト領域から差し引く。
     // 後から重ねるだけだと、テキストが領域幅いっぱいに広がったときに
     // ロゴがテキストの上に被る（S4-H6）。
-    let lens_logo_scaled = bar.lens_logo.map(|llogo| {
-        llogo.resize(
-            u32::MAX,
-            ((secondary_size_base * 1.2) as u32).max(1),
-            image::imageops::FilterType::Lanczos3,
-        )
-    });
+    let lens_logo_scaled = bar.lens_logo;
 
     let mut text_end_x = buf_w.saturating_sub(margin);
-    if let Some(ref ll) = lens_logo_scaled {
+    if let Some(ll) = lens_logo_scaled {
         text_end_x = text_end_x.saturating_sub(ll.width() + margin);
     }
 
     if text_start_x >= text_end_x {
         // テキストを置く幅が残っていない。ロゴだけ描いて返す。
-        overlay_lens_logo(&mut buf, buf_w, buf_h, margin, lens_logo_scaled.as_ref());
+        overlay_lens_logo(&mut buf, buf_w, buf_h, margin, lens_logo_scaled);
         return buf;
     }
     let text_area_w = (text_end_x - text_start_x) as f32;
@@ -509,7 +516,7 @@ fn render_exif_bar(buf_w: u32, buf_h: u32, bar: &ExifBar) -> RgbaImage {
         );
     }
 
-    overlay_lens_logo(&mut buf, buf_w, buf_h, margin, lens_logo_scaled.as_ref());
+    overlay_lens_logo(&mut buf, buf_w, buf_h, margin, lens_logo_scaled);
     buf
 }
 
@@ -706,5 +713,100 @@ mod tests {
                 band_start
             );
         }
+    }
+
+    /// 行 y_range 内で、列 xs の範囲に背景色と異なる画素がある行の（最小, 最大）。
+    fn drawn_row_span(
+        img: &RgbaImage,
+        xs: std::ops::Range<u32>,
+        ys: std::ops::Range<u32>,
+        bg: Rgba<u8>,
+    ) -> Option<(u32, u32)> {
+        let rows: Vec<u32> = ys
+            .filter(|&y| xs.clone().any(|x| *img.get_pixel(x, y) != bg))
+            .collect();
+        Some((*rows.first()?, *rows.last()?))
+    }
+
+    /// 仕様: メーカーロゴは読み込んだ寸法のまま描かれる。
+    /// 描画時に再リサイズすると、横長 SVG を高さ基準で読んだ結果とずれてぼやける。
+    /// ここでは高さが `maker_logo_height` と異なるロゴを直接渡し、その高さのまま描かれることを見る。
+    #[test]
+    fn maker_logo_is_not_rescaled_at_draw_time() {
+        const LOGO_H: u32 = 7;
+        const BUF_H: u32 = 60;
+        assert_ne!(
+            maker_logo_height(BUF_H),
+            LOGO_H,
+            "precondition: heights must differ"
+        );
+        let logo =
+            DynamicImage::ImageRgba8(RgbaImage::from_pixel(40, LOGO_H, Rgba([255, 0, 255, 255])));
+        let font = text::load_font(None).unwrap();
+        let bar = ExifBar {
+            font: &font,
+            config: &ExifFrameConfig::default(),
+            primary_text: "",
+            secondary_text: "",
+            primary_color: Rgba([255, 255, 255, 255]),
+            secondary_color: Rgba([170, 170, 170, 255]),
+            maker_logo: Some(&logo),
+            lens_logo: None,
+            photo_short_side: 1000,
+        };
+        let buf = render_exif_bar(800, BUF_H, &bar);
+        let rows: Vec<u32> = (0..BUF_H)
+            .filter(|&y| (0..800).any(|x| buf.get_pixel(x, y).0[0..3] == [255, 0, 255]))
+            .collect();
+        assert_eq!(rows.len() as u32, LOGO_H, "logo rows: {:?}", rows);
+    }
+
+    /// 仕様: `render_exif_frame` が読むメーカーロゴの高さは `maker_logo_height(バーの太さ)`。
+    /// 読み込み寸法と表示寸法が一致している（再拡大していない）ことを、出力画素で見る。
+    #[cfg(feature = "bundled-font")]
+    #[test]
+    fn maker_logo_is_drawn_at_its_loaded_size() {
+        let bg = crate::BackgroundColor::White;
+        let photo = DynamicImage::ImageRgb8(image::RgbImage::from_pixel(
+            1080,
+            720,
+            image::Rgb([128, 128, 128]),
+        ));
+        let exif = ExifInfo {
+            camera_make: Some("SONY".to_string()),
+            ..ExifInfo::default()
+        };
+        let config = ExifFrameConfig {
+            position: ExifPosition::Bottom,
+            ..ExifFrameConfig::default()
+        };
+        let assets = ExifAssets::load(AssetDirs {
+            user_logos_dir: None,
+            user_fonts_dir: None,
+            user_model_map: None,
+            user_presets_dir: None,
+        })
+        .unwrap();
+        let layout = layout::calculate_pad_exif_layout(1080, 720, &config, &bg);
+        assert!(!layout.skip_exif && !layout.is_rotated, "precondition");
+        let out = render_exif_frame(&photo, &exif, &config, &bg, &assets).unwrap();
+        let img = out.image.to_rgba8();
+
+        let thickness = layout.exif_area_height;
+        let margin = (thickness as f32 * 0.1) as u32;
+        let expected = maker_logo_height(thickness);
+        // ロゴの列だけを見る（右のセパレーターはロゴより背が高いので含めない）
+        let x0 = layout.exif_area_x + margin;
+        let xs = x0..x0 + (expected as f32 * 5.0) as u32;
+        let ys = layout.exif_area_y..layout.exif_area_y + thickness;
+        let (top, bottom) = drawn_row_span(&img, xs, ys, bg.to_rgba())
+            .expect("precondition: the maker logo must be drawn");
+        let drawn = bottom - top + 1;
+        assert!(
+            drawn.abs_diff(expected) <= 1,
+            "drawn logo height {} should be {} +-1",
+            drawn,
+            expected
+        );
     }
 }
