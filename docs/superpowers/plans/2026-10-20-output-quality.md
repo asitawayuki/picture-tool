@@ -1269,6 +1269,10 @@ spike は直していない。品質 50 未満の PSNR は上のとおり `jpeg-
 
 ### Task 4: サイズ制限の探索
 
+- `search_quality`（初期 → `[floor, initial-1]` の二分探索）に替え、`MIN_QUALITY = 28`。旧 `QUALITY_STEP` は削除。
+- spec 7 の最悪回数 `1 + ceil(log2(初期 − 下限))` は、差が 2 の冪のとき 1 回足りない（結果が「差」通り + 「収まらない」で `差 + 1` 通り）。実装とコメントは `1 + ceil(log2(初期 − 下限 + 1))`。初期 90・下限 26（差 64）で 8 回以内になることをテストで固定した。
+- `save_with_size_limit_actually_reduces_quality` の `Some(60)` は `MIN_QUALITY` に置き換えた。
+
 ### Task 5: 透過の合成
 
 ### Task 6: ICC（許容差の実測・`reserve` を外したとき）

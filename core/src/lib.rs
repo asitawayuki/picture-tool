@@ -1444,7 +1444,7 @@ mod tests {
 
         // 1MB以下または品質がMIN_QUALITYまで下がっていること
         assert!(
-            result.final_size_mb <= 1.0 || result.final_quality == Some(60),
+            result.final_size_mb <= 1.0 || result.final_quality == Some(encode::MIN_QUALITY),
             "サイズ制限が機能していない: size={:.2}MB, quality={:?}",
             result.final_size_mb,
             result.final_quality
