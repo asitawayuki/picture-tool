@@ -141,14 +141,24 @@ pub fn draw_text_on_image(
                 if px < 0 || py < 0 || px >= img_width || py >= img_height {
                     return;
                 }
+                // ストレートアルファの over。a = coverage × 色のα
                 let existing = img.get_pixel(px as u32, py as u32);
-                let alpha = coverage * (color[3] as f32 / 255.0);
-                let inv = 1.0 - alpha;
+                let a = (coverage * (color[3] as f32 / 255.0)).min(1.0);
+                let ea = existing[3] as f32 / 255.0;
+                let out_a = a + ea * (1.0 - a);
+                if out_a <= 0.0 {
+                    return;
+                }
+                let mix = |c: u8, e: u8| {
+                    ((c as f32 * a + e as f32 * ea * (1.0 - a)) / out_a)
+                        .round()
+                        .clamp(0.0, 255.0) as u8
+                };
                 let blended = Rgba([
-                    (color[0] as f32 * alpha + existing[0] as f32 * inv) as u8,
-                    (color[1] as f32 * alpha + existing[1] as f32 * inv) as u8,
-                    (color[2] as f32 * alpha + existing[2] as f32 * inv) as u8,
-                    (255.0_f32.min(existing[3] as f32 + coverage * color[3] as f32)) as u8,
+                    mix(color[0], existing[0]),
+                    mix(color[1], existing[1]),
+                    mix(color[2], existing[2]),
+                    (out_a * 255.0).round().clamp(0.0, 255.0) as u8,
                 ]);
                 img.put_pixel(px as u32, py as u32, blended);
             });
@@ -156,80 +166,6 @@ pub fn draw_text_on_image(
 
         cursor_x += scaled.h_advance(glyph_id);
         prev_glyph_id = Some(glyph_id);
-    }
-}
-
-/// テキストを90度時計回りに回転して描画
-/// (center_x, center_y) を中心に、テキストが右方向を向くよう回転
-pub fn draw_text_rotated_90(
-    img: &mut RgbaImage,
-    font: &FontArc,
-    size: f32,
-    text: &str,
-    center_x: i32,
-    center_y: i32,
-    color: Rgba<u8>,
-) {
-    if text.is_empty() {
-        return;
-    }
-
-    let scaled = font.as_scaled(PxScale::from(size));
-    let text_width = measure_text_width(font, size, text).ceil() as u32 + 2;
-    // height: ascent + descent (line height)
-    let ascent = scaled.ascent();
-    let descent = scaled.descent().abs();
-    let text_height = (ascent + descent).ceil() as u32 + 2;
-
-    if text_width == 0 || text_height == 0 {
-        return;
-    }
-
-    // 水平バッファにテキストを描画
-    let mut buf = RgbaImage::new(text_width, text_height);
-    draw_text_on_image(&mut buf, font, size, text, 0, 0, color);
-
-    // 90度時計回り回転: (x, y) → (text_height-1-y, x)
-    // 回転後のサイズ: 幅=text_height, 高さ=text_width
-    let rot_w = text_height;
-    let rot_h = text_width;
-
-    // ターゲット画像への配置オフセット（中心合わせ）
-    let offset_x = center_x - rot_w as i32 / 2;
-    let offset_y = center_y - rot_h as i32 / 2;
-
-    let img_w = img.width() as i32;
-    let img_h = img.height() as i32;
-
-    for y in 0..text_height {
-        for x in 0..text_width {
-            let pixel = buf.get_pixel(x, y);
-            if pixel[3] == 0 {
-                continue;
-            }
-            // 90度時計回り回転後の座標
-            let rx = (text_height - 1 - y) as i32;
-            let ry = x as i32;
-
-            let px = offset_x + rx;
-            let py = offset_y + ry;
-
-            if px < 0 || py < 0 || px >= img_w || py >= img_h {
-                continue;
-            }
-
-            // アルファブレンド
-            let existing = img.get_pixel(px as u32, py as u32);
-            let alpha = pixel[3] as f32 / 255.0;
-            let inv = 1.0 - alpha;
-            let blended = Rgba([
-                (pixel[0] as f32 * alpha + existing[0] as f32 * inv) as u8,
-                (pixel[1] as f32 * alpha + existing[1] as f32 * inv) as u8,
-                (pixel[2] as f32 * alpha + existing[2] as f32 * inv) as u8,
-                (existing[3] as f32 + pixel[3] as f32 * alpha) as u8,
-            ]);
-            img.put_pixel(px as u32, py as u32, blended);
-        }
     }
 }
 
@@ -424,22 +360,7 @@ mod tests {
         );
     }
 
-    // --- New tests for draw_text_rotated_90 and auto_fit_text ---
-
-    #[test]
-    fn draw_rotated_text_does_not_panic() {
-        let font = test_font();
-        let mut img = RgbaImage::new(200, 800);
-        draw_text_rotated_90(
-            &mut img,
-            &font,
-            16.0,
-            "ILCE-7M4 | FE 24-70mm F2.8 GM II | 35mm f/2.8",
-            100,
-            400,
-            Rgba([255, 255, 255, 255]),
-        );
-    }
+    // --- auto_fit_text ほかのテスト ---
 
     #[test]
     fn measure_text_width_positive() {
@@ -485,19 +406,35 @@ mod tests {
         );
     }
 
+    /// 仕様 §4: 透明な層に描いてから白へ overlay した結果は、白へ直接描いた結果と一致する。
+    /// 縁（0 < coverage < 1）でアルファが二重に掛かると、層の縁が暗くなって食い違う。
     #[test]
-    fn draw_rotated_text_pixels_within_bounds() {
+    fn text_drawn_on_a_transparent_layer_composites_like_direct_drawing() {
         let font = test_font();
-        let mut img = RgbaImage::new(100, 500);
-        draw_text_rotated_90(
-            &mut img,
-            &font,
-            14.0,
-            "Test text",
-            50,
-            250,
-            Rgba([255, 0, 0, 255]),
+        let text = "ILCE-7RM5  35mm";
+        let color = Rgba([0x33, 0x33, 0x33, 255]);
+
+        let mut direct = RgbaImage::from_pixel(400, 60, Rgba([255, 255, 255, 255]));
+        draw_text_on_image(&mut direct, &font, 24.0, text, 10, 10, color);
+
+        let mut layer = RgbaImage::from_pixel(400, 60, Rgba([0, 0, 0, 0]));
+        draw_text_on_image(&mut layer, &font, 24.0, text, 10, 10, color);
+        let mut via_layer = RgbaImage::from_pixel(400, 60, Rgba([255, 255, 255, 255]));
+        image::imageops::overlay(&mut via_layer, &layer, 0, 0);
+
+        // 前提: 縁の画素（0 < coverage < 1）が存在する。無ければ何も検査していない
+        assert!(
+            direct.pixels().any(|p| p[0] > 51 && p[0] < 255),
+            "no anti-aliased edge pixel was drawn"
         );
-        // Should not panic - bounds checking is implicit
+        for (x, y, a) in direct.enumerate_pixels() {
+            let b = via_layer.get_pixel(x, y);
+            for c in 0..3 {
+                assert!(
+                    (a[c] as i32 - b[c] as i32).abs() <= 2,
+                    "({x},{y}) ch{c}: direct {a:?} vs layered {b:?}"
+                );
+            }
+        }
     }
 }

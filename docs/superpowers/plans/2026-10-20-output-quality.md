@@ -1387,4 +1387,9 @@ spike は直していない。品質 50 未満の PSNR は上のとおり `jpeg-
 
 ### Task 9: 文字の合成（直す前に戻したとき）
 
+- 追加したテスト: `text_drawn_on_a_transparent_layer_composites_like_direct_drawing`（text.rs）。前提 assert（(a) に 51 < R < 255 の縁の画素がある）付き
+- 直す前の式（`alpha = coverage × 色のα` を既存色へ線形に混ぜ、α は加算）に戻すと落ちる: `(29,16) ch0: direct 241 vs layered 238`（差 3 > 許容 2）。前提 assert は通っている＝縁が食い違うことで落ちた
+- 直した後は over（`out_a = a + ea(1−a)`、`rgb = (c·a + e·ea(1−a))/out_a`）で (a)=(b)。`out_a == 0` の画素は触らない
+- `draw_text_rotated_90` は定義・テスト 2 件・区切りコメントの言及を削除（言及は mod.rs ではなく text.rs:427 にあった）。本番の呼び出し元は無かった
+
 ### Task 10: 完了条件
