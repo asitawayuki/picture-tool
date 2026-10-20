@@ -4,29 +4,38 @@
 //! 品質 20 = LrC 20% と完全一致、品質 100 = 全要素 1、品質を下げるとどの要素も増えるか変わらない、
 //! 全要素 1〜255（256 以上は DQT に下位 8bit だけが書かれ、壊れた JPEG がエラーなしで出る）。
 //!
-//! 要素 `(行 y, 列 x)` の周波数を `r = (x + y) / 14` とし、`B` を LrC 20% の値として
+//! `B` を LrC 20% の値、`K` を ITU-T T.81 Annex K の標準テーブル、`S` を倍率（輝度 [`LUMA_SCALE`]・
+//! 色差 [`CHROMA_SCALE`]）、`A` を [`ANCHOR_QUALITY`] として、`k(q) = min(B, K·S·(100 − q)/50)` と置き
 //!
-//! - q ≥ 20: `u = ((q − 20) / 80)^G`、`a = A_LO·(1 − r) + A_HI·r`、`v = B^((1 − u)^a)`
+//! - q ≥ A: `v = k(q)`（libjpeg の品質 50 以上の倍率 `(200 − 2q)/100` を Annex K に掛け、LrC 20% で上から抑えたもの）
+//! - 20 ≤ q < A: `v = B^(1 − w)·k(A)^w`、`w = (q − 20)/(A − 20)`（要素ごとに `B` と `k(A)` を対数で補間する）
 //! - q < 20: `v = min(B·(20 / q)^BETA, max(B, CAP))`
 //!
-//! を丸めて 1〜255 に収める。この形は定数によらず上の絶対条件を満たす（`B ≥ 1` で、
-//! 指数が q について単調に減る）ので、定数（[`G`] ほか）だけを調整すればよい。
+//! を丸めて 1〜255 に収める。`k(A) ≤ B` なので q = 20 で `B`、q = 100 で 0 → 1、各区間で q について単調で、
+//! 区間の境目でも値が続く。20〜A を `k(q)` のままにしないのは、`B` が Annex K よりずっと細かい要素
+//! （低周波）が品質 60 前後まで `B` に張り付き、品質 20〜50 のテーブルがほとんど変わらなくなるため。
+//!
+//! 性質 1・3 から、品質 20 以上のどの要素も LrC 20% 以下（高周波は 12 以下）に限られる。
+//! この制約の下で「既定値 90 が現行（Annex K の品質 90）より悪くならない」に最も近いのは、
+//! 現行の品質 90 を LrC 20% で抑えた形だった。LrC 20% の値を指数で 1 へ近づける形は、
+//! 定数をどう選んでも細部の多い写真のサイズと滑らかな写真の PSNR が両立しなかった
+//! （計画 2026-10-20-output-quality の実施メモ「Task 3」）。
 
 use jpeg_encoder::SamplingFactor;
 
 // --- 目盛りの定数（調整するのはここだけ） ---
 
-/// 品質 20〜100 の間で、テーブルが 1 へ近づく速さの曲がり方。大きいほど高品質側まで粗さが残る
-const G: f64 = 2.3;
-/// 最低周波（DC）での指数の重み。大きいほど品質を上げたとき早く細かくなる
-const A_LO: f64 = 0.6;
-/// 最高周波での指数の重み。小さいほど高周波は品質 100 の直前まで粗いまま残る
-/// （小さすぎると品質 99 → 100 で跳ぶ）
-const A_HI: f64 = 0.05;
+/// q ≥ 20 で輝度の Annex K に掛ける倍率。大きいほど同じ品質で粗くなる。
+/// 品質 90 の実写真 4 枚で、現行よりサイズ +1% 以内・PSNR −0.1dB 以内に収まるよう選んだ
+const LUMA_SCALE: f64 = 1.05;
+/// q ≥ 20 で色差の Annex K に掛ける倍率（[`LUMA_SCALE`] と同じ選び方）
+const CHROMA_SCALE: f64 = 1.0;
+/// この品質以上は Annex K の形（を LrC 20% で抑えたもの）そのもの。既定値 90 をここに合わせる
+const ANCHOR_QUALITY: f64 = 90.0;
 /// 品質 20 未満で、品質に反比例して粗くする度合い
 const BETA: f64 = 1.0;
 /// 品質 20 未満での刻みの上限。LrC 20% がすでにこれより粗い要素はそのまま
-const CAP: f64 = 40.0;
+const CAP: f64 = 30.0;
 
 /// 4:2:0 にする品質の上限（これ未満なら 4:2:0、以上なら 4:4:4）
 const SUBSAMPLE_BELOW: u8 = 50;
@@ -58,6 +67,32 @@ pub(crate) const LRC_20_CHROMA_ZIGZAG: [u16; 64] = [
     12,12,12,17,12,12,12,12,12,12,12,12,12,12,12,12,12,12,12,12,12,12,12,12,12,12,12,12,12,12,12,12,
 ];
 
+/// ITU-T T.81 Annex K の輝度テーブル（Table K.1）。**自然順（行優先）**
+#[rustfmt::skip]
+const ANNEX_K_LUMA: [u16; 64] = [
+    16, 11, 10, 16,  24,  40,  51,  61,
+    12, 12, 14, 19,  26,  58,  60,  55,
+    14, 13, 16, 24,  40,  57,  69,  56,
+    14, 17, 22, 29,  51,  87,  80,  62,
+    18, 22, 37, 56,  68, 109, 103,  77,
+    24, 35, 55, 64,  81, 104, 113,  92,
+    49, 64, 78, 87, 103, 121, 120, 101,
+    72, 92, 95, 98, 112, 100, 103,  99,
+];
+
+/// ITU-T T.81 Annex K の色差テーブル（Table K.2）。**自然順（行優先）**
+#[rustfmt::skip]
+const ANNEX_K_CHROMA: [u16; 64] = [
+    17, 18, 24, 47, 99, 99, 99, 99,
+    18, 21, 26, 66, 99, 99, 99, 99,
+    24, 26, 56, 99, 99, 99, 99, 99,
+    47, 66, 99, 99, 99, 99, 99, 99,
+    99, 99, 99, 99, 99, 99, 99, 99,
+    99, 99, 99, 99, 99, 99, 99, 99,
+    99, 99, 99, 99, 99, 99, 99, 99,
+    99, 99, 99, 99, 99, 99, 99, 99,
+];
+
 /// 輝度・色差の量子化テーブル。**自然順（行優先）**。`jpeg-encoder` の `Custom` にそのまま渡せる
 pub(crate) struct QuantTables {
     pub luma: [u16; 64],
@@ -68,8 +103,13 @@ pub(crate) struct QuantTables {
 pub(crate) fn quant_tables(quality: u8) -> QuantTables {
     debug_assert!((1..=100).contains(&quality), "品質 {quality} は範囲外");
     QuantTables {
-        luma: scale(&LRC_20_LUMA_ZIGZAG, quality),
-        chroma: scale(&LRC_20_CHROMA_ZIGZAG, quality),
+        luma: scale(&LRC_20_LUMA_ZIGZAG, &ANNEX_K_LUMA, LUMA_SCALE, quality),
+        chroma: scale(
+            &LRC_20_CHROMA_ZIGZAG,
+            &ANNEX_K_CHROMA,
+            CHROMA_SCALE,
+            quality,
+        ),
     }
 }
 
@@ -82,7 +122,7 @@ pub(crate) fn sampling(quality: u8) -> SamplingFactor {
     }
 }
 
-fn scale(base_zigzag: &[u16; 64], quality: u8) -> [u16; 64] {
+fn scale(base_zigzag: &[u16; 64], annex_k: &[u16; 64], k_scale: f64, quality: u8) -> [u16; 64] {
     let mut base = [0u16; 64];
     for (k, &v) in base_zigzag.iter().enumerate() {
         base[ZIGZAG[k]] = v;
@@ -91,11 +131,12 @@ fn scale(base_zigzag: &[u16; 64], quality: u8) -> [u16; 64] {
     let q = f64::from(quality);
     std::array::from_fn(|i| {
         let b = f64::from(base[i]);
-        let r = ((i % 8) + (i / 8)) as f64 / 14.0;
-        let v = if q >= 20.0 {
-            let u = ((q - 20.0) / 80.0).powf(G);
-            let a = A_LO * (1.0 - r) + A_HI * r;
-            b.powf((1.0 - u).powf(a))
+        let annex = |q: f64| (f64::from(annex_k[i]) * k_scale * (100.0 - q) / 50.0).min(b);
+        let v = if q >= ANCHOR_QUALITY {
+            annex(q)
+        } else if q >= 20.0 {
+            let w = (q - 20.0) / (ANCHOR_QUALITY - 20.0);
+            b.powf(1.0 - w) * annex(ANCHOR_QUALITY).powf(w)
         } else {
             (b * (20.0 / q).powf(BETA)).min(b.max(CAP))
         };
