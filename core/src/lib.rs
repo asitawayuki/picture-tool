@@ -34,6 +34,7 @@
 //! - 画像の読み込みに失敗したらスキップして次へ進む。1 枚の失敗でバッチを
 //!   止めない。
 
+mod color;
 mod decode;
 mod encode;
 pub mod exif_frame;
@@ -391,7 +392,10 @@ pub fn process_image(
         }
     };
 
-    let img = decode::open(input_path, decode::sniff(input_path)?)?;
+    // ICC は sRGB へ変換済み（アルファを持ったまま変換してから、下で背景色へ合成する）
+    let (img, decode_warnings) =
+        decode::open_with_warnings(input_path, decode::sniff(input_path)?)?;
+    warnings.extend(decode_warnings);
     let img = apply_orientation(img, exif.orientation);
     // JPEG にアルファは無い。モードを問わず、ここで背景色へ合成して確定させる
     // （pad の余白・Exif フレームの下地と同じ色になる）。
@@ -468,7 +472,10 @@ pub fn process_image(
         &converted.to_rgb8(),
         config.quality,
         max_size_bytes,
-        &encode::Embed::NONE,
+        &encode::Embed {
+            icc: Some(color::srgb_icc()),
+            exif: None,
+        },
     )?;
     let output_path = write_new_output_file(input_path, output_folder, &encoded.bytes)?;
 

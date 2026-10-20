@@ -3382,6 +3382,7 @@ dependencies = [
  "kamadak-exif",
  "libc",
  "little_exif",
+ "moxcms",
  "quick-xml 0.37.5",
  "rayon",
  "resvg",

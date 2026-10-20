@@ -65,6 +65,10 @@ brotli-decompressor = "5"
 # Annex K テーブル）には頼らず、`core/src/encode/mod.rs` で毎回明示する。`Custom` テーブルの受け取り方や
 # APP セグメントの長さの判定に依存しているので版を固定する。ライセンスに IJG を含む（README）
 jpeg-encoder = "=0.7.1"
+# 入力の ICC を sRGB へ変換し、出力に埋め込む sRGB の ICC を作る（spec 2026-10-20「5」、`core/src/color.rs`）。
+# `image` 0.25.10 が既定の feature で依存している版と同じ。SIMD 経路は `image` 側の feature で有効になって
+# いて core からは切れないので、テストは許容差つきで書く。丸めが変わると出力が変わるので版を固定する
+moxcms = "=0.8.1"
 
 [dev-dependencies]
 tempfile = "3"
