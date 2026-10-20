@@ -25,6 +25,7 @@
 
 | ドキュメント | 内容 |
 |---|---|
+| [plans/2026-10-20-output-quality.md](superpowers/plans/2026-10-20-output-quality.md) | **書き出し品質の改善**の実装計画（全 10 タスク）と実施メモ。spec を実装者の目で読んで決めたこと（エンコーダの関数の形・sRGB の判定・ロゴを箱に収める読み込みなど）・目盛りの初期形・計画時の試作（Pillow で目盛りの候補 11 通りを実写真 4 枚で測った品質 90 のサイズと PSNR。単純な倍率では性質 5 を大きく外れること）を持つ |
 | [plans/2026-10-19-avif-decoder-replacement.md](superpowers/plans/2026-10-19-avif-decoder-replacement.md) | **AVIF デコーダの差し替え**の実装計画（全 8 タスク）と実施メモ。spec を実装者の目で読んで決めたこと（A-1〜A-10）・ガードを外したときの実測（フレームサイズ上限・周回の上限・アルファの 512MB 判定・移植の罠 4 件）・差し替え前後の画素照合（SIMD 20/20 一致、スカラー 13/20 差）・ファズ（13 枚 × 130 件 = 1690 件で abort・signal・timeout 0 件）。**Windows での確認（Task 1 と完了条件）は未実施** |
 | [plans/2026-09-30-metadata-write-verification.md](superpowers/plans/2026-09-30-metadata-write-verification.md) | **メタデータ書き込みの検証強化**の実装計画（全 8 タスク）と実施メモ。spec を実装者の目で読んで決めたこと（A-1〜A-7）・比較規則での 3 枚の再実測・検査を 1 つずつ外したときに落ちたテスト（M1〜M8、生き残りなし）・実写真（Lightroom 書き出し）への保存の確認 |
 | [plans/2026-09-09-grid-rating-filter.md](superpowers/plans/2026-09-09-grid-rating-filter.md) | **★レーティング絞り込み**（Phase 2）の実装計画（全 8 タスク）と実施メモ。軽量読み取り経路のフォールバック率・`list_images` の並列化の実機確認・★の `<select>` の実幅とヘッダーの段の閾値・コンテナクエリが WebKitGTK で効いたか |
