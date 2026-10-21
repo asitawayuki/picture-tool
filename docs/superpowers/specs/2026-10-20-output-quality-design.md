@@ -360,7 +360,7 @@ LrC は 20% で 4:2:0、85% で 4:4:4 だった（実測）。どこで切り替
 | `MakerNote` | 消す | 中身がファイル先頭からの絶対オフセットを持つことがあり、書き直すと壊れる。撮影情報の標準タグは本体 IFD と Exif IFD にある |
 | `PixelXDimension` / `PixelYDimension` | 出力の寸法に書き換える（無ければ足さない） | 実際の画素数と食い違わないように |
 | `ColorSpace` | 元にあれば 1（sRGB）にする。無ければ足さない | 出力は常に sRGB |
-| 撮影者や機材個体を特定しうるタグ: `BodySerialNumber`（0xA431）・`LensSerialNumber`（0xA435）・`CameraOwnerName`（0xA430）・`Artist`（0x013B）・`XPAuthor`（0x9C9D） | 消す | 利用者の判断（2026-10-20）。手元で撮影情報を見る目的には要らず、出力を人に渡したときに漏れる。`Copyright` は撮影者が権利表示として意図して付けるものなので残す（**実装者側（本 spec）の判断**） |
+| 撮影者や機材個体を特定しうるタグ: `BodySerialNumber`（0xA431）・`LensSerialNumber`（0xA435）・`CameraOwnerName`（0xA430）・`Artist`（0x013B）・`XPAuthor`（0x9C9D）・`CameraSerialNumber`（0xC62F。DNG 由来の機体シリアル。2026-10-21 追加）。本来と違う IFD に置かれていても番号で照合して消す | 消す | 利用者の判断（2026-10-20、`CameraSerialNumber` は 2026-10-21）。手元で撮影情報を見る目的には要らず、出力を人に渡したときに漏れる。`Copyright` は撮影者が権利表示として意図して付けるものなので残す（**実装者側（本 spec）の判断**） |
 | 値がファイル内のオフセットであるタグ（`SubIFDs` 0x014A、`DNGPrivateData` 0xC634、`OffsetSchema` 0xEA1D、`StripOffsets` / `TileOffsets` 系など） | 消す | 組み立て直した TIFF の中では、どこも指さない参照になる。kamadak-exif は `SubIFDs` の先を辿らず、数値のまま写してしまう |
 | 上記以外の本体 IFD・Exif IFD・Interop IFD のタグ | そのまま残す | 撮影情報（カメラ・レンズ・設定値・日時・タイトル・コメント）を見えるようにする |
 

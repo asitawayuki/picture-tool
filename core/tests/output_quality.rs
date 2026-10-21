@@ -582,12 +582,13 @@ fn uint_of(exif: &exif::Exif, tag: exif::Tag) -> u32 {
         .unwrap_or_else(|| panic!("{tag} が整数でない"))
 }
 
-const IDENTIFYING: [exif::Tag; 5] = [
+const IDENTIFYING: [exif::Tag; 6] = [
     exif::Tag::BodySerialNumber,
     exif::Tag::LensSerialNumber,
     exif::Tag::CameraOwnerName,
     exif::Tag::Artist,
     common::exif::XP_AUTHOR,
+    common::exif::CAMERA_SERIAL_NUMBER,
 ];
 
 const SHOOTING: [exif::Tag; 5] = [

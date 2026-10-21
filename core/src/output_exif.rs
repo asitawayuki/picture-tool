@@ -22,13 +22,15 @@ use crate::decode;
 /// `"Exif\0\0"` の 6 バイトを足して 65,533 以下を受け付ける（doc の 65,528 とは 1 ずれている）
 pub(crate) const MAX_EXIF_TIFF_LEN: usize = 65_527;
 
-/// 撮影者や機材個体を特定しうるタグ（利用者の判断。`Copyright` は権利表示なので残す）
-const IDENTIFYING: [Tag; 5] = [
-    Tag::BodySerialNumber,      // 0xA431
-    Tag::LensSerialNumber,      // 0xA435
-    Tag::CameraOwnerName,       // 0xA430
-    Tag::Artist,                // 0x013B
-    Tag(Context::Tiff, 0x9C9D), // XPAuthor
+/// 撮影者や機材個体を特定しうるタグ（利用者の判断。`Copyright` は権利表示なので残す）。
+/// 非標準のツールは本来と違う IFD に書くことがあるので、`OFFSET_TAG_NUMBERS` と同じく番号で照合する
+const IDENTIFYING_NUMBERS: [u16; 6] = [
+    0xA431, // BodySerialNumber
+    0xA435, // LensSerialNumber
+    0xA430, // CameraOwnerName
+    0x013B, // Artist
+    0x9C9D, // XPAuthor
+    0xC62F, // CameraSerialNumber（DNG 由来）
 ];
 
 /// 値がファイル内のオフセットであるタグ（組み立て直した TIFF の中ではどこも指さない）。
@@ -125,9 +127,9 @@ fn rewrite(f: &Field, width: u32, height: u32) -> Option<Field> {
     let drop = tag.context() == Context::Gps
         || f.ifd_num != In::PRIMARY
         || tag == Tag::MakerNote
-        || IDENTIFYING.contains(&tag)
         || (matches!(tag.context(), Context::Tiff | Context::Exif)
-            && OFFSET_TAG_NUMBERS.contains(&tag.number()))
+            && (IDENTIFYING_NUMBERS.contains(&tag.number())
+                || OFFSET_TAG_NUMBERS.contains(&tag.number())))
         || XMP_AND_IPTC.contains(&tag)
         // Writer は Unknown を書けない（spec「付随処理の失敗」: そのタグを落として組み直す）
         || matches!(f.value, Value::Unknown(..));
@@ -268,6 +270,34 @@ mod tests {
         let out = read(&build(&src, 10, 10).unwrap().unwrap());
         for t in offsets {
             assert!(out.get_field(t, In::PRIMARY).is_none(), "{t} が残っている");
+        }
+        assert!(out.get_field(Tag::Make, In::PRIMARY).is_some());
+    }
+
+    /// 標準と違う IFD に置かれていても消す（非標準のツールは IFD0 にシリアル番号を書くことがある）
+    #[test]
+    fn identifying_tags_in_an_unusual_ifd_are_removed() {
+        let misplaced = [
+            Tag(Context::Tiff, 0xA431), // BodySerialNumber（本来は Exif IFD）
+            Tag(Context::Tiff, 0xA435), // LensSerialNumber（同上）
+            Tag(Context::Tiff, 0xA430), // CameraOwnerName（同上）
+            Tag(Context::Exif, 0x013B), // Artist（本来は IFD0）
+            Tag(Context::Exif, 0x9C9D), // XPAuthor（同上）
+            Tag(Context::Exif, 0xC62F), // CameraSerialNumber（同上）
+        ];
+        let mut fields = vec![field(Tag::Make, Value::Ascii(vec![b"M".to_vec()]))];
+        fields.extend(misplaced.map(|t| field(t, Value::Ascii(vec![b"ID-1234".to_vec()]))));
+        let src = exif_of(&fields, false);
+        for t in misplaced {
+            assert!(
+                src.get_field(t, In::PRIMARY).is_some(),
+                "前提: 入力の {t} の位置にある"
+            );
+        }
+        let out = read(&build(&src, 10, 10).unwrap().unwrap());
+        for t in misplaced {
+            let left = out.fields().any(|f| f.tag.number() == t.number());
+            assert!(!left, "{t} が残っている");
         }
         assert!(out.get_field(Tag::Make, In::PRIMARY).is_some());
     }

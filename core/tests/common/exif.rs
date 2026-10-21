@@ -8,6 +8,9 @@ use exif::{Context, Field, In, Rational, Tag, Value};
 /// `XPAuthor`（Windows の作者欄）。kamadak-exif に定数が無い
 pub const XP_AUTHOR: Tag = Tag(Context::Tiff, 0x9C9D);
 
+/// `CameraSerialNumber`（DNG が IFD0 に書く機体のシリアル番号）。kamadak-exif に定数が無い
+pub const CAMERA_SERIAL_NUMBER: Tag = Tag(Context::Tiff, 0xC62F);
+
 pub const MAKE: &str = "TestMake";
 pub const MODEL: &str = "TestModel";
 pub const DATE_TIME_ORIGINAL: &str = "2024:01:02 03:04:05";
@@ -69,6 +72,7 @@ pub fn camera_fields(orientation: u16, width: u32, height: u32) -> Vec<Field> {
         ascii(Tag::LensSerialNumber, "LENS-5678"),
         ascii(Tag::CameraOwnerName, "Owner Name"),
         ascii(Tag::Artist, "Artist Name"),
+        ascii(CAMERA_SERIAL_NUMBER, "DNG-BODY-1234"),
         Field {
             tag: XP_AUTHOR,
             ifd_num: In::PRIMARY,
