@@ -1275,6 +1275,13 @@ spike は直していない。品質 50 未満の PSNR は上のとおり `jpeg-
 
 ### Task 5: 透過の合成
 
+（実装時に記録が漏れたため、2026-10-21 の最終レビューの後に測った）
+- `flatten_alpha` を何もしない（常にそのまま返す）形に戻すと、`transparent_pixels_become_the_background_color`（全モードで実際 `[254,0,0]`＝裏の赤）と
+  `half_transparent_pixels_are_blended_with_the_background`（全モードで実際 `[0,255,1]`）の 2 件が落ちる
+- `transparent_...` の前提 assert は、定数どうしを比べるだけの常に真の式だったので、書いた入力 PNG を読み戻して透けた赤（`[255,0,0,0]`）が残っていることを確かめる形に直した
+- GUI: `ConvertPanel.svelte` を main の版（背景色は pad のときだけ表示）に戻すと、e2e「crop と quality でも背景色を選べる」が
+  Crop の「白」の radio が見つからず落ちる（pad の前提 assert は通る）
+
 ### Task 6: ICC（許容差の実測・`reserve` を外したとき）
 
 - 依存: `moxcms = "=0.8.1"`（`image` 0.25.10 と同じ版）。`srgb_icc()`（`new_srgb().encode()`）は 612 バイト（Task 3 の実測と同じ）。
@@ -1431,3 +1438,19 @@ file	quality	bytes	psnr_db	luma_max	chroma_max	sampling
 4 枚とも合格。定数は変えない。
 
 **Step 5: 完了条件**: `make check` 通過（cargo test 293+14+24+8+28+55 件ほか、bun test 154 件）、`E2E_PORT=5199 bun run e2e` 111 件通過。
+
+### 最終レビュー（2026-10-21。ブランチ全体を Rust 側と spec・GUI 側の 2 本で）
+
+どちらも承認。採用したもの:
+- **個体識別タグを番号で照合する**: `Tag` の等価比較は Context を含むので、IFD0 に置かれた `0xA431` や Exif IFD に置かれた `0x013B` が残っていた。
+  `OFFSET_TAG_NUMBERS` と同じく番号で照合する形に直した（`identifying_tags_in_an_unusual_ifd_are_removed`。直す前の実装で `Tag(Tiff, 42033) が残っている` で落ちることを確認）
+- **`CameraSerialNumber`（0xC62F）も消す**: DNG 由来の JPEG では機体のシリアル番号が IFD0 のこのタグに入る。利用者の判断（2026-10-21）で spec の除去表に足した。
+  `ImageUniqueID`・`RawDataUniqueID`・`OriginalRawFileName` は画像の ID で人や機体を特定しないので残す（同じく利用者の判断）。
+  単体・統合テストとも足す前の実装で落ちることを確認した
+- README の「品質 20 が LrC の 20% とほぼ同じ量子化テーブル」→「同じ」（DQT はバイト単位で一致する）
+- Task 5 の実測（上の節）
+
+採用しなかったもの:
+- `output_exif::load` / `build` を `catch_unwind` で包む: 読み取りの kamadak-exif は本ブランチ以前から同じ入力に保護なしで使っている（`lib.rs` の Exif 情報の読み取り）ので新しい攻撃面ではない。Writer はパーサーが返した値を書くだけ
+- IFD0 の `ImageWidth` / `ImageLength` 等が元の寸法のまま残りうる: spec が書き換える対象は `Orientation`・`ColorSpace`・`PixelX/YDimension` だけ。表示上の食い違いで、プライバシーには関わらない
+- 品質 50 未満の出力が本ツールで緑に見える: 出力フォルダーをグリッドで開くと、サムネイル（`get_thumbnail` → `generate_thumbnail_base64` → `open_image_oriented`）も同じデコード経路を通るので緑になる（実機では未確認）。README の既知の制限（「本ツールへ戻すと緑になる」）に含まれる

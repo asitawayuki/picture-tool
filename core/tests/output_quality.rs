@@ -204,7 +204,15 @@ fn transparent_pixels_become_the_background_color() {
     // 完全に透けた画素の裏は赤。背景色で塗られていれば赤は出ない
     // 前提: 入力の RGB は赤（塗らずに RGB だけ使えば赤が出る入力である）
     let hidden = [255, 0, 0, 0];
-    assert_eq!(hidden[..3], [255, 0, 0]);
+    let dir = tempfile::tempdir().unwrap();
+    let probe = dir.path().join("probe.png");
+    write_flat_rgba_png(&probe, 8, 8, hidden);
+    let read_back = image::open(&probe).unwrap().to_rgba8();
+    assert_eq!(
+        read_back.get_pixel(4, 4).0,
+        hidden,
+        "前提: 透けた赤が入力に残っている"
+    );
     let mut failures = Vec::new();
     for (mode, bg, w, h, name) in all_cases() {
         let expected = match bg {
