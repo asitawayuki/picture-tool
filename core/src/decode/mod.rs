@@ -88,8 +88,26 @@ fn sniff_bytes(head: &[u8]) -> Format {
 }
 
 /// 画像をデコードする。JPEG XL / AVIF は形式固有の向きを適用済み、それ以外は向き未適用
+///
+/// [`open_with_warnings`] の警告を捨てる包み（サムネイル・プレビュー用）。
 pub(crate) fn open(path: &Path, format: Format) -> Result<DynamicImage> {
-    match format {
+    open_with_warnings(path, format).map(|(img, _)| img)
+}
+
+/// [`open`] と同じくデコードし、ICC の扱いで起きた事象を警告として返す
+///
+/// JPEG / PNG / WebP は埋め込まれた ICC を sRGB へ変換する（[`crate::color::to_srgb`]）。
+/// ICC の失敗は警告にして続け、`Err` にしない（spec 2026-10-20「付随処理の失敗」）。
+/// JPEG XL / AVIF は色管理をしない（spec「やらないこと」）ので警告は常に空。
+///
+/// **`into_decoder` は `ImageReader::decode` と違ってメモリ予算を `reserve` しない。**
+/// 画素を確保する前に、JPEG XL と同じく自分で `reserve` する（寸法だけ巨大な PNG で 512MiB を外さない）。
+pub(crate) fn open_with_warnings(
+    path: &Path,
+    format: Format,
+) -> Result<(DynamicImage, Vec<String>)> {
+    let mut warnings = Vec::new();
+    let img = match format {
         Format::Jxl => guarded(|| {
             let decoder = jxl_decoder(path)?;
             image::Limits::default().reserve(decoder.total_bytes())?;
@@ -118,9 +136,31 @@ pub(crate) fn open(path: &Path, format: Format) -> Result<DynamicImage> {
                 parsed.premultiplied_alpha,
             )?))
         }),
-        Format::Other => Ok(ImageReader::open(path)?.with_guessed_format()?.decode()?),
+        // ICC の解析・変換（moxcms）は信頼できない入力に対する新しい攻撃面なので、JPEG XL / AVIF と同じく
+        // panic を 1 枚の `Err` にする（解析と変換の作成の panic は `to_srgb` が警告にする。ここは保険）
+        Format::Other => guarded(|| {
+            let mut decoder = ImageReader::open(path)?
+                .with_guessed_format()?
+                .into_decoder()?;
+            let icc = decoder.icc_profile().unwrap_or_else(|e| {
+                warnings.push(format!(
+                    "Ignoring unreadable ICC profile in {}: {e}",
+                    path.display()
+                ));
+                None
+            });
+            image::Limits::default().reserve(decoder.total_bytes())?;
+            let img = DynamicImage::from_decoder(decoder)?;
+            Ok(crate::color::to_srgb(
+                img,
+                icc.as_deref(),
+                path,
+                &mut warnings,
+            ))
+        }),
     }
-    .with_context(|| format!("Failed to open image: {}", path.display()))
+    .with_context(|| format!("Failed to open image: {}", path.display()))?;
+    Ok((img, warnings))
 }
 
 /// 画素を読まずに (幅, 高さ) を得る。JPEG XL / AVIF は向き適用後の寸法
@@ -139,11 +179,15 @@ pub(crate) fn dimensions(path: &Path, format: Format) -> Result<(u32, u32)> {
     .with_context(|| format!("Failed to read image dimensions: {}", path.display()))
 }
 
-/// JPEG XL の Exif ボックスを `exif` クレートで読める生 TIFF として取り出す。無ければ `None`
-pub(crate) fn jxl_raw_exif(path: &Path) -> Option<Vec<u8>> {
+/// JPEG XL の Exif ボックスを `exif` クレートで読める生 TIFF として取り出す。
+/// 無い（または上限を超えて大きい）ときは `Ok(None)`、箱が壊れているときは `Err`
+pub(crate) fn jxl_exif(path: &Path) -> Result<Option<Vec<u8>>> {
     guarded(|| jxl::raw_exif(BufReader::new(File::open(path)?)))
-        .ok()
-        .flatten()
+}
+
+/// [`jxl_exif`] の `Err` を「無い」に畳んだもの（撮影情報の表示用。壊れていても黙って無いものとする）
+pub(crate) fn jxl_raw_exif(path: &Path) -> Option<Vec<u8>> {
+    jxl_exif(path).ok().flatten()
 }
 
 /// コードストリームだけを渡した jxl-oxide のデコーダ（ヘッダまで読んだ状態）

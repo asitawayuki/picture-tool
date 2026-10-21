@@ -38,6 +38,26 @@ test.describe("変換パネル", () => {
     ).toBeVisible();
   });
 
+  test("crop と quality でも背景色を選べる", async ({ page }) => {
+    // ConvertPanel は右カラムにある。selectSegment は page 全体を探すので、
+    // 背景色の radio は右カラムに絞って引く
+    const panel = page.locator('[data-region="right"]');
+    const note = panel.getByText("透過部分をこの色で塗ります");
+
+    // 前提: pad では背景色が見えている（余白の色）。注記は透過の話なので出ない
+    await selectSegment(page, "Pad");
+    await expect(panel.getByRole("radio", { name: "白" })).toBeVisible();
+    await expect(panel.getByRole("radio", { name: "黒" })).toBeVisible();
+    await expect(note).toBeHidden();
+
+    for (const mode of ["Crop", "Quality"]) {
+      await selectSegment(page, mode);
+      await expect(panel.getByRole("radio", { name: "白" })).toBeVisible();
+      await expect(panel.getByRole("radio", { name: "黒" })).toBeVisible();
+      await expect(note).toBeVisible();
+    }
+  });
+
   test("出力幅は 4 の倍数へ切り捨てられる", async ({ page }) => {
     await selectSegment(page, "Pad");
     // Switch の input は .track に覆われて直接クリックできない（Task 4 Step 2）

@@ -34,10 +34,13 @@
 //! - 画像の読み込みに失敗したらスキップして次へ進む。1 枚の失敗でバッチを
 //!   止めない。
 
+mod color;
 mod decode;
+mod encode;
 pub mod exif_frame;
 pub mod metadata;
 pub mod model_map;
+mod output_exif;
 
 use anyhow::{Context, Result};
 use image::{DynamicImage, GenericImageView, RgbaImage};
@@ -66,7 +69,7 @@ pub enum ConversionMode {
     Quality,
 }
 
-/// パディング時の背景色
+/// 背景色。pad の余白と、透過部分の塗りに使う
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq)]
 #[cfg_attr(feature = "clap", derive(clap::ValueEnum))]
 #[serde(rename_all = "lowercase")]
@@ -345,6 +348,24 @@ pub fn collect_image_files(dir: &Path) -> CollectedImages {
     result
 }
 
+/// アルファを持つ画像を、ストレートアルファの over（`c·a + bg·(1−a)`）で背景色へ合成する。
+/// アルファが無ければそのまま返す。合成したときは `ImageRgb8`。
+fn flatten_alpha(img: DynamicImage, bg: BackgroundColor) -> DynamicImage {
+    if !img.color().has_alpha() {
+        return img;
+    }
+    let bg = bg.to_rgba().0;
+    let mut rgba = img.into_rgba8();
+    for px in rgba.pixels_mut() {
+        let a = u32::from(px[3]);
+        for c in 0..3 {
+            // 四捨五入つきの c·a/255 + bg·(255−a)/255
+            px[c] = ((u32::from(px[c]) * a + u32::from(bg[c]) * (255 - a) + 127) / 255) as u8;
+        }
+    }
+    DynamicImage::ImageRgb8(DynamicImage::ImageRgba8(rgba).into_rgb8())
+}
+
 /// 画像を処理
 pub fn process_image(
     input_path: &Path,
@@ -372,8 +393,26 @@ pub fn process_image(
         }
     };
 
-    let img = decode::open(input_path, decode::sniff(input_path)?)?;
+    let format = decode::sniff(input_path)?;
+    // 出力に載せる Exif の元。読めなければ Exif なしで書く（spec「付随処理の失敗」）
+    let source_exif = match output_exif::load(input_path, format) {
+        Ok(exif) => exif,
+        Err(e) => {
+            warnings.push(format!(
+                "Writing without EXIF: failed to read EXIF from {}: {e}",
+                input_path.display()
+            ));
+            None
+        }
+    };
+
+    // ICC は sRGB へ変換済み（アルファを持ったまま変換してから、下で背景色へ合成する）
+    let (img, decode_warnings) = decode::open_with_warnings(input_path, format)?;
+    warnings.extend(decode_warnings);
     let img = apply_orientation(img, exif.orientation);
+    // JPEG にアルファは無い。モードを問わず、ここで背景色へ合成して確定させる
+    // （pad の余白・Exif フレームの下地と同じ色になる）。
+    let img = flatten_alpha(img, config.bg_color);
 
     // 出力キャンバス幅の上限。quality モードはアスペクト比を変えないため対象外
     // （「幅」を指定しても縦写真の長辺を縛れない / spec §2）。
@@ -441,8 +480,37 @@ pub fn process_image(
         _ => converted,
     };
 
+    // 寸法が確定した後に組み立てる（PixelX/YDimension を出力の寸法にするため）
+    let output_exif = source_exif.and_then(|src| {
+        match output_exif::build(&src, converted.width(), converted.height()) {
+            Ok(Some(tiff)) if tiff.len() > output_exif::MAX_EXIF_TIFF_LEN => {
+                warnings.push(format!(
+                    "Writing without EXIF: EXIF of {} bytes does not fit in a JPEG segment",
+                    tiff.len()
+                ));
+                None
+            }
+            Ok(tiff) => tiff,
+            Err(e) => {
+                warnings.push(format!(
+                    "Writing without EXIF: failed to rebuild EXIF for {}: {e}",
+                    input_path.display()
+                ));
+                None
+            }
+        }
+    });
+
     let max_size_bytes = config.max_size_mb * 1024 * 1024;
-    let encoded = encode_within_size_limit(&converted, config.quality, max_size_bytes)?;
+    let encoded = encode::encode_within_size_limit(
+        &converted.to_rgb8(),
+        config.quality,
+        max_size_bytes,
+        &encode::Embed {
+            icc: Some(color::srgb_icc()),
+            exif: output_exif.as_deref(),
+        },
+    )?;
     let output_path = write_new_output_file(input_path, output_folder, &encoded.bytes)?;
 
     let final_size_mb = encoded.bytes.len() as f64 / (1024.0 * 1024.0);
@@ -536,7 +604,7 @@ pub fn generate_thumbnail_base64(path: &Path, max_dimension: u32) -> Result<Stri
         .with_context(|| format!("Failed to open image for thumbnail: {}", path.display()))?;
 
     let thumbnail = img.thumbnail(max_dimension, max_dimension);
-    let jpeg_bytes = encode_jpeg_rgb(&thumbnail.to_rgb8(), 75)?;
+    let jpeg_bytes = encode::encode_jpeg(&thumbnail.to_rgb8(), 75, &encode::Embed::NONE)?;
 
     Ok(base64::engine::general_purpose::STANDARD.encode(&jpeg_bytes))
 }
@@ -582,7 +650,7 @@ pub fn generate_exif_frame_preview_base64(
 
     let exif = read_exif_info(path).unwrap_or_default();
     let framed = exif_frame::render_exif_frame(&thumbnail, &exif, config, bg_color, assets)?;
-    let jpeg_bytes = encode_jpeg_rgb(&framed.image.to_rgb8(), 85)?;
+    let jpeg_bytes = encode::encode_jpeg(&framed.image.to_rgb8(), 85, &encode::Embed::NONE)?;
 
     Ok(ExifFramePreview {
         base64: base64::engine::general_purpose::STANDARD.encode(&jpeg_bytes),
@@ -623,7 +691,7 @@ pub fn generate_full_image_base64(path: &Path, max_width: u32, max_height: u32) 
         img
     };
 
-    let jpeg_bytes = encode_jpeg_rgb(&resized.to_rgb8(), 90)?;
+    let jpeg_bytes = encode::encode_jpeg(&resized.to_rgb8(), 90, &encode::Embed::NONE)?;
 
     Ok(base64::engine::general_purpose::STANDARD.encode(&jpeg_bytes))
 }
@@ -745,67 +813,6 @@ fn write_all_and_flush(file: File, bytes: &[u8]) -> std::io::Result<()> {
     let mut writer = BufWriter::new(file);
     writer.write_all(bytes)?;
     writer.flush()
-}
-
-/// サイズ制限を満たす JPEG バイト列
-struct EncodedJpeg {
-    bytes: Vec<u8>,
-    /// 実際に採用した品質
-    quality: u8,
-    /// `max_size_bytes` を満たせたか（false なら下限品質でも超過している）
-    within_limit: bool,
-}
-
-/// サイズ制限を満たすまで品質を下げながらメモリ上で JPEG にエンコードする
-///
-/// ディスクへの書き出しは確定した1回分だけを呼び出し元が行う。
-/// 試行のたびに書いて消す方式は最大7往復の I/O を生み、一時ファイル名の衝突源でもあった。
-fn encode_within_size_limit(
-    img: &DynamicImage,
-    initial_quality: u8,
-    max_size_bytes: usize,
-) -> Result<EncodedJpeg> {
-    const MIN_QUALITY: u8 = 60;
-    const QUALITY_STEP: u8 = 5;
-
-    let rgb_img = img.to_rgb8();
-    let mut quality = initial_quality;
-
-    loop {
-        let bytes = encode_jpeg_rgb(&rgb_img, quality)?;
-
-        if bytes.len() <= max_size_bytes {
-            return Ok(EncodedJpeg {
-                bytes,
-                quality,
-                within_limit: true,
-            });
-        }
-        if quality <= MIN_QUALITY {
-            return Ok(EncodedJpeg {
-                bytes,
-                quality,
-                within_limit: false,
-            });
-        }
-
-        quality = quality.saturating_sub(QUALITY_STEP).max(MIN_QUALITY);
-    }
-}
-
-/// RgbImage を JPEG バイト列にエンコード
-fn encode_jpeg_rgb(rgb_img: &image::RgbImage, quality: u8) -> Result<Vec<u8>> {
-    let mut bytes = Vec::new();
-    let mut cursor = std::io::Cursor::new(&mut bytes);
-    image::codecs::jpeg::JpegEncoder::new_with_quality(&mut cursor, quality)
-        .encode(
-            rgb_img.as_raw(),
-            rgb_img.width(),
-            rgb_img.height(),
-            image::ExtendedColorType::Rgb8,
-        )
-        .context("Failed to encode JPEG")?;
-    Ok(bytes)
 }
 
 #[cfg(test)]
@@ -1499,7 +1506,7 @@ mod tests {
 
         // 1MB以下または品質がMIN_QUALITYまで下がっていること
         assert!(
-            result.final_size_mb <= 1.0 || result.final_quality == Some(60),
+            result.final_size_mb <= 1.0 || result.final_quality == Some(encode::MIN_QUALITY),
             "サイズ制限が機能していない: size={:.2}MB, quality={:?}",
             result.final_size_mb,
             result.final_quality
