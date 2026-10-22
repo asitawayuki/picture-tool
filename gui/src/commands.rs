@@ -182,43 +182,15 @@ pub async fn list_images(path: String) -> Result<Vec<ImageEntry>, String> {
 }
 
 #[tauri::command]
-pub async fn get_thumbnail(
-    state: tauri::State<'_, ProcessingState>,
-    path: String,
-    max_dimension: u32,
-) -> Result<String, String> {
+pub async fn get_thumbnail(path: String, max_dimension: u32) -> Result<String, String> {
     let file = security::readable_image(&path)?;
-    // キャッシュキーは実体のパスと、core が実際に使う丸めた後のサイズ。
-    // 生の要求値をキーにすると、上限超えの値を変えるだけで同一内容の
-    // エントリを LRU の上限まで作れてしまう。
-    let max_dimension = max_dimension.min(core::THUMBNAIL_MAX_DIMENSION);
-    let cache_key = format!("{}:{}", file.display(), max_dimension);
-
-    {
-        let mut cache = state
-            .thumbnail_cache
-            .lock()
-            .unwrap_or_else(|e| e.into_inner());
-        if let Some(cached) = cache.get(&cache_key) {
-            return Ok(cached.clone());
-        }
-    }
-
-    let result = tokio::task::spawn_blocking(move || {
+    // キャッシュはフロント（`thumbnailQueue`）が持つ。取得済みの写真はここへ問い合わせて
+    // こないので、Rust 側に同じキーの LRU を置いても当たらない。
+    tokio::task::spawn_blocking(move || {
         core::generate_thumbnail_base64(&file, max_dimension).map_err(|e| format!("{e:#}"))
     })
     .await
-    .map_err(|e| e.to_string())??;
-
-    {
-        let mut cache = state
-            .thumbnail_cache
-            .lock()
-            .unwrap_or_else(|e| e.into_inner());
-        cache.put(cache_key, result.clone());
-    }
-
-    Ok(result)
+    .map_err(|e| e.to_string())?
 }
 
 #[tauri::command]
