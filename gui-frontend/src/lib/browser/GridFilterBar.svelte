@@ -29,7 +29,7 @@
     ratingPreset: RatingPresetId;
   }
 
-  let { query = $bindable(), sort, ratingPreset = $bindable() }: Props = $props();
+  let { query = $bindable(), sort = $bindable(), ratingPreset = $bindable() }: Props = $props();
 
   const SORT_OPTIONS = (Object.keys(SORT_LABELS) as SortKey[]).map((value) => ({
     value,
