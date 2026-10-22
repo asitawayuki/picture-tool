@@ -401,6 +401,63 @@ test.describe("メタデータモード", () => {
     await expect.poll(lastUnsaved).toBe(false);
   });
 
+  test("未保存の通知は有無が変わったときだけ送る（1 文字ごとに IPC しない）", async ({ page }) => {
+    const unsavedCalls = () =>
+      page.evaluate(() => {
+        const calls = (window as any).__stubCalls as { cmd: string; args: any }[];
+        return calls.filter((c) => c.cmd === "set_unsaved_state").map((c) => c.args.unsaved);
+      });
+    const lastUnsaved = async () => {
+      const values = await unsavedCalls();
+      return values[values.length - 1];
+    };
+    // 前提条件: 写真を開いた直後の通知（false）が済んでいる
+    await expect.poll(lastUnsaved).toBe(false);
+    const before = (await unsavedCalls()).length;
+
+    // fill は 1 回の input で済んでしまうので、1 文字ずつ打つ
+    await page.getByLabel("タイトル").pressSequentially("abcdefghij");
+    await expect(page.getByLabel("タイトル")).toHaveValue("abcdefghij");
+
+    // 前提条件: 未保存になったことは伝わっている
+    await expect.poll(lastUnsaved).toBe(true);
+    expect((await unsavedCalls()).slice(before)).toEqual([true]);
+  });
+
+  test("写真を選ぶと撮影情報を 1 回だけ取りに行く", async ({ page }) => {
+    const exifCalls = (path: string) =>
+      page.evaluate(
+        (p) =>
+          ((window as any).__stubCalls as { cmd: string; args: any }[]).filter(
+            (c) => c.cmd === "get_exif_info" && c.args.path === p
+          ).length,
+        path
+      );
+    const panelThumbnail = (path: string) =>
+      page.evaluate(
+        (p) =>
+          (((window as any).__thumbnailRequests ?? []) as { path: string; maxDimension: number }[])
+            .some((r) => r.path === p && r.maxDimension === 160),
+        path
+      );
+    const path = "/photos/5.jpg"; // スタブは photo-0005.jpg を /photos/5.jpg として返す
+    // 前提条件: まだ一度も開いていない写真（パネルのサムネイルも撮影情報も未取得）
+    expect(await exifCalls(path)).toBe(0);
+    expect(await panelThumbnail(path)).toBe(false);
+
+    await page
+      .getByRole("listbox", { name: "写真" })
+      .getByRole("option", { name: /photo-0005/ })
+      .click();
+    await expect(page.locator('[data-region="right"]').getByText("photo-0005.jpg")).toBeVisible();
+
+    // 前提条件: パネルのサムネイルを取りに行き、それが表示された。
+    // 届いたことで撮影情報の取得まで再実行されるなら、この時点で 2 回目が記録されている
+    await expect.poll(() => panelThumbnail(path)).toBe(true);
+    await expect(page.locator('[data-region="right"] img.thumb')).toBeVisible();
+    expect(await exifCalls(path)).toBe(1);
+  });
+
   test("保存した★がグリッドのタイルにも出る（刷新 spec §4-3）", async ({ page }) => {
     const tile = page.getByRole("listbox", { name: "写真" }).getByRole("option").first();
     // 前提条件: この写真はスタブの既定パターンで未評価（＝★が出ていない）。

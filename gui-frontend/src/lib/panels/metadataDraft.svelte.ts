@@ -23,6 +23,10 @@ export function createMetadataDraft() {
   let warnings = $state<string[]>([]);
   let loading = $state(false);
   let saving = $state(false);
+  // getter で毎回比べると、読む側の $effect が値の編集 1 文字ごとに再実行される
+  // （App.svelte はそのたびに set_unsaved_state を呼んでいた）。$derived は真偽が
+  // 変わったときだけ通知する
+  const isDirty = $derived(!sameValues(values, saved));
 
   /** 写真を連打したときに、古い応答が新しい下書きを上書きしないよう守る */
   let token = 0;
@@ -45,7 +49,7 @@ export function createMetadataDraft() {
       return saving;
     },
     get isDirty(): boolean {
-      return !sameValues(values, saved);
+      return isDirty;
     },
 
     async load(next: string | null) {
