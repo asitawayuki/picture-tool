@@ -1,12 +1,21 @@
 use crate::security::WritableRoots;
-use lru::LruCache;
-use std::num::NonZeroUsize;
+use picture_tool_core::ExifFramePreviewSource;
+use std::path::PathBuf;
 use std::sync::atomic::AtomicBool;
 use std::sync::{Arc, Mutex};
+use std::time::SystemTime;
+
+/// 写真の同一性。更新日時が取れない環境ではサイズだけで見分ける
+pub type PreviewSourceKey = (PathBuf, Option<SystemTime>, u64);
+
+/// 直近にプレビューした 1 枚の下地（`render_exif_frame_preview`）。
+/// フレームの設定を触るたびに写真をデコードし直さないためのもの。
+/// `spawn_blocking` へ持ち出すので `Arc` で包む
+pub type PreviewSourceCache = Arc<Mutex<Option<(PreviewSourceKey, Arc<ExifFramePreviewSource>)>>>;
 
 pub struct ProcessingState {
     pub cancel_flag: Arc<AtomicBool>,
-    pub thumbnail_cache: Mutex<LruCache<String, String>>,
+    pub preview_source: PreviewSourceCache,
     /// **変換の出力先**として、ネイティブダイアログで選ばれたフォルダー
     /// （`pick_output_folder`）。起動時は空＝どこにも書けない状態から始まる。
     pub writable_roots: WritableRoots,
@@ -31,7 +40,7 @@ impl ProcessingState {
     pub fn new() -> Self {
         Self {
             cancel_flag: Arc::new(AtomicBool::new(false)),
-            thumbnail_cache: Mutex::new(LruCache::new(NonZeroUsize::new(500).unwrap())),
+            preview_source: PreviewSourceCache::default(),
             writable_roots: WritableRoots::default(),
             metadata_roots: WritableRoots::default(),
             unsaved: AtomicBool::new(false),

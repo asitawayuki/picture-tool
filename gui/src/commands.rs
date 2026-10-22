@@ -1,5 +1,5 @@
 use crate::security;
-use crate::state::ProcessingState;
+use crate::state::{PreviewSourceCache, PreviewSourceKey, ProcessingState};
 use crate::types::*;
 use picture_tool_core as core;
 use picture_tool_core::exif_frame::{self, AssetDirs, ExifFrameConfig, FontInfo};
@@ -12,8 +12,10 @@ use tauri_plugin_dialog::{DialogExt, MessageDialogButtons, MessageDialogKind};
 use tauri_plugin_store::StoreExt;
 
 /// 各コマンドはこの関数を通したパスだけを触る。理由は `security` モジュール参照。
+///
+/// フォルダーツリーの子を返す。**ファイルは返さない**（ツリーが使わない）。
 #[tauri::command]
-pub fn list_directory(path: String) -> Result<Vec<FileEntry>, String> {
+pub fn list_directory(path: String) -> Result<Vec<FolderEntry>, String> {
     let dir = security::existing_dir(&path)?;
 
     let mut entries = Vec::new();
@@ -26,34 +28,28 @@ pub fn list_directory(path: String) -> Result<Vec<FileEntry>, String> {
             continue;
         };
         let name = entry.file_name().to_string_lossy().to_string();
-        let entry_path = entry.path();
-        let path_str = entry_path.to_string_lossy().to_string();
 
         // 隠しファイル/フォルダーをスキップ
         if name.starts_with('.') {
             continue;
         }
 
-        let is_image = if file_type.is_file() {
-            core::is_supported_image(&entry_path)
-        } else {
-            false
-        };
+        // `file_type` はシンボリックリンクを辿らないので、リンクだけは辿って確かめる。
+        // 辿らないとフォルダーへのリンク（`~/Pictures -> /mnt/photos`）がツリーから消える
+        let entry_path = entry.path();
+        let is_dir = file_type.is_dir()
+            || (file_type.is_symlink() && fs::metadata(&entry_path).is_ok_and(|m| m.is_dir()));
+        if !is_dir {
+            continue;
+        }
 
-        entries.push(FileEntry {
+        entries.push(FolderEntry {
             name,
-            path: path_str,
-            is_dir: file_type.is_dir(),
-            is_image,
+            path: entry_path.to_string_lossy().to_string(),
         });
     }
 
-    // フォルダーを先に、ファイルはアルファベット順
-    entries.sort_by(|a, b| {
-        b.is_dir
-            .cmp(&a.is_dir)
-            .then(a.name.to_lowercase().cmp(&b.name.to_lowercase()))
-    });
+    entries.sort_by_cached_key(|e| e.name.to_lowercase());
 
     Ok(entries)
 }
@@ -186,43 +182,15 @@ pub async fn list_images(path: String) -> Result<Vec<ImageEntry>, String> {
 }
 
 #[tauri::command]
-pub async fn get_thumbnail(
-    state: tauri::State<'_, ProcessingState>,
-    path: String,
-    max_dimension: u32,
-) -> Result<String, String> {
+pub async fn get_thumbnail(path: String, max_dimension: u32) -> Result<String, String> {
     let file = security::readable_image(&path)?;
-    // キャッシュキーは実体のパスと、core が実際に使う丸めた後のサイズ。
-    // 生の要求値をキーにすると、上限超えの値を変えるだけで同一内容の
-    // エントリを LRU の上限まで作れてしまう。
-    let max_dimension = max_dimension.min(core::THUMBNAIL_MAX_DIMENSION);
-    let cache_key = format!("{}:{}", file.display(), max_dimension);
-
-    {
-        let mut cache = state
-            .thumbnail_cache
-            .lock()
-            .unwrap_or_else(|e| e.into_inner());
-        if let Some(cached) = cache.get(&cache_key) {
-            return Ok(cached.clone());
-        }
-    }
-
-    let result = tokio::task::spawn_blocking(move || {
-        core::generate_thumbnail_base64(&file, max_dimension).map_err(|e| e.to_string())
+    // キャッシュはフロント（`thumbnailQueue`）が持つ。取得済みの写真はここへ問い合わせて
+    // こないので、Rust 側に同じキーの LRU を置いても当たらない。
+    tokio::task::spawn_blocking(move || {
+        core::generate_thumbnail_base64(&file, max_dimension).map_err(|e| format!("{e:#}"))
     })
     .await
-    .map_err(|e| e.to_string())??;
-
-    {
-        let mut cache = state
-            .thumbnail_cache
-            .lock()
-            .unwrap_or_else(|e| e.into_inner());
-        cache.put(cache_key, result.clone());
-    }
-
-    Ok(result)
+    .map_err(|e| e.to_string())?
 }
 
 #[tauri::command]
@@ -233,7 +201,7 @@ pub async fn get_full_image(
 ) -> Result<String, String> {
     let file = security::readable_image(&path)?;
     tokio::task::spawn_blocking(move || {
-        core::generate_full_image_base64(&file, max_width, max_height).map_err(|e| e.to_string())
+        core::generate_full_image_base64(&file, max_width, max_height).map_err(|e| format!("{e:#}"))
     })
     .await
     .map_err(|e| e.to_string())?
@@ -284,7 +252,7 @@ pub async fn process_images(
     config: core::ProcessingConfig,
     exif_frame_config: Option<ExifFrameConfig>,
 ) -> Result<ProcessBatchResponse, String> {
-    core::validate_config(&config).map_err(|e| e.to_string())?;
+    core::validate_config(&config).map_err(|e| format!("{e:#}"))?;
 
     // 出力は利用者が明示的に許可したルート配下のみ。
     let output = security::writable_dir(&state.writable_roots, &output_folder)?;
@@ -387,7 +355,7 @@ fn split_results(
             // キャンセルで着手すらしなかった分は「失敗」ではない。どちらにも
             // 載せないことで、フロントが要求リストとの差分から「未処理」として
             // 表示する（`ResultDialog`）。
-            Err(e) if format!("{:#}", e) == core::CANCELLED_ERROR => {}
+            Err(e) if e.downcast_ref::<core::Cancelled>().is_some() => {}
             Err(e) => failures.push(ProcessFailure {
                 input_path: raw.clone(),
                 error: format!("{:#}", e),
@@ -427,11 +395,7 @@ async fn run_batch(
     // process_batch は rayon で並列処理するためブロッキング。
     // Tauri の async runtime をブロックしないよう spawn_blocking でオフロードする。
     tokio::task::spawn_blocking(move || {
-        let names: Vec<String> = inputs
-            .iter()
-            .map(|p| p.file_name().unwrap_or_default().to_string_lossy().into())
-            .collect();
-        let on_progress = progress_callback(app_handle, cancel_flag, names);
+        let on_progress = progress_callback(app_handle, cancel_flag);
 
         // Exif アセットはバッチ全体で1回だけ構築する（画像ごとに model_map を
         // 読み直さないため）。Exif フレームを使わない場合は構築自体を行わない。
@@ -468,17 +432,17 @@ async fn run_batch(
 fn progress_callback(
     app_handle: tauri::AppHandle,
     cancel_flag: Arc<AtomicBool>,
-    file_names: Vec<String>,
 ) -> core::ProgressCallback {
     // emit が失敗すると進捗が止まったように見える。原因を追えるよう記録するが、
     // 1件ごとに出すと壊れた状態でログが埋まるため最初の1回だけにする（S6-M15）。
     let emit_failure_logged = AtomicBool::new(false);
 
-    Box::new(move |current, total| -> bool {
-        let file_name = file_names
-            .get(current.saturating_sub(1))
-            .cloned()
-            .unwrap_or_default();
+    Box::new(move |current, total, path| -> bool {
+        let file_name = path
+            .file_name()
+            .unwrap_or_default()
+            .to_string_lossy()
+            .into_owned();
 
         if let Err(e) = app_handle.emit(
             "processing-progress",
@@ -593,7 +557,7 @@ pub fn cancel_processing(state: tauri::State<'_, ProcessingState>) -> Result<(),
 #[tauri::command]
 pub async fn get_exif_info(path: String) -> Result<core::ExifInfo, String> {
     let file = security::readable_image(&path)?;
-    tokio::task::spawn_blocking(move || core::read_exif_info(&file).map_err(|e| e.to_string()))
+    tokio::task::spawn_blocking(move || core::read_exif_info(&file).map_err(|e| format!("{e:#}")))
         .await
         .map_err(|e| e.to_string())?
 }
@@ -604,6 +568,7 @@ pub async fn get_exif_info(path: String) -> Result<core::ExifInfo, String> {
 /// webview がそのまま `<img src>` に使える data URI への変換だけを行う。
 #[tauri::command]
 pub async fn render_exif_frame_preview(
+    state: tauri::State<'_, ProcessingState>,
     path: String,
     config: ExifFrameConfig,
     bg_color: core::BackgroundColor,
@@ -611,13 +576,15 @@ pub async fn render_exif_frame_preview(
     let file = security::readable_image(&path)?;
     let mut config = config;
     resolve_font_path(&mut config)?;
+    let cache = Arc::clone(&state.preview_source);
 
     tokio::task::spawn_blocking(move || {
         let assets =
             exif_frame::ExifAssets::load(AssetDirs::default()).map_err(|e| format!("{:#}", e))?;
 
+        let source = cached_preview_source(&cache, &file)?;
         let preview =
-            core::generate_exif_frame_preview_base64(&file, &config, &bg_color, &assets, 400)
+            core::generate_exif_frame_preview_base64(&source, &config, &bg_color, &assets)
                 .map_err(|e| format!("{:#}", e))?;
 
         Ok(PreviewImage {
@@ -630,6 +597,32 @@ pub async fn render_exif_frame_preview(
     })
     .await
     .map_err(|e| e.to_string())?
+}
+
+/// プレビューの長辺（px）
+const PREVIEW_MAX_DIMENSION: u32 = 400;
+
+/// 直近の 1 枚と同じ写真なら、デコード・縮小済みの下地を使い回す。
+/// ロックはキャッシュを見る間と差し替える間だけ持つ（デコード中は持たない）
+fn cached_preview_source(
+    cache: &PreviewSourceCache,
+    file: &Path,
+) -> Result<Arc<core::ExifFramePreviewSource>, String> {
+    let meta = fs::metadata(file).map_err(|e| e.to_string())?;
+    let key: PreviewSourceKey = (file.to_path_buf(), meta.modified().ok(), meta.len());
+    let lock = || cache.lock().unwrap_or_else(|e| e.into_inner());
+
+    if let Some((cached_key, source)) = &*lock()
+        && *cached_key == key
+    {
+        return Ok(Arc::clone(source));
+    }
+    let source = Arc::new(
+        core::ExifFramePreviewSource::load(file, PREVIEW_MAX_DIMENSION)
+            .map_err(|e| format!("{e:#}"))?,
+    );
+    *lock() = Some((key, Arc::clone(&source)));
+    Ok(source)
 }
 
 #[tauri::command]
@@ -651,14 +644,14 @@ pub async fn save_preset(config: ExifFrameConfig) -> Result<(), String> {
     let mut config = config;
     security::preset_name(&config.name)?;
     resolve_font_path(&mut config)?;
-    exif_frame::preset::save_preset(&dir, &config).map_err(|e| e.to_string())
+    exif_frame::preset::save_preset(&dir, &config).map_err(|e| format!("{e:#}"))
 }
 
 #[tauri::command]
 pub async fn delete_preset(name: String) -> Result<(), String> {
     let dir = user_presets_dir()?;
     let name = security::preset_name(&name)?;
-    exif_frame::preset::delete_preset(&dir, &name).map_err(|e| e.to_string())
+    exif_frame::preset::delete_preset(&dir, &name).map_err(|e| format!("{e:#}"))
 }
 
 fn user_presets_dir() -> Result<PathBuf, String> {
@@ -721,7 +714,7 @@ fn scan_user_fonts(dir: &Path) -> Vec<FontInfo> {
 pub async fn read_image_metadata(path: String) -> Result<core::metadata::MetadataRead, String> {
     let file = security::readable_jpeg(&path)?;
     tokio::task::spawn_blocking(move || {
-        core::metadata::read_metadata_fast(&file).map_err(|e| e.to_string())
+        core::metadata::read_metadata_fast(&file).map_err(|e| format!("{e:#}"))
     })
     .await
     .map_err(|e| e.to_string())?
@@ -781,7 +774,7 @@ fn save_and_read_back(
     let saved = core::metadata::write_metadata(file, metadata).map_err(|e| format!("{e:#}"))?;
     // **読み戻しも入口を通す。** ここだけ経路が違うと、★の書き戻しの
     // 「値の出所」（絞り込み spec §5）がグリッドの★と別経路になる
-    let mut read = core::metadata::read_metadata_fast(file).map_err(|e| e.to_string())?;
+    let mut read = core::metadata::read_metadata_fast(file).map_err(|e| format!("{e:#}"))?;
     read.warnings.extend(saved);
     Ok(read)
 }
@@ -863,6 +856,58 @@ mod tests {
             size_limit_exceeded: false,
             warnings: Vec::new(),
         }
+    }
+
+    // --- Exif フレームのプレビュー: 写真が変わらない限りデコードし直さない ---
+
+    #[test]
+    fn preview_source_is_reused_until_the_photo_changes() {
+        let dir = TempDir::new().unwrap();
+        let a = dir.path().join("a.jpg");
+        let b = dir.path().join("b.jpg");
+        write_real_jpeg(&a);
+        write_real_jpeg(&b);
+        let cache = PreviewSourceCache::default();
+
+        let first = cached_preview_source(&cache, &a).unwrap();
+        let again = cached_preview_source(&cache, &a).unwrap();
+        assert!(Arc::ptr_eq(&first, &again), "同じ写真なのに読み直した");
+
+        let other = cached_preview_source(&cache, &b).unwrap();
+        assert!(!Arc::ptr_eq(&first, &other), "別の写真に前の下地を使った");
+
+        // 書き換えられた写真は読み直す（中身もサイズも変える）
+        let img = image::RgbImage::from_pixel(8, 6, image::Rgb([10, 20, 30]));
+        image::DynamicImage::ImageRgb8(img).save(&b).unwrap();
+        let rewritten = cached_preview_source(&cache, &b).unwrap();
+        assert!(
+            !Arc::ptr_eq(&other, &rewritten),
+            "書き換えた写真に古い下地を使った"
+        );
+    }
+
+    // --- フォルダーツリー: 子フォルダーだけを名前順で返す ---
+
+    /// フォルダーへのシンボリックリンク（`~/Pictures -> /mnt/photos` の形）もフォルダーとして出す。
+    /// ファイル・隠しフォルダー・リンク切れは出さない
+    #[cfg(unix)]
+    #[test]
+    fn list_directory_returns_subfolders_including_symlinked_ones() {
+        let dir = TempDir::new().unwrap();
+        let target = TempDir::new().unwrap();
+        fs::create_dir(dir.path().join("b-real")).unwrap();
+        fs::create_dir(dir.path().join(".hidden")).unwrap();
+        std::os::unix::fs::symlink(target.path(), dir.path().join("A-link")).unwrap();
+        std::os::unix::fs::symlink(dir.path().join("missing"), dir.path().join("broken")).unwrap();
+        write_real_jpeg(&dir.path().join("photo.jpg"));
+
+        let names: Vec<String> = list_directory(as_str(dir.path()))
+            .unwrap()
+            .into_iter()
+            .map(|e| e.name)
+            .collect();
+
+        assert_eq!(names, ["A-link", "b-real"]);
     }
 
     // --- 入力の仕分け: 通らなかった1件でバッチ全体を落とさない ---
@@ -993,7 +1038,7 @@ mod tests {
         let requested = vec!["/photos/a.jpg".to_string(), "/photos/b.jpg".to_string()];
         let results = vec![
             Ok(succeeded("/photos/a.jpg")),
-            Err(anyhow::anyhow!(core::CANCELLED_ERROR)),
+            Err(anyhow::Error::new(core::Cancelled)),
         ];
 
         let (succeeded_results, failures) = split_results(&requested, results);

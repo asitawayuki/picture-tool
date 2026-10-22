@@ -43,6 +43,21 @@ pub(super) struct XmpSide {
     pub ms_rating_percent: Option<u16>,
 }
 
+impl XmpSide {
+    /// 4 プロパティなら対応するフィールドへ入れる（要素のテキストも属性の値も同じ規則）
+    fn assign(&mut self, uri: &[u8], local: &[u8], text: &str) {
+        match (uri, local) {
+            (u, b"Rating") if u == NS_XMP.as_bytes() => self.rating = parse_stars(text),
+            (u, b"Rating") if u == NS_MS_PHOTO.as_bytes() => {
+                self.ms_rating_percent = text.trim().parse().ok()
+            }
+            (u, b"title") if u == NS_DC.as_bytes() => self.title = cleaned(text),
+            (u, b"description") if u == NS_DC.as_bytes() => self.description = cleaned(text),
+            _ => {}
+        }
+    }
+}
+
 /// JPEG から XMP パケットの XML を取り出す。
 ///
 /// **Extended XMP（65503 バイトを超えるパケットが複数の APP1 に分割される形式）は
@@ -51,11 +66,20 @@ pub(super) struct XmpSide {
 /// （安全側に倒れている）。本ツールが扱う4プロパティ（`dc:title` / `dc:description` /
 /// `xmp:Rating` / `MicrosoftPhoto:Rating`）だけでこの上限を超えることは実運用で
 /// 極めて考えにくく、対応する必要性が薄いための判断
-pub(super) fn extract(jpeg: &Jpeg) -> Option<String> {
-    jpeg.segments_by_marker(markers::APP1).find_map(|segment| {
-        let xml = segment.contents().strip_prefix(XMP_ID)?;
-        std::str::from_utf8(xml).ok().map(str::to_owned)
-    })
+///
+/// **XMP の APP1 があるのに UTF-8 として読めない場合は `Err`。** `None`（XMP が無い）に
+/// 混ぜると、書き込み側が新しいパケットを作って既存のものを丸ごと置き換え、
+/// 他の名前空間のデータが黙って消える
+pub(super) fn extract(jpeg: &Jpeg) -> Result<Option<String>> {
+    let Some(xml) = jpeg
+        .segments_by_marker(markers::APP1)
+        .find_map(|segment| segment.contents().strip_prefix(XMP_ID))
+    else {
+        return Ok(None);
+    };
+    let xml = std::str::from_utf8(xml)
+        .map_err(|error| anyhow!("XMP が UTF-8 として読めません: {error}"))?;
+    Ok(Some(xml.to_owned()))
 }
 
 fn is_owned_name(ns: &ResolveResult<'_>, local: &[u8]) -> bool {
@@ -112,8 +136,11 @@ pub(super) fn read(packet: &str) -> Result<XmpSide> {
             Event::Start(ref start) => {
                 let local = start.local_name().as_ref().to_vec();
                 let frame = frame_of(&ns, &local, stack.last());
-                let owned_here =
-                    stack.last() == Some(&Frame::TopDescription) && is_owned_name(&ns, &local);
+                // 4 プロパティなら、その名前空間 URI（`ns` の借用を終わらせるため写す）
+                let owned_uri = (stack.last() == Some(&Frame::TopDescription))
+                    .then(|| uri_of(&ns).filter(|_| is_owned_name(&ns, &local)))
+                    .flatten()
+                    .map(<[u8]>::to_vec);
                 if frame == Frame::TopDescription {
                     read_compact_attributes(&reader, start, &mut side)?;
                     stack.push(frame);
@@ -122,29 +149,15 @@ pub(super) fn read(packet: &str) -> Result<XmpSide> {
                 // **本ツールの 4 プロパティ以外では中身を読み進めない。**
                 // ここで無条件に read_first_text を呼ぶと、x:xmpmeta や rdf:RDF の
                 // 中身まで丸ごと飲み込んで、以降が一切パースされなくなる
-                if !owned_here {
+                let Some(uri) = owned_uri else {
                     stack.push(frame);
                     continue;
-                }
-                // URI を写して ns の借用を終わらせてから &mut reader を使う。
-                // この先は read_first_text が部分木ごと消費するので stack は積まない
-                let Some(uri) = uri_of(&ns).map(<[u8]>::to_vec) else {
-                    continue;
                 };
+                // この先は read_first_text が部分木ごと消費するので stack は積まない
                 let end = start.to_end().into_owned();
                 let text = read_first_text(&mut reader, &end)?;
                 let Some(text) = text else { continue };
-                match (uri.as_slice(), local.as_slice()) {
-                    (u, b"Rating") if u == NS_XMP.as_bytes() => side.rating = parse_stars(&text),
-                    (u, b"Rating") if u == NS_MS_PHOTO.as_bytes() => {
-                        side.ms_rating_percent = text.trim().parse().ok()
-                    }
-                    (u, b"title") if u == NS_DC.as_bytes() => side.title = cleaned(&text),
-                    (u, b"description") if u == NS_DC.as_bytes() => {
-                        side.description = cleaned(&text)
-                    }
-                    _ => {}
-                }
+                side.assign(&uri, &local, &text);
             }
             _ => {}
         }
@@ -163,15 +176,7 @@ fn read_compact_attributes(
         let (ns, local) = reader.resolve_attribute(attribute.key);
         let Some(uri) = uri_of(&ns) else { continue };
         let value = attribute.unescape_value()?.into_owned();
-        match (uri, local.as_ref()) {
-            (u, b"Rating") if u == NS_XMP.as_bytes() => side.rating = parse_stars(&value),
-            (u, b"Rating") if u == NS_MS_PHOTO.as_bytes() => {
-                side.ms_rating_percent = value.trim().parse().ok()
-            }
-            (u, b"title") if u == NS_DC.as_bytes() => side.title = cleaned(&value),
-            (u, b"description") if u == NS_DC.as_bytes() => side.description = cleaned(&value),
-            _ => {}
-        }
+        side.assign(uri, local.as_ref(), &value);
     }
     Ok(())
 }
@@ -658,7 +663,7 @@ mod tests {
             jpeg.segments_by_marker(img_parts::jpeg::markers::APP1)
                 .any(|s| s.contents().starts_with(b"Exif\0\0"))
         );
-        assert_eq!(extract(&jpeg), None);
+        assert_eq!(extract(&jpeg).unwrap(), None);
     }
     use crate::metadata::EditableMetadata;
 
@@ -970,7 +975,7 @@ mod tests {
         .unwrap();
         let mut jpeg = Jpeg::from_bytes(Bytes::from(bytes)).unwrap();
         // 前提条件: いまは XMP を持っていない
-        assert_eq!(extract(&jpeg), None);
+        assert_eq!(extract(&jpeg).unwrap(), None);
 
         let packet = new_packet(&EditableMetadata {
             rating: Some(1),
@@ -981,7 +986,10 @@ mod tests {
         // 書き出して読み直しても残っていること（＝ SOS より前に入った）
         let encoded = jpeg.encoder().bytes();
         let reparsed = Jpeg::from_bytes(encoded).unwrap();
-        assert_eq!(read(&extract(&reparsed).unwrap()).unwrap().rating, Some(1));
+        assert_eq!(
+            read(&extract(&reparsed).unwrap().unwrap()).unwrap().rating,
+            Some(1)
+        );
     }
 
     /// 2 回書いてもセグメントが増えない
@@ -997,11 +1005,11 @@ mod tests {
         let mut jpeg = Jpeg::from_bytes(Bytes::from(bytes)).unwrap();
         let before = jpeg.segments_by_marker(markers::APP1).count();
         // 前提条件: すでに XMP を持っている
-        assert!(extract(&jpeg).is_some());
+        assert!(extract(&jpeg).unwrap().is_some());
 
         for stars in [1u8, 5] {
             let packet = patch(
-                &extract(&jpeg).unwrap(),
+                &extract(&jpeg).unwrap().unwrap(),
                 &EditableMetadata {
                     rating: Some(stars),
                     ..Default::default()
@@ -1012,7 +1020,10 @@ mod tests {
         }
 
         assert_eq!(jpeg.segments_by_marker(markers::APP1).count(), before);
-        assert_eq!(read(&extract(&jpeg).unwrap()).unwrap().rating, Some(5));
+        assert_eq!(
+            read(&extract(&jpeg).unwrap().unwrap()).unwrap().rating,
+            Some(5)
+        );
     }
     /// **属性を組み直すときに値を再エスケープすること。**
     /// `Attribute::value` は引用符の内側の生バイトで、元が単一引用符なら `"` を

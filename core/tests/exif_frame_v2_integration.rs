@@ -314,11 +314,10 @@ fn exif_frame_preview_is_exactly_4_5() {
     let input = write_test_jpeg(&tmp, 400, 501, "photo.jpg");
 
     let base64 = generate_exif_frame_preview_base64(
-        &input,
+        &ExifFramePreviewSource::load(&input, 400).unwrap(),
         &ExifFrameConfig::default(),
         &BackgroundColor::White,
         &default_assets(),
-        400,
     )
     .expect("preview generation must succeed")
     .base64;
@@ -342,11 +341,10 @@ fn exif_frame_preview_fits_within_the_requested_size() {
     let input = write_test_jpeg(&tmp, 2000, 2500, "big.jpg");
 
     let base64 = generate_exif_frame_preview_base64(
-        &input,
+        &ExifFramePreviewSource::load(&input, 400).unwrap(),
         &ExifFrameConfig::default(),
         &BackgroundColor::White,
         &default_assets(),
-        400,
     )
     .expect("preview generation must succeed")
     .base64;
@@ -367,16 +365,7 @@ fn exif_frame_preview_rejects_an_unreadable_file() {
     let path = tmp.path().join("broken.jpg");
     std::fs::write(&path, b"not a JPEG").unwrap();
 
-    assert!(
-        generate_exif_frame_preview_base64(
-            &path,
-            &ExifFrameConfig::default(),
-            &BackgroundColor::White,
-            &default_assets(),
-            400,
-        )
-        .is_err()
-    );
+    assert!(ExifFramePreviewSource::load(&path, 400).is_err());
 }
 
 // =========================================================

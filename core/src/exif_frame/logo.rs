@@ -82,6 +82,19 @@ fn load_svg_from_bytes(svg_data: &[u8], max: (u32, u32)) -> Result<DynamicImage>
     Ok(DynamicImage::ImageRgba8(rgba))
 }
 
+/// ロゴのファイル名候補を優先順に並べる（SVG 優先。`use_light` なら `_light` バリアントが先）。
+/// ユーザーディレクトリの探索とバンドルロゴの探索で同じ順序を使う
+fn logo_candidates(base_name: &str, use_light: bool) -> Vec<String> {
+    let mut candidates = Vec::with_capacity(4);
+    if use_light {
+        candidates.push(format!("{}_light.svg", base_name));
+        candidates.push(format!("{}_light.png", base_name));
+    }
+    candidates.push(format!("{}.svg", base_name));
+    candidates.push(format!("{}.png", base_name));
+    candidates
+}
+
 /// ロゴファイルのパスを解決（SVG優先、lightバリアント対応）
 pub fn resolve_logo_file(dir: Option<&Path>, base_name: &str, use_light: bool) -> Option<PathBuf> {
     let dir = dir?;
@@ -92,16 +105,7 @@ pub fn resolve_logo_file(dir: Option<&Path>, base_name: &str, use_light: bool) -
         return None;
     }
 
-    let candidates = if use_light {
-        vec![
-            format!("{}_light.svg", base_name),
-            format!("{}_light.png", base_name),
-            format!("{}.svg", base_name),
-            format!("{}.png", base_name),
-        ]
-    } else {
-        vec![format!("{}.svg", base_name), format!("{}.png", base_name)]
-    };
+    let candidates = logo_candidates(base_name, use_light);
 
     for candidate in candidates {
         let path = dir.join(&candidate);
@@ -144,16 +148,7 @@ pub fn resolve_and_load_logo(
     }
 
     // 2. バンドルロゴからフォールバック
-    let candidates = if use_light {
-        vec![
-            format!("{}_light.svg", base_name),
-            format!("{}_light.png", base_name),
-            format!("{}.svg", base_name),
-            format!("{}.png", base_name),
-        ]
-    } else {
-        vec![format!("{}.svg", base_name), format!("{}.png", base_name)]
-    };
+    let candidates = logo_candidates(base_name, use_light);
     for candidate in candidates {
         if let Ok(img) = load_bundled_logo(&candidate, max) {
             return Some(img);

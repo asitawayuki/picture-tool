@@ -136,7 +136,7 @@ pub fn readable_font(raw: &str) -> Result<PathBuf, String> {
 
 fn readable_font_in(fonts_dir: Option<&Path>, raw: &str) -> Result<PathBuf, String> {
     let root = fonts_dir
-        .and_then(|dir| fs_canonicalize(dir).ok())
+        .and_then(|dir| std::fs::canonicalize(dir).ok())
         .ok_or_else(|| format!("No user font directory to read {} from", raw))?;
 
     let resolved = canonicalize(raw)?;
@@ -240,7 +240,7 @@ fn canonicalize(raw: &str) -> Result<PathBuf, String> {
     if raw.is_empty() {
         return Err("Empty path".to_string());
     }
-    fs_canonicalize(Path::new(raw)).map_err(|e| format!("Cannot access {}: {}", raw, e))
+    std::fs::canonicalize(Path::new(raw)).map_err(|e| format!("Cannot access {}: {}", raw, e))
 }
 
 /// まだ存在しないパスを、実在する祖先を基準に解決する
@@ -261,7 +261,7 @@ fn resolve_for_creation(raw: &str) -> Result<PathBuf, String> {
     let mut cursor = requested;
 
     loop {
-        if let Ok(base) = fs_canonicalize(cursor) {
+        if let Ok(base) = std::fs::canonicalize(cursor) {
             let mut resolved = base;
             for name in tail.iter().rev() {
                 resolved.push(name);
@@ -277,11 +277,6 @@ fn resolve_for_creation(raw: &str) -> Result<PathBuf, String> {
             .parent()
             .ok_or_else(|| format!("Cannot resolve path: {}", raw))?;
     }
-}
-
-/// `dunce` 相当の正規化は行わない薄いラッパー。テストから差し替えやすくするためだけに分けている。
-fn fs_canonicalize(path: &Path) -> std::io::Result<PathBuf> {
-    std::fs::canonicalize(path)
 }
 
 #[cfg(test)]

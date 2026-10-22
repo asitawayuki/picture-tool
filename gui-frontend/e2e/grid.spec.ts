@@ -173,6 +173,35 @@ test.describe("写真グリッド", () => {
     await expect(viewer).toHaveCount(0);
   });
 
+  test("プレビューを連打で送っても、フル画像は止まった先の写真だけ取りに行く", async ({ page }) => {
+    // フル画像は 1 枚数百 ms のデコードなので、通過しただけの写真まで取りに行くと
+    // 止まった先の 1 枚がその後ろに並んで遅れる
+    const fullImageRequests = () =>
+      page.evaluate(() =>
+        ((window as any).__stubCalls as { cmd: string; args: any }[])
+          .filter((c) => c.cmd === "get_full_image")
+          .map((c) => c.args.path)
+      );
+    const grid = page.getByRole("listbox", { name: "写真" });
+    await grid.getByRole("option").first().dblclick();
+    const viewer = page.getByRole("dialog", { name: "画像プレビュー" });
+    // 前提条件: 開いた 1 枚目は取りに行っている
+    await expect.poll(fullImageRequests).toEqual(["/photos/0.jpg"]);
+
+    // キーリピート相当（約 30 ms 間隔で 10 回）。間隔を空けるのは、同じタスク内で
+    // 送ると $effect がまとめて 1 回しか走らず、何も検査できないため
+    await page.evaluate(async () => {
+      for (let i = 0; i < 10; i++) {
+        window.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowRight" }));
+        await new Promise((r) => setTimeout(r, 30));
+      }
+    });
+    await expect(viewer.getByText("11 / 3000")).toBeVisible();
+
+    await expect.poll(fullImageRequests).toContain("/photos/10.jpg");
+    expect(await fullImageRequests()).toEqual(["/photos/0.jpg", "/photos/10.jpg"]);
+  });
+
   test("プレビューの矩形ドラッグで拡大し、クリックで解除する", async ({ page }) => {
     // ズームは Task 14 で「移設したが触っていない」唯一の部分。
     // 壊れていたら写し間違いなので、ここだけは実際にドラッグして見る

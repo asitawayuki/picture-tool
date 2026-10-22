@@ -11,10 +11,10 @@
 //! | 検証・収集 | [`validate_config`], [`is_supported_image`], [`collect_image_files`] |
 //! | 変換 | [`process_image`], [`process_batch`]（[`ProgressCallback`] で進捗とキャンセル） |
 //! | EXIF | [`read_exif_info`], [`apply_orientation`], [`oriented_dimensions`], [`open_image_oriented`], [`image_dimensions_oriented`] |
-//! | base64 出力（GUI 用） | [`generate_thumbnail_base64`], [`generate_full_image_base64`], [`generate_exif_frame_preview_base64`] |
+//! | base64 出力（GUI 用） | [`generate_thumbnail_base64`], [`generate_full_image_base64`], [`generate_exif_frame_preview_base64`]（下地は [`ExifFramePreviewSource`]） |
 //! | Exif フレーム | [`exif_frame::render_exif_frame`], [`exif_frame::AssetDirs`], [`exif_frame::ExifAssets`], [`exif_frame::preset`] |
 //! | メタデータ編集 | [`metadata::read_metadata`], [`metadata::write_metadata`], [`metadata::EditableMetadata`] |
-//! | 定数 | [`CANCELLED_ERROR`]（着手前にキャンセルされた印）, [`THUMBNAIL_MAX_DIMENSION`] |
+//! | 定数・型 | [`Cancelled`]（着手前にキャンセルされた印のエラー型）, [`THUMBNAIL_MAX_DIMENSION`] |
 //!
 //! # 呼び出し側が守ること
 //!
@@ -43,7 +43,7 @@ pub mod model_map;
 mod output_exif;
 
 use anyhow::{Context, Result};
-use image::{DynamicImage, GenericImageView, RgbaImage};
+use image::{DynamicImage, GenericImageView};
 use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 use std::fs::{self, File};
@@ -135,12 +135,13 @@ pub struct ExifInfo {
     pub orientation: Option<u16>,
 }
 
-/// 進捗コールバック: (current, total) -> bool（falseでキャンセル）
+/// 進捗コールバック: (current, total, いま終わったファイル) -> bool（falseでキャンセル）
 ///
 /// `process_batch` は rayon で並列処理するため、このコールバックは**複数のワーカースレッドから
 /// 同時に呼ばれる**。`current` は完了順の通し番号であり、`files` の添字とも昇順とも対応しない
-/// （例: 3, 1, 2 の順で呼ばれうる）。実装側で共有状態を触る場合は自前で同期すること。
-pub type ProgressCallback = Box<dyn Fn(usize, usize) -> bool + Send + Sync>;
+/// （例: 3, 1, 2 の順で呼ばれうる）。終わったファイルは `current` から引かず、3 つ目の引数を使う。
+/// 実装側で共有状態を触る場合は自前で同期すること。
+pub type ProgressCallback = Box<dyn Fn(usize, usize, &Path) -> bool + Send + Sync>;
 
 /// `collect_image_files` の結果
 #[derive(Debug, Default)]
@@ -439,9 +440,12 @@ pub fn process_image(
         _ => img,
     };
 
-    let converted = match config.mode {
-        ConversionMode::Crop => convert_aspect_ratio_crop(img),
-        ConversionMode::Pad => {
+    // `img` を各腕へ move して、変換が済んだ時点で手放す。フレーム描画は借りるだけなので、
+    // move しないと原寸の画像がエンコード（最も長い区間）の間も残り、並列処理では
+    // その分がコア数倍になる
+    let converted = match (config.mode, img) {
+        (ConversionMode::Crop, img) => convert_aspect_ratio_crop(img),
+        (ConversionMode::Pad, img) => {
             if let (Some(ef_config), Some(assets)) = (exif_frame_config, assets) {
                 match exif_frame::render_exif_frame(
                     &img,
@@ -467,7 +471,7 @@ pub fn process_image(
                 convert_aspect_ratio_pad(img, config.bg_color)
             }
         }
-        ConversionMode::Quality => img,
+        (ConversionMode::Quality, img) => img,
     };
 
     // 最終: crop には前段が無いのでここがすべてを担う。pad では no-op になるが、
@@ -503,7 +507,7 @@ pub fn process_image(
 
     let max_size_bytes = config.max_size_mb * 1024 * 1024;
     let encoded = encode::encode_within_size_limit(
-        &converted.to_rgb8(),
+        &converted.into_rgb8(),
         config.quality,
         max_size_bytes,
         &encode::Embed {
@@ -547,14 +551,24 @@ pub fn process_image(
     })
 }
 
-/// バッチ処理（並列）
-/// キャンセル要求のため着手されなかった、を表すエラーメッセージ
+/// キャンセル要求のため着手されなかった、を表すエラー
 ///
 /// `process_batch` は入力と同数・同順の結果を返すので、キャンセル後の分も
 /// `Err` として並ぶ。呼び出し側が「変換に失敗した」と「そもそも着手していない」を
-/// 区別できるよう、文言を定数として公開する（GUI はこれを未処理として扱う）。
-pub const CANCELLED_ERROR: &str = "Processing cancelled";
+/// 区別できるよう、型として公開する（`e.downcast_ref::<Cancelled>()` で判定する。
+/// GUI はこれを未処理として扱う）。文言の一致で見分けないこと。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Cancelled;
 
+impl std::fmt::Display for Cancelled {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("Processing cancelled")
+    }
+}
+
+impl std::error::Error for Cancelled {}
+
+/// バッチ処理（並列）
 pub fn process_batch(
     files: &[PathBuf],
     output_folder: &Path,
@@ -571,14 +585,14 @@ pub fn process_batch(
         .par_iter()
         .map(|path| {
             if cancelled.load(Ordering::Relaxed) {
-                return Err(anyhow::anyhow!(CANCELLED_ERROR));
+                return Err(anyhow::Error::new(Cancelled));
             }
 
             let result = process_image(path, output_folder, config, exif_frame_config, assets);
 
             let current = processed_count.fetch_add(1, Ordering::SeqCst) + 1;
             if let Some(ref cb) = on_progress
-                && !cb(current, total)
+                && !cb(current, total, path)
             {
                 cancelled.store(true, Ordering::Relaxed);
             }
@@ -603,8 +617,14 @@ pub fn generate_thumbnail_base64(path: &Path, max_dimension: u32) -> Result<Stri
     let img = open_image_oriented(path)
         .with_context(|| format!("Failed to open image for thumbnail: {}", path.display()))?;
 
-    let thumbnail = img.thumbnail(max_dimension, max_dimension);
-    let jpeg_bytes = encode::encode_jpeg(&thumbnail.to_rgb8(), 75, &encode::Embed::NONE)?;
+    // `thumbnail` は小さい画像を拡大するので、縮小が要るときだけ通す
+    let (w, h) = img.dimensions();
+    let thumbnail = if w > max_dimension || h > max_dimension {
+        img.thumbnail(max_dimension, max_dimension)
+    } else {
+        img
+    };
+    let jpeg_bytes = encode::encode_jpeg(&thumbnail.into_rgb8(), 75, &encode::Embed::NONE)?;
 
     Ok(base64::engine::general_purpose::STANDARD.encode(&jpeg_bytes))
 }
@@ -624,33 +644,51 @@ pub struct ExifFramePreview {
     pub warnings: Vec<String>,
 }
 
+/// Exif フレームのプレビューの下地。向きを適用して縮小した写真と、その Exif。
+///
+/// **デコードと縮小がプレビュー生成の大半を占める**（63MP で全体 523 ms のうち約 430 ms）。
+/// 変わるのはフレームの設定だけなので、呼び出し側が写真ごとに保持して
+/// [`generate_exif_frame_preview_base64`] に何度でも渡せるよう分けてある
+#[derive(Debug, Clone)]
+pub struct ExifFramePreviewSource {
+    image: DynamicImage,
+    exif: ExifInfo,
+}
+
+impl ExifFramePreviewSource {
+    /// 長辺を `max_dimension`（1〜1024 に丸める）へ縮小して読み込む
+    pub fn load(path: &Path, max_dimension: u32) -> Result<Self> {
+        let max_dimension = max_dimension.clamp(1, 1024);
+        // Orientation を適用してから縮小する。生の image::open だと縦横が実際の
+        // 処理結果と食い違い、auto_placement が別の辺を選んでしまう。
+        // Exif は 1 回だけ読んで向きとフレームの両方に使う（`open_image_oriented` と同じ扱い）
+        let exif = read_exif_info(path).unwrap_or_default();
+        let img = apply_orientation(decode::open(path, decode::sniff(path)?)?, exif.orientation);
+        let image = img.resize(
+            max_dimension,
+            max_dimension,
+            image::imageops::FilterType::Triangle,
+        );
+        Ok(Self { image, exif })
+    }
+}
+
 /// Exifフレームのプレビューをbase64エンコードされたJPEG文字列として生成
 ///
 /// GUI 専用ではなく core に置く。以前は「縮小 → 描画 → JPEG → base64」の一連が
 /// Tauri コマンドの中だけに書かれており、CLI からプレビューを作れず、
 /// GUI が `image` / `base64` に直接依存する原因にもなっていた（S6-M16）。
 pub fn generate_exif_frame_preview_base64(
-    path: &Path,
+    source: &ExifFramePreviewSource,
     config: &exif_frame::ExifFrameConfig,
     bg_color: &BackgroundColor,
     assets: &exif_frame::ExifAssets,
-    max_dimension: u32,
 ) -> Result<ExifFramePreview> {
     use base64::Engine as _;
-    let max_dimension = max_dimension.clamp(1, 1024);
 
-    // Orientation を適用してから縮小する。生の image::open だと縦横が実際の
-    // 処理結果と食い違い、auto_placement が別の辺を選んでしまう。
-    let img = open_image_oriented(path)?;
-    let thumbnail = img.resize(
-        max_dimension,
-        max_dimension,
-        image::imageops::FilterType::Triangle,
-    );
-
-    let exif = read_exif_info(path).unwrap_or_default();
-    let framed = exif_frame::render_exif_frame(&thumbnail, &exif, config, bg_color, assets)?;
-    let jpeg_bytes = encode::encode_jpeg(&framed.image.to_rgb8(), 85, &encode::Embed::NONE)?;
+    let framed =
+        exif_frame::render_exif_frame(&source.image, &source.exif, config, bg_color, assets)?;
+    let jpeg_bytes = encode::encode_jpeg(&framed.image.into_rgb8(), 85, &encode::Embed::NONE)?;
 
     Ok(ExifFramePreview {
         base64: base64::engine::general_purpose::STANDARD.encode(&jpeg_bytes),
@@ -752,14 +790,16 @@ fn convert_aspect_ratio_pad(img: DynamicImage, bg_color: BackgroundColor) -> Dyn
         return img;
     }
 
-    let mut canvas = RgbaImage::from_pixel(new_width, new_height, bg_color.to_rgba());
+    // 入力は `flatten_alpha` 済みで不透明なので、RGB のまま貼るだけでよい（合成は要らない）
+    let [r, g, b, _] = bg_color.to_rgba().0;
+    let mut canvas = image::RgbImage::from_pixel(new_width, new_height, image::Rgb([r, g, b]));
 
     let x = (new_width.saturating_sub(width)) / 2;
     let y = (new_height.saturating_sub(height)) / 2;
 
-    image::imageops::overlay(&mut canvas, &img.to_rgba8(), x.into(), y.into());
+    image::imageops::replace(&mut canvas, &img.into_rgb8(), x.into(), y.into());
 
-    DynamicImage::ImageRgba8(canvas)
+    DynamicImage::ImageRgb8(canvas)
 }
 
 /// 出力ファイルを新規作成し、内容を書き込んで確定したパスを返す（重複時は連番）
@@ -1283,7 +1323,7 @@ mod tests {
         let total_seen = Arc::new(AtomicUsize::new(0));
         let total_clone = Arc::clone(&total_seen);
 
-        let cb: ProgressCallback = Box::new(move |current, total| {
+        let cb: ProgressCallback = Box::new(move |current, total, _path| {
             max_clone.fetch_max(current, Ordering::SeqCst);
             total_clone.store(total, Ordering::SeqCst);
             true
@@ -1297,6 +1337,36 @@ mod tests {
             "最大currentは3であるべき"
         );
         assert_eq!(total_seen.load(Ordering::SeqCst), 3, "totalは3であるべき");
+    }
+
+    /// 進捗の「いま終わった 1 枚」は、`current` ではなく渡されたパスで示す。
+    /// 並列処理なので `current` は入力の添字と対応しない（GUI がファイル名を取り違えていた）
+    #[test]
+    fn process_batch_progress_callback_names_each_finished_file_once() {
+        let dir = tempfile::tempdir().unwrap();
+        let out = tempfile::tempdir().unwrap();
+        let files: Vec<PathBuf> = (0..8)
+            .map(|i| {
+                let p = dir.path().join(format!("named_{}.jpg", i));
+                create_test_image(&p, 400, 500);
+                p
+            })
+            .collect();
+
+        let seen = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let seen_clone = Arc::clone(&seen);
+        let cb: ProgressCallback = Box::new(move |_current, _total, path| {
+            seen_clone.lock().unwrap().push(path.to_path_buf());
+            true
+        });
+
+        process_batch(&files, out.path(), &test_config(), None, None, Some(cb));
+
+        let mut seen = seen.lock().unwrap().clone();
+        seen.sort();
+        let mut expected = files.clone();
+        expected.sort();
+        assert_eq!(seen, expected);
     }
 
     #[test]
@@ -1315,7 +1385,7 @@ mod tests {
             .collect();
 
         // 1枚処理完了後にキャンセル
-        let cb: ProgressCallback = Box::new(|current, _total| current < 1);
+        let cb: ProgressCallback = Box::new(|current, _total, _path| current < 1);
 
         let results = process_batch(&files, out.path(), &test_config(), None, None, Some(cb));
         let cancelled_count = results
@@ -1366,6 +1436,24 @@ mod tests {
             w,
             h
         );
+    }
+
+    /// 上限より小さい画像は拡大しない（`generate_full_image_base64` と同じ）。
+    /// 拡大しても情報は増えず、転送とキャッシュの量だけが増える
+    #[test]
+    fn generate_thumbnail_does_not_enlarge_a_smaller_image() {
+        let dir = tempfile::tempdir().unwrap();
+        let input = dir.path().join("small.jpg");
+        create_test_image(&input, 200, 100);
+
+        let base64_str = generate_thumbnail_base64(&input, 1024).unwrap();
+
+        use base64::Engine as _;
+        let bytes = base64::engine::general_purpose::STANDARD
+            .decode(&base64_str)
+            .unwrap();
+        let thumb = image::load_from_memory(&bytes).unwrap();
+        assert_eq!(thumb.dimensions(), (200, 100));
     }
 
     #[test]

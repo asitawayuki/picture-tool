@@ -1,6 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 import type {
-  FileEntry,
+  FolderEntry,
   ImageEntry,
   ProcessingConfig,
   ProcessBatchResponse,
@@ -12,7 +12,7 @@ import type {
   MetadataRead,
 } from "./types";
 
-export async function listDirectory(path: string): Promise<FileEntry[]> {
+export async function listDirectory(path: string): Promise<FolderEntry[]> {
   return invoke("list_directory", { path });
 }
 

@@ -28,7 +28,7 @@ import type {
   ExifFrameConfig,
   ExifInfo,
   ExifPosition,
-  FileEntry,
+  FolderEntry,
   FontInfo,
   ImageEntry,
   MetadataRead,
@@ -42,9 +42,7 @@ import type {
 } from "./types";
 
 /** フォルダーツリーの 1 行 */
-export const fileEntry: FileEntry = {
-  is_dir: true,
-  is_image: false,
+export const folderEntry: FolderEntry = {
   name: "photos",
   path: "/home/user/photos",
 };

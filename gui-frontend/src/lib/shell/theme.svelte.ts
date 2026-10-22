@@ -11,6 +11,7 @@ import {
   type ColorScheme,
   type ThemePreference,
 } from "./theme";
+import { readStorage, writeStorage } from "./storage";
 
 /**
  * テーマ設定の保持・永続化と、OS 追従の購読。
@@ -19,34 +20,18 @@ import {
  * Linux では WebKitGTK の `prefers-color-scheme` が GNOME の設定を映さないため
  * （実測の詳細は `gui/src/theme.rs` 冒頭）。OS の値は Rust から貰う。
  *
- * localStorage が使えない環境でも動く（`layout.svelte.ts` と同じ扱い。
- * 読めなければ既定、書けなければ黙って捨てる）。
+ * localStorage が使えない環境でも動く（`storage.ts`。読めなければ既定、書けなければ
+ * 黙って捨てる）。
  */
-function read(key: string): string | null {
-  try {
-    return localStorage.getItem(key);
-  } catch {
-    return null;
-  }
-}
-
-function write(key: string, value: string): void {
-  try {
-    localStorage.setItem(key, value);
-  } catch {
-    // 保存できないだけで操作は続けられる
-  }
-}
-
 /** Tauri の外（`vite dev` / e2e）ではメディアクエリしか手がかりが無い */
 const DARK_QUERY = "(prefers-color-scheme: dark)";
 
 export function createTheme() {
-  let preference = $state<ThemePreference>(parseTheme(read(THEME_STORAGE_KEY)));
+  let preference = $state<ThemePreference>(parseTheme(readStorage(THEME_STORAGE_KEY)));
 
   // 起動直後は Rust の応答が来るまで OS の値が分からない。前回の値を先に当てて、
   // ダークのデスクトップで白い画面が一瞬出るのを防ぐ（外れても次に訂正される）
-  let osScheme = $state<ColorScheme>(parseOsScheme(read(OS_SCHEME_STORAGE_KEY)));
+  let osScheme = $state<ColorScheme>(parseOsScheme(readStorage(OS_SCHEME_STORAGE_KEY)));
 
   let resolved = $derived(resolveTheme(preference, osScheme));
 
@@ -77,7 +62,7 @@ export function createTheme() {
     // 素通しにするとウィンドウへ同じテーマを 2 度渡すことになる
     if (next === osScheme) return;
     osScheme = next;
-    write(OS_SCHEME_STORAGE_KEY, next);
+    writeStorage(OS_SCHEME_STORAGE_KEY, next);
     commit();
   }
 
@@ -94,7 +79,7 @@ export function createTheme() {
     /** rail のボタン。押すたび システム → ライト → ダーク と巡る */
     cycle(): void {
       preference = nextTheme(preference);
-      write(THEME_STORAGE_KEY, preference);
+      writeStorage(THEME_STORAGE_KEY, preference);
       commit();
     },
 

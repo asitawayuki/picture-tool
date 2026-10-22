@@ -496,7 +496,7 @@
 <!-- 絞り込みと並び順。状態は App が持ち（`visibleImages` の出所）、
      見た目は PhotoGrid → GridHeader へ snippet で降ろす -->
 {#snippet gridFilters()}
-  <GridFilterBar bind:query={searchQuery} sort={gridSort} bind:ratingPreset />
+  <GridFilterBar bind:query={searchQuery} bind:sort={gridSort} bind:ratingPreset />
 {/snippet}
 
 {#snippet collapsedPrimaryAction()}

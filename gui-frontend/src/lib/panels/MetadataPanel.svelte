@@ -50,14 +50,21 @@
   let exif = $state<ExifInfo | null>(null);
   let exifToken = 0;
 
+  // パネル先頭のサムネイルはグリッドの index 範囲に入らないので pinned。
+  // 撮影情報の取得とは effect を分ける ── 要求はキャッシュの有無を読むので、
+  // サムネイルが届くたびに再実行される（同じ effect だと撮影情報まで取り直す）。
+  // 再実行されること自体は、LRU で追い出された後の再要求として要る
+  $effect(() => {
+    const path = image?.path;
+    if (path) onRequestThumbnail(path, THUMB, "pinned", -1);
+  });
+
   $effect(() => {
     const path = image?.path ?? null;
     if (!path) {
       exif = null;
       return;
     }
-    // パネル先頭のサムネイルはグリッドの index 範囲に入らないので pinned
-    onRequestThumbnail(path, THUMB, "pinned", -1);
 
     const token = ++exifToken;
     getExifInfo(path)
