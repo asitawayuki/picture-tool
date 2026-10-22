@@ -77,11 +77,25 @@
   let loadToken = 0;
   let imageErrorReported = false;
 
+  /**
+   * 送りが止まるのを待ってから取りに行く（ms）。フル画像は 1 枚数百 ms のデコードで、
+   * キーリピート（約 30 ms 間隔）で通過しただけの写真まで取りに行くと、
+   * 止まった先の 1 枚がその後ろに並んで遅れる。単発の送りでは体感できない長さにする
+   */
+  const NAV_SETTLE_MS = 80;
+
   $effect(() => {
     const path = image.path;
     const token = ++loadToken;
-    loadFullImage(path, token);
-    loadExifInfo(path, token);
+    // 表示は待たずに消す。前の写真が新しい写真の名前のまま残らないように
+    loading = true;
+    fullImageData = null;
+    exifInfo = null;
+    const timer = setTimeout(() => {
+      loadFullImage(path, token);
+      loadExifInfo(path, token);
+    }, NAV_SETTLE_MS);
+    return () => clearTimeout(timer);
   });
 
   $effect(() => {
@@ -90,8 +104,6 @@
   });
 
   async function loadFullImage(path: string, token: number) {
-    loading = true;
-    fullImageData = null;
     try {
       const maxW = Math.min(window.innerWidth - 80, 2560);
       const maxH = Math.min(window.innerHeight - 120, 1600);
@@ -111,7 +123,6 @@
   }
 
   async function loadExifInfo(path: string, token: number) {
-    exifInfo = null;
     try {
       const info = await getExifInfo(path);
       if (token !== loadToken) return;
