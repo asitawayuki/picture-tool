@@ -35,32 +35,20 @@ struct Segment<'a> {
 
 /// `head`（SOI から SOS の直前まで）をセグメントに分ける。
 ///
-/// 走査の規則は `atomic::scan_offset` と同じ（0xFF の fill byte を読み飛ばす）。
-/// 入力は webview 由来のパスから読んだバイト列なので、添字は長さで押さえてから触る。
+/// 走査の規則は `atomic::scan_offset` と同じ（`jpeg::read_segment`）。
 fn segments(head: &[u8]) -> Result<Vec<Segment<'_>>> {
     let mut found = Vec::new();
     let mut cursor = 2; // SOI をとばす
     while cursor < head.len() {
-        if head[cursor] != 0xFF {
-            bail!("JPEG のセグメント境界が壊れています（offset {}）", cursor);
-        }
-        let mut marker_at = cursor + 1;
-        while marker_at < head.len() && head[marker_at] == 0xFF {
-            marker_at += 1;
-        }
-        if marker_at + 2 >= head.len() {
-            bail!("JPEG のセグメントが途中で切れています（offset {}）", cursor);
-        }
-        let length = u16::from_be_bytes([head[marker_at + 1], head[marker_at + 2]]) as usize;
-        let end = marker_at + 1 + length;
-        if length < 2 || end > head.len() {
+        let raw = super::jpeg::read_segment(head, cursor)?;
+        if raw.length < 2 || raw.end > head.len() {
             bail!("JPEG のセグメント長が壊れています（offset {}）", cursor);
         }
         found.push(Segment {
-            marker: head[marker_at],
-            contents: &head[marker_at + 3..end],
+            marker: raw.marker,
+            contents: &head[raw.contents_start..raw.end],
         });
-        cursor = end;
+        cursor = raw.end;
     }
     Ok(found)
 }

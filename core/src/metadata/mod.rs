@@ -12,6 +12,7 @@
 mod atomic;
 mod exif;
 mod header;
+mod jpeg;
 mod preserve;
 mod xmp;
 

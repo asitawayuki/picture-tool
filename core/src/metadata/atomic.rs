@@ -27,33 +27,16 @@ use std::sync::atomic::{AtomicU64, Ordering};
 /// 本ツールは APP セグメントしか触らないので、ここから後ろは**必ず**不変のはずである。
 /// それを機械的に確かめるための位置。
 ///
-/// **入力は webview 由来のパスから読んだバイト列で、壊れていることも切り詰められている
-/// こともある。** 添字は必ず長さで押さえてから触り、境界外で panic しない
+/// 走査の規則は `jpeg::read_segment`。壊れた入力・切り詰められた入力は panic せず `Err`
 /// （spike 版の `scan_start` は `assert!` と生の添字で書いてあり、ここでは踏襲しない）。
 pub(super) fn scan_offset(bytes: &[u8]) -> Result<usize> {
     let mut cursor = 2; // SOI をとばす
     loop {
-        if cursor + 1 >= bytes.len() {
-            bail!("SOS が見つかりません（JPEG が途中で切れている可能性があります）");
-        }
-        if bytes[cursor] != 0xFF {
-            bail!("JPEG のセグメント境界が壊れています（offset {}）", cursor);
-        }
-        // 0xFF のパディング（fill byte）を読み飛ばす
-        let mut marker_at = cursor + 1;
-        while marker_at < bytes.len() && bytes[marker_at] == 0xFF {
-            marker_at += 1;
-        }
-        // マーカー本体と、それに続く 2 バイトの長さまで読めることを確かめる
-        if marker_at + 2 >= bytes.len() {
-            bail!("SOS が見つかりません（JPEG が途中で切れている可能性があります）");
-        }
-        if bytes[marker_at] == 0xDA {
+        let segment = super::jpeg::read_segment(bytes, cursor)?;
+        if segment.marker == 0xDA {
             return Ok(cursor);
         }
-        let length = u16::from_be_bytes([bytes[marker_at + 1], bytes[marker_at + 2]]) as usize;
-        // `marker_at >= cursor + 1` なので cursor は必ず 2 以上進む（無限ループにならない）
-        cursor = marker_at + 1 + length;
+        cursor = segment.end;
     }
 }
 
