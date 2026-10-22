@@ -440,9 +440,12 @@ pub fn process_image(
         _ => img,
     };
 
-    let converted = match config.mode {
-        ConversionMode::Crop => convert_aspect_ratio_crop(img),
-        ConversionMode::Pad => {
+    // `img` を各腕へ move して、変換が済んだ時点で手放す。フレーム描画は借りるだけなので、
+    // move しないと原寸の画像がエンコード（最も長い区間）の間も残り、並列処理では
+    // その分がコア数倍になる
+    let converted = match (config.mode, img) {
+        (ConversionMode::Crop, img) => convert_aspect_ratio_crop(img),
+        (ConversionMode::Pad, img) => {
             if let (Some(ef_config), Some(assets)) = (exif_frame_config, assets) {
                 match exif_frame::render_exif_frame(
                     &img,
@@ -468,7 +471,7 @@ pub fn process_image(
                 convert_aspect_ratio_pad(img, config.bg_color)
             }
         }
-        ConversionMode::Quality => img,
+        (ConversionMode::Quality, img) => img,
     };
 
     // 最終: crop には前段が無いのでここがすべてを担う。pad では no-op になるが、
@@ -504,7 +507,7 @@ pub fn process_image(
 
     let max_size_bytes = config.max_size_mb * 1024 * 1024;
     let encoded = encode::encode_within_size_limit(
-        &converted.to_rgb8(),
+        &converted.into_rgb8(),
         config.quality,
         max_size_bytes,
         &encode::Embed {
