@@ -43,7 +43,7 @@ pub mod model_map;
 mod output_exif;
 
 use anyhow::{Context, Result};
-use image::{DynamicImage, GenericImageView, RgbaImage};
+use image::{DynamicImage, GenericImageView};
 use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 use std::fs::{self, File};
@@ -762,14 +762,16 @@ fn convert_aspect_ratio_pad(img: DynamicImage, bg_color: BackgroundColor) -> Dyn
         return img;
     }
 
-    let mut canvas = RgbaImage::from_pixel(new_width, new_height, bg_color.to_rgba());
+    // 入力は `flatten_alpha` 済みで不透明なので、RGB のまま貼るだけでよい（合成は要らない）
+    let [r, g, b, _] = bg_color.to_rgba().0;
+    let mut canvas = image::RgbImage::from_pixel(new_width, new_height, image::Rgb([r, g, b]));
 
     let x = (new_width.saturating_sub(width)) / 2;
     let y = (new_height.saturating_sub(height)) / 2;
 
-    image::imageops::overlay(&mut canvas, &img.to_rgba8(), x.into(), y.into());
+    image::imageops::replace(&mut canvas, &img.into_rgb8(), x.into(), y.into());
 
-    DynamicImage::ImageRgba8(canvas)
+    DynamicImage::ImageRgb8(canvas)
 }
 
 /// 出力ファイルを新規作成し、内容を書き込んで確定したパスを返す（重複時は連番）
