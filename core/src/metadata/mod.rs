@@ -196,10 +196,16 @@ pub fn read_metadata_bytes(raw: Vec<u8>, path: &Path) -> Result<MetadataRead> {
     };
     let exif_side = exif::read(&exif_meta);
 
-    let xmp_side = match xmp::extract(&jpeg) {
-        Some(packet) => xmp::read(&packet)?,
-        None => xmp::XmpSide::default(),
-    };
+    // XMP も Exif と同じく、読めなくても読み取り自体は成立させて警告に積む
+    // （書き込み側の `build` は同じ状況で Err にする）
+    let xmp_side =
+        match xmp::extract(&jpeg).and_then(|packet| packet.map(|p| xmp::read(&p)).transpose()) {
+            Ok(side) => side.unwrap_or_default(),
+            Err(error) => {
+                warnings.push(format!("XMP を解析できませんでした: {error:#}"));
+                xmp::XmpSide::default()
+            }
+        };
 
     let title = pick(
         "タイトル",
@@ -387,7 +393,9 @@ fn build(original: &[u8], values: &EditableMetadata) -> Result<Vec<u8>> {
     // （`buffer` は Exif の書き込み先を兼ねる）
     let mut buffer = original.to_vec();
     let jpeg = Jpeg::from_bytes(Bytes::from(original.to_vec())).context("JPEG として読めません")?;
-    let packet = match xmp::extract(&jpeg) {
+    let packet = match xmp::extract(&jpeg)
+        .context("既存の XMP を読めないため書き込みを中止しました")?
+    {
         Some(existing) => xmp::patch(&existing, values)?,
         None => xmp::new_packet(values),
     };
@@ -538,7 +546,9 @@ mod tests {
         let raw = std::fs::read(path).unwrap();
         let meta = Metadata::new_from_vec(&raw, FileExtension::JPEG).unwrap();
         let jpeg = Jpeg::from_bytes(Bytes::from(raw)).unwrap();
-        let packet = xmp::extract(&jpeg).expect("XMP パケットが書かれていない");
+        let packet = xmp::extract(&jpeg)
+            .unwrap()
+            .expect("XMP パケットが書かれていない");
         (exif::read(&meta), xmp::read(&packet).unwrap())
     }
 
@@ -753,7 +763,7 @@ mod tests {
     fn overwrite_xmp_only(path: &std::path::Path, values: &EditableMetadata) {
         let bytes = std::fs::read(path).unwrap();
         let mut jpeg = Jpeg::from_bytes(Bytes::from(bytes)).unwrap();
-        let packet = match xmp::extract(&jpeg) {
+        let packet = match xmp::extract(&jpeg).unwrap() {
             Some(existing) => xmp::patch(&existing, values).unwrap(),
             None => xmp::new_packet(values),
         };
@@ -807,8 +817,9 @@ mod tests {
         let before = std::fs::read(&path).unwrap();
         let before_scan = before[atomic::scan_offset(&before).unwrap()..].to_vec();
         // 前提条件: このフィクスチャは実際に crs: のデータを持っている
-        let before_packet =
-            xmp::extract(&Jpeg::from_bytes(Bytes::from(before.clone())).unwrap()).unwrap();
+        let before_packet = xmp::extract(&Jpeg::from_bytes(Bytes::from(before.clone())).unwrap())
+            .unwrap()
+            .unwrap();
         assert!(
             before_packet.contains("crs:Exposure2012"),
             "前提条件が崩れている"
@@ -829,7 +840,9 @@ mod tests {
             after[atomic::scan_offset(&after).unwrap()..],
             before_scan[..]
         );
-        let after_packet = xmp::extract(&Jpeg::from_bytes(Bytes::from(after)).unwrap()).unwrap();
+        let after_packet = xmp::extract(&Jpeg::from_bytes(Bytes::from(after)).unwrap())
+            .unwrap()
+            .unwrap();
         assert!(
             after_packet.contains("crs:Exposure2012"),
             "現像設定が消えた"
@@ -838,6 +851,96 @@ mod tests {
         let read = read_metadata(&path).unwrap();
         assert_eq!(read.metadata.title.as_deref(), Some("夕暮れの港"));
         assert_eq!(read.metadata.rating, Some(5));
+    }
+
+    /// 既存の XMP APP1 の `</x:xmpmeta>` の直前に `insert` を差し込む
+    fn corrupt_xmp(path: &std::path::Path, insert: &[u8]) {
+        let bytes = std::fs::read(path).unwrap();
+        let mut jpeg = Jpeg::from_bytes(Bytes::from(bytes)).unwrap();
+        let segment = jpeg
+            .segments_mut()
+            .iter_mut()
+            .find(|s| {
+                s.marker() == img_parts::jpeg::markers::APP1
+                    && s.contents().starts_with(xmp::XMP_ID)
+            })
+            .expect("前提条件が崩れている: XMP APP1 が無い");
+        let mut contents = segment.contents().to_vec();
+        let at = contents
+            .windows(b"</x:xmpmeta>".len())
+            .position(|w| w == b"</x:xmpmeta>")
+            .expect("前提条件が崩れている: </x:xmpmeta> が無い");
+        contents.splice(at..at, insert.iter().copied());
+        *segment = img_parts::jpeg::JpegSegment::new_with_contents(
+            img_parts::jpeg::markers::APP1,
+            Bytes::from(contents),
+        );
+        std::fs::write(path, jpeg.encoder().bytes()).unwrap();
+    }
+
+    /// **読めない XMP を「XMP が無い」と取り違えて作り直してはならない。**
+    /// 作り直すと Lightroom の現像設定（`crs:`）が警告も無く全部消える。
+    /// Latin-1 の `é`（0xE9）を 1 バイト含むだけで UTF-8 として読めなくなる
+    #[test]
+    fn writing_over_an_undecodable_xmp_fails_and_leaves_the_file_untouched() {
+        let (_dir, path) = scratch("lightroom-xmp.jpg");
+        corrupt_xmp(&path, b"<!-- caf\xe9 -->");
+        let before = std::fs::read(&path).unwrap();
+        // 前提条件: 失われうるデータが実際にある
+        assert!(
+            before
+                .windows(b"crs:Exposure2012".len())
+                .any(|w| w == b"crs:Exposure2012"),
+            "前提条件が崩れている"
+        );
+
+        let result = write_metadata(
+            &path,
+            &EditableMetadata {
+                title: Some("夕暮れの港".into()),
+                ..Default::default()
+            },
+        );
+
+        assert!(result.is_err(), "読めない XMP の上に保存できてしまった");
+        assert_eq!(std::fs::read(&path).unwrap(), before, "ファイルが変わった");
+    }
+
+    /// 読めない XMP があっても**読み取りは成立させ、黙らない**（Exif が壊れている時と同じ扱い）。
+    /// Exif 側の値はそのまま読める
+    #[test]
+    fn reading_an_unreadable_xmp_warns_and_keeps_the_exif_side() {
+        for (label, insert) in [
+            ("UTF-8 として不正", &b"<!-- caf\xe9 -->"[..]),
+            ("XML として非整形式", &b"<broken>"[..]),
+        ] {
+            let (_dir, path) = scratch("lightroom-xmp.jpg");
+            write_metadata(
+                &path,
+                &EditableMetadata {
+                    title: Some("夕暮れの港".into()),
+                    rating: Some(3),
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+            corrupt_xmp(&path, insert);
+
+            let read = read_metadata(&path)
+                .unwrap_or_else(|e| panic!("{label}: 読み取り全体が失敗した: {e:#}"));
+
+            assert_eq!(
+                read.metadata.title.as_deref(),
+                Some("夕暮れの港"),
+                "{label}"
+            );
+            assert_eq!(read.metadata.rating, Some(3), "{label}");
+            assert!(
+                read.warnings.iter().any(|w| w.contains("XMP")),
+                "{label}: 警告が出ない {:?}",
+                read.warnings
+            );
+        }
     }
 
     /// 一時ファイルが残らないこと。残ると次回の書き込みで衝突しうる
@@ -907,7 +1010,9 @@ mod tests {
         let before = std::fs::read(&path).unwrap();
         // 前提条件: 差し込み先の無いパケットが実際に据え付けられている
         assert!(
-            xmp::extract(&Jpeg::from_bytes(Bytes::from(before.clone())).unwrap()).is_some(),
+            xmp::extract(&Jpeg::from_bytes(Bytes::from(before.clone())).unwrap())
+                .unwrap()
+                .is_some(),
             "前提条件が崩れている: XMP パケットが入っていない"
         );
 

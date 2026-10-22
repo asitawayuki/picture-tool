@@ -51,11 +51,20 @@ pub(super) struct XmpSide {
 /// （安全側に倒れている）。本ツールが扱う4プロパティ（`dc:title` / `dc:description` /
 /// `xmp:Rating` / `MicrosoftPhoto:Rating`）だけでこの上限を超えることは実運用で
 /// 極めて考えにくく、対応する必要性が薄いための判断
-pub(super) fn extract(jpeg: &Jpeg) -> Option<String> {
-    jpeg.segments_by_marker(markers::APP1).find_map(|segment| {
-        let xml = segment.contents().strip_prefix(XMP_ID)?;
-        std::str::from_utf8(xml).ok().map(str::to_owned)
-    })
+///
+/// **XMP の APP1 があるのに UTF-8 として読めない場合は `Err`。** `None`（XMP が無い）に
+/// 混ぜると、書き込み側が新しいパケットを作って既存のものを丸ごと置き換え、
+/// 他の名前空間のデータが黙って消える
+pub(super) fn extract(jpeg: &Jpeg) -> Result<Option<String>> {
+    let Some(xml) = jpeg
+        .segments_by_marker(markers::APP1)
+        .find_map(|segment| segment.contents().strip_prefix(XMP_ID))
+    else {
+        return Ok(None);
+    };
+    let xml = std::str::from_utf8(xml)
+        .map_err(|error| anyhow!("XMP が UTF-8 として読めません: {error}"))?;
+    Ok(Some(xml.to_owned()))
 }
 
 fn is_owned_name(ns: &ResolveResult<'_>, local: &[u8]) -> bool {
@@ -658,7 +667,7 @@ mod tests {
             jpeg.segments_by_marker(img_parts::jpeg::markers::APP1)
                 .any(|s| s.contents().starts_with(b"Exif\0\0"))
         );
-        assert_eq!(extract(&jpeg), None);
+        assert_eq!(extract(&jpeg).unwrap(), None);
     }
     use crate::metadata::EditableMetadata;
 
@@ -970,7 +979,7 @@ mod tests {
         .unwrap();
         let mut jpeg = Jpeg::from_bytes(Bytes::from(bytes)).unwrap();
         // 前提条件: いまは XMP を持っていない
-        assert_eq!(extract(&jpeg), None);
+        assert_eq!(extract(&jpeg).unwrap(), None);
 
         let packet = new_packet(&EditableMetadata {
             rating: Some(1),
@@ -981,7 +990,10 @@ mod tests {
         // 書き出して読み直しても残っていること（＝ SOS より前に入った）
         let encoded = jpeg.encoder().bytes();
         let reparsed = Jpeg::from_bytes(encoded).unwrap();
-        assert_eq!(read(&extract(&reparsed).unwrap()).unwrap().rating, Some(1));
+        assert_eq!(
+            read(&extract(&reparsed).unwrap().unwrap()).unwrap().rating,
+            Some(1)
+        );
     }
 
     /// 2 回書いてもセグメントが増えない
@@ -997,11 +1009,11 @@ mod tests {
         let mut jpeg = Jpeg::from_bytes(Bytes::from(bytes)).unwrap();
         let before = jpeg.segments_by_marker(markers::APP1).count();
         // 前提条件: すでに XMP を持っている
-        assert!(extract(&jpeg).is_some());
+        assert!(extract(&jpeg).unwrap().is_some());
 
         for stars in [1u8, 5] {
             let packet = patch(
-                &extract(&jpeg).unwrap(),
+                &extract(&jpeg).unwrap().unwrap(),
                 &EditableMetadata {
                     rating: Some(stars),
                     ..Default::default()
@@ -1012,7 +1024,10 @@ mod tests {
         }
 
         assert_eq!(jpeg.segments_by_marker(markers::APP1).count(), before);
-        assert_eq!(read(&extract(&jpeg).unwrap()).unwrap().rating, Some(5));
+        assert_eq!(
+            read(&extract(&jpeg).unwrap().unwrap()).unwrap().rating,
+            Some(5)
+        );
     }
     /// **属性を組み直すときに値を再エスケープすること。**
     /// `Attribute::value` は引用符の内側の生バイトで、元が単一引用符なら `"` を
