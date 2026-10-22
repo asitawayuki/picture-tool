@@ -34,7 +34,9 @@ little_exif = "=0.6.23"
 img-parts = "=0.4.1"
 # XMP パケット内をプロパティ単位で差し替えるためのパーサ。
 # **0.37 系であることが重要**: little_exif 0.6.23 が quick-xml 0.37.5 に依存しており、
-# 0.42 を足すと同じクレートの 2 版が同時にリンクされる（workspace Cargo.toml の S6-M19）。
+# core に 0.42 を足すと、同じクレートの 2 版が core にリンクされる（workspace Cargo.toml の S6-M19）。
+# `cargo tree --workspace -d` に 0.42 が出るのは tauri の依存（plist → tauri-utils →
+# tauri-codegen。proc-macro とビルドスクリプトで使うだけ）由来で、core にはリンクされない。
 quick-xml = "0.37"
 # 入力専用の JPEG XL デコーダ。純 Rust（C ライブラリ不要）。
 # `image` は image::ImageDecoder 実装を有効にする。`rayon` は入れない
