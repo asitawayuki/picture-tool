@@ -355,7 +355,7 @@ fn split_results(
             // キャンセルで着手すらしなかった分は「失敗」ではない。どちらにも
             // 載せないことで、フロントが要求リストとの差分から「未処理」として
             // 表示する（`ResultDialog`）。
-            Err(e) if format!("{:#}", e) == core::CANCELLED_ERROR => {}
+            Err(e) if e.downcast_ref::<core::Cancelled>().is_some() => {}
             Err(e) => failures.push(ProcessFailure {
                 input_path: raw.clone(),
                 error: format!("{:#}", e),
@@ -1038,7 +1038,7 @@ mod tests {
         let requested = vec!["/photos/a.jpg".to_string(), "/photos/b.jpg".to_string()];
         let results = vec![
             Ok(succeeded("/photos/a.jpg")),
-            Err(anyhow::anyhow!(core::CANCELLED_ERROR)),
+            Err(anyhow::Error::new(core::Cancelled)),
         ];
 
         let (succeeded_results, failures) = split_results(&requested, results);

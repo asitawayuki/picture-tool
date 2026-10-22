@@ -14,7 +14,7 @@
 //! | base64 出力（GUI 用） | [`generate_thumbnail_base64`], [`generate_full_image_base64`], [`generate_exif_frame_preview_base64`]（下地は [`ExifFramePreviewSource`]） |
 //! | Exif フレーム | [`exif_frame::render_exif_frame`], [`exif_frame::AssetDirs`], [`exif_frame::ExifAssets`], [`exif_frame::preset`] |
 //! | メタデータ編集 | [`metadata::read_metadata`], [`metadata::write_metadata`], [`metadata::EditableMetadata`] |
-//! | 定数 | [`CANCELLED_ERROR`]（着手前にキャンセルされた印）, [`THUMBNAIL_MAX_DIMENSION`] |
+//! | 定数・型 | [`Cancelled`]（着手前にキャンセルされた印のエラー型）, [`THUMBNAIL_MAX_DIMENSION`] |
 //!
 //! # 呼び出し側が守ること
 //!
@@ -551,14 +551,24 @@ pub fn process_image(
     })
 }
 
-/// バッチ処理（並列）
-/// キャンセル要求のため着手されなかった、を表すエラーメッセージ
+/// キャンセル要求のため着手されなかった、を表すエラー
 ///
 /// `process_batch` は入力と同数・同順の結果を返すので、キャンセル後の分も
 /// `Err` として並ぶ。呼び出し側が「変換に失敗した」と「そもそも着手していない」を
-/// 区別できるよう、文言を定数として公開する（GUI はこれを未処理として扱う）。
-pub const CANCELLED_ERROR: &str = "Processing cancelled";
+/// 区別できるよう、型として公開する（`e.downcast_ref::<Cancelled>()` で判定する。
+/// GUI はこれを未処理として扱う）。文言の一致で見分けないこと。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Cancelled;
 
+impl std::fmt::Display for Cancelled {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("Processing cancelled")
+    }
+}
+
+impl std::error::Error for Cancelled {}
+
+/// バッチ処理（並列）
 pub fn process_batch(
     files: &[PathBuf],
     output_folder: &Path,
@@ -575,7 +585,7 @@ pub fn process_batch(
         .par_iter()
         .map(|path| {
             if cancelled.load(Ordering::Relaxed) {
-                return Err(anyhow::anyhow!(CANCELLED_ERROR));
+                return Err(anyhow::Error::new(Cancelled));
             }
 
             let result = process_image(path, output_folder, config, exif_frame_config, assets);
