@@ -135,12 +135,13 @@ pub struct ExifInfo {
     pub orientation: Option<u16>,
 }
 
-/// 進捗コールバック: (current, total) -> bool（falseでキャンセル）
+/// 進捗コールバック: (current, total, いま終わったファイル) -> bool（falseでキャンセル）
 ///
 /// `process_batch` は rayon で並列処理するため、このコールバックは**複数のワーカースレッドから
 /// 同時に呼ばれる**。`current` は完了順の通し番号であり、`files` の添字とも昇順とも対応しない
-/// （例: 3, 1, 2 の順で呼ばれうる）。実装側で共有状態を触る場合は自前で同期すること。
-pub type ProgressCallback = Box<dyn Fn(usize, usize) -> bool + Send + Sync>;
+/// （例: 3, 1, 2 の順で呼ばれうる）。終わったファイルは `current` から引かず、3 つ目の引数を使う。
+/// 実装側で共有状態を触る場合は自前で同期すること。
+pub type ProgressCallback = Box<dyn Fn(usize, usize, &Path) -> bool + Send + Sync>;
 
 /// `collect_image_files` の結果
 #[derive(Debug, Default)]
@@ -578,7 +579,7 @@ pub fn process_batch(
 
             let current = processed_count.fetch_add(1, Ordering::SeqCst) + 1;
             if let Some(ref cb) = on_progress
-                && !cb(current, total)
+                && !cb(current, total, path)
             {
                 cancelled.store(true, Ordering::Relaxed);
             }
@@ -1283,7 +1284,7 @@ mod tests {
         let total_seen = Arc::new(AtomicUsize::new(0));
         let total_clone = Arc::clone(&total_seen);
 
-        let cb: ProgressCallback = Box::new(move |current, total| {
+        let cb: ProgressCallback = Box::new(move |current, total, _path| {
             max_clone.fetch_max(current, Ordering::SeqCst);
             total_clone.store(total, Ordering::SeqCst);
             true
@@ -1297,6 +1298,36 @@ mod tests {
             "最大currentは3であるべき"
         );
         assert_eq!(total_seen.load(Ordering::SeqCst), 3, "totalは3であるべき");
+    }
+
+    /// 進捗の「いま終わった 1 枚」は、`current` ではなく渡されたパスで示す。
+    /// 並列処理なので `current` は入力の添字と対応しない（GUI がファイル名を取り違えていた）
+    #[test]
+    fn process_batch_progress_callback_names_each_finished_file_once() {
+        let dir = tempfile::tempdir().unwrap();
+        let out = tempfile::tempdir().unwrap();
+        let files: Vec<PathBuf> = (0..8)
+            .map(|i| {
+                let p = dir.path().join(format!("named_{}.jpg", i));
+                create_test_image(&p, 400, 500);
+                p
+            })
+            .collect();
+
+        let seen = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let seen_clone = Arc::clone(&seen);
+        let cb: ProgressCallback = Box::new(move |_current, _total, path| {
+            seen_clone.lock().unwrap().push(path.to_path_buf());
+            true
+        });
+
+        process_batch(&files, out.path(), &test_config(), None, None, Some(cb));
+
+        let mut seen = seen.lock().unwrap().clone();
+        seen.sort();
+        let mut expected = files.clone();
+        expected.sort();
+        assert_eq!(seen, expected);
     }
 
     #[test]
@@ -1315,7 +1346,7 @@ mod tests {
             .collect();
 
         // 1枚処理完了後にキャンセル
-        let cb: ProgressCallback = Box::new(|current, _total| current < 1);
+        let cb: ProgressCallback = Box::new(|current, _total, _path| current < 1);
 
         let results = process_batch(&files, out.path(), &test_config(), None, None, Some(cb));
         let cancelled_count = results

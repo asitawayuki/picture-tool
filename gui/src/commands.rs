@@ -423,11 +423,7 @@ async fn run_batch(
     // process_batch は rayon で並列処理するためブロッキング。
     // Tauri の async runtime をブロックしないよう spawn_blocking でオフロードする。
     tokio::task::spawn_blocking(move || {
-        let names: Vec<String> = inputs
-            .iter()
-            .map(|p| p.file_name().unwrap_or_default().to_string_lossy().into())
-            .collect();
-        let on_progress = progress_callback(app_handle, cancel_flag, names);
+        let on_progress = progress_callback(app_handle, cancel_flag);
 
         // Exif アセットはバッチ全体で1回だけ構築する（画像ごとに model_map を
         // 読み直さないため）。Exif フレームを使わない場合は構築自体を行わない。
@@ -464,17 +460,17 @@ async fn run_batch(
 fn progress_callback(
     app_handle: tauri::AppHandle,
     cancel_flag: Arc<AtomicBool>,
-    file_names: Vec<String>,
 ) -> core::ProgressCallback {
     // emit が失敗すると進捗が止まったように見える。原因を追えるよう記録するが、
     // 1件ごとに出すと壊れた状態でログが埋まるため最初の1回だけにする（S6-M15）。
     let emit_failure_logged = AtomicBool::new(false);
 
-    Box::new(move |current, total| -> bool {
-        let file_name = file_names
-            .get(current.saturating_sub(1))
-            .cloned()
-            .unwrap_or_default();
+    Box::new(move |current, total, path| -> bool {
+        let file_name = path
+            .file_name()
+            .unwrap_or_default()
+            .to_string_lossy()
+            .into_owned();
 
         if let Err(e) = app_handle.emit(
             "processing-progress",

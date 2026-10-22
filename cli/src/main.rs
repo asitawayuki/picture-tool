@@ -171,7 +171,7 @@ fn main() -> Result<ExitCode> {
     // 一件ごとの結果はバッチ完了後にまとめて出すため、ここでの出力とは混ざらない。
     // リダイレクト先では上書きが効かず制御文字がそのまま残るため端末のときだけ出す。
     let interactive = std::io::stderr().is_terminal();
-    let on_progress = move |current: usize, total: usize| -> bool {
+    let on_progress = move |current: usize, total: usize, _path: &std::path::Path| -> bool {
         if interactive {
             let mut stderr = std::io::stderr().lock();
             let _ = write!(stderr, "\rProcessing... {}/{}", current, total);
