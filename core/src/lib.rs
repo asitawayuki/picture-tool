@@ -11,7 +11,7 @@
 //! | 検証・収集 | [`validate_config`], [`is_supported_image`], [`collect_image_files`] |
 //! | 変換 | [`process_image`], [`process_batch`]（[`ProgressCallback`] で進捗とキャンセル） |
 //! | EXIF | [`read_exif_info`], [`apply_orientation`], [`oriented_dimensions`], [`open_image_oriented`], [`image_dimensions_oriented`] |
-//! | base64 出力（GUI 用） | [`generate_thumbnail_base64`], [`generate_full_image_base64`], [`generate_exif_frame_preview_base64`] |
+//! | base64 出力（GUI 用） | [`generate_thumbnail_base64`], [`generate_full_image_base64`], [`generate_exif_frame_preview_base64`]（下地は [`ExifFramePreviewSource`]） |
 //! | Exif フレーム | [`exif_frame::render_exif_frame`], [`exif_frame::AssetDirs`], [`exif_frame::ExifAssets`], [`exif_frame::preset`] |
 //! | メタデータ編集 | [`metadata::read_metadata`], [`metadata::write_metadata`], [`metadata::EditableMetadata`] |
 //! | 定数 | [`CANCELLED_ERROR`]（着手前にキャンセルされた印）, [`THUMBNAIL_MAX_DIMENSION`] |
@@ -634,33 +634,51 @@ pub struct ExifFramePreview {
     pub warnings: Vec<String>,
 }
 
+/// Exif フレームのプレビューの下地。向きを適用して縮小した写真と、その Exif。
+///
+/// **デコードと縮小がプレビュー生成の大半を占める**（63MP で全体 523 ms のうち約 430 ms）。
+/// 変わるのはフレームの設定だけなので、呼び出し側が写真ごとに保持して
+/// [`generate_exif_frame_preview_base64`] に何度でも渡せるよう分けてある
+#[derive(Debug, Clone)]
+pub struct ExifFramePreviewSource {
+    image: DynamicImage,
+    exif: ExifInfo,
+}
+
+impl ExifFramePreviewSource {
+    /// 長辺を `max_dimension`（1〜1024 に丸める）へ縮小して読み込む
+    pub fn load(path: &Path, max_dimension: u32) -> Result<Self> {
+        let max_dimension = max_dimension.clamp(1, 1024);
+        // Orientation を適用してから縮小する。生の image::open だと縦横が実際の
+        // 処理結果と食い違い、auto_placement が別の辺を選んでしまう。
+        // Exif は 1 回だけ読んで向きとフレームの両方に使う（`open_image_oriented` と同じ扱い）
+        let exif = read_exif_info(path).unwrap_or_default();
+        let img = apply_orientation(decode::open(path, decode::sniff(path)?)?, exif.orientation);
+        let image = img.resize(
+            max_dimension,
+            max_dimension,
+            image::imageops::FilterType::Triangle,
+        );
+        Ok(Self { image, exif })
+    }
+}
+
 /// Exifフレームのプレビューをbase64エンコードされたJPEG文字列として生成
 ///
 /// GUI 専用ではなく core に置く。以前は「縮小 → 描画 → JPEG → base64」の一連が
 /// Tauri コマンドの中だけに書かれており、CLI からプレビューを作れず、
 /// GUI が `image` / `base64` に直接依存する原因にもなっていた（S6-M16）。
 pub fn generate_exif_frame_preview_base64(
-    path: &Path,
+    source: &ExifFramePreviewSource,
     config: &exif_frame::ExifFrameConfig,
     bg_color: &BackgroundColor,
     assets: &exif_frame::ExifAssets,
-    max_dimension: u32,
 ) -> Result<ExifFramePreview> {
     use base64::Engine as _;
-    let max_dimension = max_dimension.clamp(1, 1024);
 
-    // Orientation を適用してから縮小する。生の image::open だと縦横が実際の
-    // 処理結果と食い違い、auto_placement が別の辺を選んでしまう。
-    let img = open_image_oriented(path)?;
-    let thumbnail = img.resize(
-        max_dimension,
-        max_dimension,
-        image::imageops::FilterType::Triangle,
-    );
-
-    let exif = read_exif_info(path).unwrap_or_default();
-    let framed = exif_frame::render_exif_frame(&thumbnail, &exif, config, bg_color, assets)?;
-    let jpeg_bytes = encode::encode_jpeg(&framed.image.to_rgb8(), 85, &encode::Embed::NONE)?;
+    let framed =
+        exif_frame::render_exif_frame(&source.image, &source.exif, config, bg_color, assets)?;
+    let jpeg_bytes = encode::encode_jpeg(&framed.image.into_rgb8(), 85, &encode::Embed::NONE)?;
 
     Ok(ExifFramePreview {
         base64: base64::engine::general_purpose::STANDARD.encode(&jpeg_bytes),

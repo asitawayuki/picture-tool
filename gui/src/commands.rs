@@ -1,5 +1,5 @@
 use crate::security;
-use crate::state::ProcessingState;
+use crate::state::{PreviewSourceCache, PreviewSourceKey, ProcessingState};
 use crate::types::*;
 use picture_tool_core as core;
 use picture_tool_core::exif_frame::{self, AssetDirs, ExifFrameConfig, FontInfo};
@@ -596,6 +596,7 @@ pub async fn get_exif_info(path: String) -> Result<core::ExifInfo, String> {
 /// webview がそのまま `<img src>` に使える data URI への変換だけを行う。
 #[tauri::command]
 pub async fn render_exif_frame_preview(
+    state: tauri::State<'_, ProcessingState>,
     path: String,
     config: ExifFrameConfig,
     bg_color: core::BackgroundColor,
@@ -603,13 +604,15 @@ pub async fn render_exif_frame_preview(
     let file = security::readable_image(&path)?;
     let mut config = config;
     resolve_font_path(&mut config)?;
+    let cache = Arc::clone(&state.preview_source);
 
     tokio::task::spawn_blocking(move || {
         let assets =
             exif_frame::ExifAssets::load(AssetDirs::default()).map_err(|e| format!("{:#}", e))?;
 
+        let source = cached_preview_source(&cache, &file)?;
         let preview =
-            core::generate_exif_frame_preview_base64(&file, &config, &bg_color, &assets, 400)
+            core::generate_exif_frame_preview_base64(&source, &config, &bg_color, &assets)
                 .map_err(|e| format!("{:#}", e))?;
 
         Ok(PreviewImage {
@@ -622,6 +625,32 @@ pub async fn render_exif_frame_preview(
     })
     .await
     .map_err(|e| e.to_string())?
+}
+
+/// プレビューの長辺（px）
+const PREVIEW_MAX_DIMENSION: u32 = 400;
+
+/// 直近の 1 枚と同じ写真なら、デコード・縮小済みの下地を使い回す。
+/// ロックはキャッシュを見る間と差し替える間だけ持つ（デコード中は持たない）
+fn cached_preview_source(
+    cache: &PreviewSourceCache,
+    file: &Path,
+) -> Result<Arc<core::ExifFramePreviewSource>, String> {
+    let meta = fs::metadata(file).map_err(|e| e.to_string())?;
+    let key: PreviewSourceKey = (file.to_path_buf(), meta.modified().ok(), meta.len());
+    let lock = || cache.lock().unwrap_or_else(|e| e.into_inner());
+
+    if let Some((cached_key, source)) = &*lock()
+        && *cached_key == key
+    {
+        return Ok(Arc::clone(source));
+    }
+    let source = Arc::new(
+        core::ExifFramePreviewSource::load(file, PREVIEW_MAX_DIMENSION)
+            .map_err(|e| format!("{e:#}"))?,
+    );
+    *lock() = Some((key, Arc::clone(&source)));
+    Ok(source)
 }
 
 #[tauri::command]
@@ -855,6 +884,34 @@ mod tests {
             size_limit_exceeded: false,
             warnings: Vec::new(),
         }
+    }
+
+    // --- Exif フレームのプレビュー: 写真が変わらない限りデコードし直さない ---
+
+    #[test]
+    fn preview_source_is_reused_until_the_photo_changes() {
+        let dir = TempDir::new().unwrap();
+        let a = dir.path().join("a.jpg");
+        let b = dir.path().join("b.jpg");
+        write_real_jpeg(&a);
+        write_real_jpeg(&b);
+        let cache = PreviewSourceCache::default();
+
+        let first = cached_preview_source(&cache, &a).unwrap();
+        let again = cached_preview_source(&cache, &a).unwrap();
+        assert!(Arc::ptr_eq(&first, &again), "同じ写真なのに読み直した");
+
+        let other = cached_preview_source(&cache, &b).unwrap();
+        assert!(!Arc::ptr_eq(&first, &other), "別の写真に前の下地を使った");
+
+        // 書き換えられた写真は読み直す（中身もサイズも変える）
+        let img = image::RgbImage::from_pixel(8, 6, image::Rgb([10, 20, 30]));
+        image::DynamicImage::ImageRgb8(img).save(&b).unwrap();
+        let rewritten = cached_preview_source(&cache, &b).unwrap();
+        assert!(
+            !Arc::ptr_eq(&other, &rewritten),
+            "書き換えた写真に古い下地を使った"
+        );
     }
 
     // --- フォルダーツリー: 子フォルダーだけを名前順で返す ---
