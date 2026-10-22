@@ -21,7 +21,7 @@
   $effect(() => {
     // 依存は $effect の同期フェーズで読む必要がある。
     // 非同期コールバック内でしか参照しないと依存として追跡されない
-    const snapshot = config === null ? null : ($state.snapshot(config) as ExifFrameConfig);
+    const snapshot = config === null ? null : ($state.snapshot(config));
     const bg = bgColor;
     const path = imagePath;
     if (!path || !snapshot) return;

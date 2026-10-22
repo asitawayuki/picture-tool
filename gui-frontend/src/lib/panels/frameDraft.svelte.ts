@@ -31,7 +31,7 @@ export function defaultFrameConfig(): ExifFrameConfig {
  * 編集がそのまま一覧を書き換えてしまう。
  */
 function clone(preset: ExifFrameConfig): ExifFrameConfig {
-  return structuredClone($state.snapshot(preset)) as ExifFrameConfig;
+  return structuredClone($state.snapshot(preset));
 }
 
 /**
@@ -63,7 +63,7 @@ export function createFrameDraft(presets: ReturnType<typeof createPresetStore>) 
   }
 
   function snapshot(): ExifFrameConfig {
-    const snap = structuredClone($state.snapshot(draft!)) as ExifFrameConfig;
+    const snap = structuredClone($state.snapshot(draft!));
     snap.name = snap.name.trim();
     return snap;
   }
