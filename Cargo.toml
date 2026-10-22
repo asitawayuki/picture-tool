@@ -18,6 +18,12 @@ rayon = "1.10"
 # 0.25 の既定機能には AVIF エンコーダ（rav1e）が入り、ビルド時間と配布物が大きく膨らむ
 image = { version = "0.25", default-features = false, features = ["jpeg", "png", "webp", "rayon"] }
 
+# 依存クレート（デコーダ・リサンプラ・エンコーダ）だけは dev でも最適化する。
+# 最適化なしだと画像を扱うテストが桁違いに遅い（core のテスト約 227 秒 → 約 19 秒）。
+# ワークスペースのクレート自身は対象外なので、デバッグのしやすさは変わらない
+[profile.dev.package."*"]
+opt-level = 3
+
 # 配布バイナリの最適化（S6-L15）。CJK フォントを同梱するぶん元が大きいので効果が大きい。
 [profile.release]
 lto = true
