@@ -43,6 +43,21 @@ pub(super) struct XmpSide {
     pub ms_rating_percent: Option<u16>,
 }
 
+impl XmpSide {
+    /// 4 プロパティなら対応するフィールドへ入れる（要素のテキストも属性の値も同じ規則）
+    fn assign(&mut self, uri: &[u8], local: &[u8], text: &str) {
+        match (uri, local) {
+            (u, b"Rating") if u == NS_XMP.as_bytes() => self.rating = parse_stars(text),
+            (u, b"Rating") if u == NS_MS_PHOTO.as_bytes() => {
+                self.ms_rating_percent = text.trim().parse().ok()
+            }
+            (u, b"title") if u == NS_DC.as_bytes() => self.title = cleaned(text),
+            (u, b"description") if u == NS_DC.as_bytes() => self.description = cleaned(text),
+            _ => {}
+        }
+    }
+}
+
 /// JPEG から XMP パケットの XML を取り出す。
 ///
 /// **Extended XMP（65503 バイトを超えるパケットが複数の APP1 に分割される形式）は
@@ -121,8 +136,11 @@ pub(super) fn read(packet: &str) -> Result<XmpSide> {
             Event::Start(ref start) => {
                 let local = start.local_name().as_ref().to_vec();
                 let frame = frame_of(&ns, &local, stack.last());
-                let owned_here =
-                    stack.last() == Some(&Frame::TopDescription) && is_owned_name(&ns, &local);
+                // 4 プロパティなら、その名前空間 URI（`ns` の借用を終わらせるため写す）
+                let owned_uri = (stack.last() == Some(&Frame::TopDescription))
+                    .then(|| uri_of(&ns).filter(|_| is_owned_name(&ns, &local)))
+                    .flatten()
+                    .map(<[u8]>::to_vec);
                 if frame == Frame::TopDescription {
                     read_compact_attributes(&reader, start, &mut side)?;
                     stack.push(frame);
@@ -131,29 +149,15 @@ pub(super) fn read(packet: &str) -> Result<XmpSide> {
                 // **本ツールの 4 プロパティ以外では中身を読み進めない。**
                 // ここで無条件に read_first_text を呼ぶと、x:xmpmeta や rdf:RDF の
                 // 中身まで丸ごと飲み込んで、以降が一切パースされなくなる
-                if !owned_here {
+                let Some(uri) = owned_uri else {
                     stack.push(frame);
                     continue;
-                }
-                // URI を写して ns の借用を終わらせてから &mut reader を使う。
-                // この先は read_first_text が部分木ごと消費するので stack は積まない
-                let Some(uri) = uri_of(&ns).map(<[u8]>::to_vec) else {
-                    continue;
                 };
+                // この先は read_first_text が部分木ごと消費するので stack は積まない
                 let end = start.to_end().into_owned();
                 let text = read_first_text(&mut reader, &end)?;
                 let Some(text) = text else { continue };
-                match (uri.as_slice(), local.as_slice()) {
-                    (u, b"Rating") if u == NS_XMP.as_bytes() => side.rating = parse_stars(&text),
-                    (u, b"Rating") if u == NS_MS_PHOTO.as_bytes() => {
-                        side.ms_rating_percent = text.trim().parse().ok()
-                    }
-                    (u, b"title") if u == NS_DC.as_bytes() => side.title = cleaned(&text),
-                    (u, b"description") if u == NS_DC.as_bytes() => {
-                        side.description = cleaned(&text)
-                    }
-                    _ => {}
-                }
+                side.assign(&uri, &local, &text);
             }
             _ => {}
         }
@@ -172,15 +176,7 @@ fn read_compact_attributes(
         let (ns, local) = reader.resolve_attribute(attribute.key);
         let Some(uri) = uri_of(&ns) else { continue };
         let value = attribute.unescape_value()?.into_owned();
-        match (uri, local.as_ref()) {
-            (u, b"Rating") if u == NS_XMP.as_bytes() => side.rating = parse_stars(&value),
-            (u, b"Rating") if u == NS_MS_PHOTO.as_bytes() => {
-                side.ms_rating_percent = value.trim().parse().ok()
-            }
-            (u, b"title") if u == NS_DC.as_bytes() => side.title = cleaned(&value),
-            (u, b"description") if u == NS_DC.as_bytes() => side.description = cleaned(&value),
-            _ => {}
-        }
+        side.assign(uri, local.as_ref(), &value);
     }
     Ok(())
 }
