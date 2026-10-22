@@ -1,6 +1,5 @@
 // Pad+Exif統合レイアウト計算
 
-use crate::BackgroundColor;
 use crate::exif_frame::{ExifFrameConfig, ExifPosition};
 
 /// Exifバーの配置方向（内部表現）
@@ -149,7 +148,6 @@ pub fn calculate_pad_exif_layout(
     photo_width: u32,
     photo_height: u32,
     config: &ExifFrameConfig,
-    _bg_color: &BackgroundColor,
 ) -> PadExifLayout {
     let short_side = photo_width.min(photo_height);
 
@@ -345,19 +343,15 @@ pub fn calculate_pad_exif_layout(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::BackgroundColor;
 
-    fn default_config() -> (crate::exif_frame::ExifFrameConfig, BackgroundColor) {
-        (
-            crate::exif_frame::ExifFrameConfig::default(),
-            BackgroundColor::Black,
-        )
+    fn default_config() -> crate::exif_frame::ExifFrameConfig {
+        crate::exif_frame::ExifFrameConfig::default()
     }
 
     #[test]
     fn landscape_photo_exif_at_bottom() {
-        let (config, bg) = default_config();
-        let result = calculate_pad_exif_layout(1200, 800, &config, &bg);
+        let config = default_config();
+        let result = calculate_pad_exif_layout(1200, 800, &config);
         assert_eq!(
             result.canvas_width * 5,
             result.canvas_height * 4,
@@ -377,8 +371,8 @@ mod tests {
 
     #[test]
     fn portrait_photo_exif_at_right() {
-        let (config, bg) = default_config();
-        let result = calculate_pad_exif_layout(800, 1200, &config, &bg);
+        let config = default_config();
+        let result = calculate_pad_exif_layout(800, 1200, &config);
         assert_eq!(
             result.canvas_width * 5,
             result.canvas_height * 4,
@@ -397,8 +391,8 @@ mod tests {
 
     #[test]
     fn already_4_5_shrinks_photo() {
-        let (config, bg) = default_config();
-        let result = calculate_pad_exif_layout(800, 1000, &config, &bg);
+        let config = default_config();
+        let result = calculate_pad_exif_layout(800, 1000, &config);
         assert_eq!(
             result.canvas_width * 5,
             result.canvas_height * 4,
@@ -417,8 +411,8 @@ mod tests {
 
     #[test]
     fn square_photo_exif_at_bottom() {
-        let (config, bg) = default_config();
-        let result = calculate_pad_exif_layout(1000, 1000, &config, &bg);
+        let config = default_config();
+        let result = calculate_pad_exif_layout(1000, 1000, &config);
         assert_eq!(
             result.canvas_width * 5,
             result.canvas_height * 4,
@@ -437,8 +431,8 @@ mod tests {
 
     #[test]
     fn tiny_image_skips_exif() {
-        let (config, bg) = default_config();
-        let result = calculate_pad_exif_layout(150, 100, &config, &bg);
+        let config = default_config();
+        let result = calculate_pad_exif_layout(150, 100, &config);
         assert!(result.skip_exif);
     }
 
@@ -448,8 +442,7 @@ mod tests {
             position: crate::exif_frame::ExifPosition::Bottom,
             ..Default::default()
         };
-        let bg = BackgroundColor::Black;
-        let result = calculate_pad_exif_layout(800, 1200, &config, &bg);
+        let result = calculate_pad_exif_layout(800, 1200, &config);
         assert_eq!(
             result.canvas_width * 5,
             result.canvas_height * 4,
@@ -517,7 +510,6 @@ mod tests {
         // 実際には fit_to_4_5 が常に写真より大きいキャンバスを返すため
         // 直接的にテストするのが難しい。代わりにdeficitが大きいことをshrink関数でテスト
         let config = crate::exif_frame::ExifFrameConfig::default();
-        let bg = BackgroundColor::Black;
         // 写真がぴったり4:5 (portrait) で exif bar を入れると20%超縮小が必要なケース:
         // short_side=200 → min値ギリギリ, exif_bar=12→30px
         // 200x250がぴったり4:5, pad=0, deficit=30, shrink=30/250=12% < 20% → OK
@@ -530,7 +522,7 @@ mod tests {
         // w << photo_h の極端な縦長写真ならこの比は小さい
         // 現実的に20%超のshrinkが起きるケースは存在しないかもしれないが
         // コードパスとして処理は正しいことを確認
-        let result = calculate_pad_exif_layout(200, 250, &config, &bg);
+        let result = calculate_pad_exif_layout(200, 250, &config);
         // 200x250はぴったり4:5、portait → Right配置
         // pad_w=0, exif_bar=12→30, deficit=30
         // shrink_photo_for_exif(200,250,30,Right) → new_w=170, new_h=213
@@ -549,8 +541,7 @@ mod tests {
             position: crate::exif_frame::ExifPosition::Right,
             ..Default::default()
         };
-        let bg = BackgroundColor::Black;
-        let result = calculate_pad_exif_layout(1200, 800, &config, &bg);
+        let result = calculate_pad_exif_layout(1200, 800, &config);
         assert!(
             result.is_rotated,
             "Right placement should set is_rotated=true"
@@ -563,8 +554,7 @@ mod tests {
             position: crate::exif_frame::ExifPosition::Left,
             ..Default::default()
         };
-        let bg = BackgroundColor::Black;
-        let result = calculate_pad_exif_layout(1200, 800, &config, &bg);
+        let result = calculate_pad_exif_layout(1200, 800, &config);
         assert!(
             result.is_rotated,
             "Left placement should set is_rotated=true"
@@ -602,7 +592,7 @@ mod tests {
             position,
             ..Default::default()
         };
-        let l = calculate_pad_exif_layout(photo_w, photo_h, &config, &BackgroundColor::Black);
+        let l = calculate_pad_exif_layout(photo_w, photo_h, &config);
         let ctx = format!("photo={}x{} position={:?}", photo_w, photo_h, position);
 
         // 1. キャンバスは厳密に 4:5
@@ -705,7 +695,7 @@ mod tests {
     #[test]
     fn fallback_canvas_expansion_keeps_exact_4_5() {
         let config = crate::exif_frame::ExifFrameConfig::default();
-        let l = calculate_pad_exif_layout(400, 501, &config, &BackgroundColor::Black);
+        let l = calculate_pad_exif_layout(400, 501, &config);
         assert_eq!(
             l.canvas_width * 5,
             l.canvas_height * 4,
@@ -728,11 +718,10 @@ mod tests {
     #[test]
     fn pad_exif_layout_never_exceeds_the_original_4_5_canvas() {
         let config = crate::exif_frame::ExifFrameConfig::default();
-        let bg = BackgroundColor::Black;
 
         // --- 分岐1: 余白が足りている（写真は原寸のまま） ---
         // 1200x800 → Bottom / bar 48 / fit_to_4_5 = 1200x1500 / pad_h 700 >= 48
-        let l = calculate_pad_exif_layout(1200, 800, &config, &bg);
+        let l = calculate_pad_exif_layout(1200, 800, &config);
         assert!(!l.skip_exif, "1200x800 はフレームが描かれる分岐");
         assert_eq!(
             (l.photo_width, l.photo_height),
@@ -748,7 +737,7 @@ mod tests {
         // --- 分岐2: 写真を縮小して収まった（拡張なし） ---
         // 500x660 → Right / bar 30 / fit_to_4_5 = 528x660 / available 28 < 30
         //   → deficit 2 → 写真 498x657 → new_available 30 >= 30
-        let l = calculate_pad_exif_layout(500, 660, &config, &bg);
+        let l = calculate_pad_exif_layout(500, 660, &config);
         assert!(!l.skip_exif, "500x660 はフレームが描かれる分岐");
         assert_eq!(
             (l.photo_width, l.photo_height),
@@ -769,7 +758,7 @@ mod tests {
         // --- 分岐3: 縮小しても足りずキャンバスを拡張した ---
         // 400x501 → Right / bar 30 / available 4 < 30 → deficit 26 → 写真 374x468
         //   → new_available 2 < 30 → 拡張して 404x505
-        let l = calculate_pad_exif_layout(400, 501, &config, &bg);
+        let l = calculate_pad_exif_layout(400, 501, &config);
         assert!(!l.skip_exif, "400x501 はフレームが描かれる分岐");
         assert_eq!(
             (l.photo_width, l.photo_height),
@@ -789,7 +778,7 @@ mod tests {
 
         // --- 分岐4: skip_exif ---
         // 150x100 → 短辺 100 < MIN_SHORT_SIDE
-        let l = calculate_pad_exif_layout(150, 100, &config, &bg);
+        let l = calculate_pad_exif_layout(150, 100, &config);
         assert!(l.skip_exif, "150x100 は短辺が閾値未満で skip する分岐");
         assert_eq!(
             (l.canvas_width, l.canvas_height),
@@ -800,7 +789,7 @@ mod tests {
         // 4分岐すべてで「キャンバス <= fit_to_4_5(入力写真)」が成り立っている
         // （上の固定値はいずれも fit_to_4_5(入力) と一致＝上界に等しい）。
         for (w, h) in [(1200, 800), (500, 660), (400, 501), (150, 100)] {
-            let l = calculate_pad_exif_layout(w, h, &config, &bg);
+            let l = calculate_pad_exif_layout(w, h, &config);
             let (max_w, max_h) = fit_to_4_5(w, h);
             assert!(
                 l.canvas_width <= max_w && l.canvas_height <= max_h,

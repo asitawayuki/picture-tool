@@ -209,7 +209,7 @@ pub fn render_exif_frame(
     let photo_h = image.height();
 
     // 1. レイアウト計算
-    let layout = layout::calculate_pad_exif_layout(photo_w, photo_h, config, bg_color);
+    let layout = layout::calculate_pad_exif_layout(photo_w, photo_h, config);
 
     // 2. skip_exif: 4:5キャンバスに写真を中央配置して返す
     if layout.skip_exif {
@@ -787,7 +787,7 @@ mod tests {
             user_presets_dir: None,
         })
         .unwrap();
-        let layout = layout::calculate_pad_exif_layout(1080, 720, &config, &bg);
+        let layout = layout::calculate_pad_exif_layout(1080, 720, &config);
         assert!(!layout.skip_exif && !layout.is_rotated, "precondition");
         let out = render_exif_frame(&photo, &exif, &config, &bg, &assets).unwrap();
         let img = out.image.to_rgba8();
