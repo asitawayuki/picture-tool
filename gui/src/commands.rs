@@ -209,7 +209,7 @@ pub async fn get_thumbnail(
     }
 
     let result = tokio::task::spawn_blocking(move || {
-        core::generate_thumbnail_base64(&file, max_dimension).map_err(|e| e.to_string())
+        core::generate_thumbnail_base64(&file, max_dimension).map_err(|e| format!("{e:#}"))
     })
     .await
     .map_err(|e| e.to_string())??;
@@ -233,7 +233,7 @@ pub async fn get_full_image(
 ) -> Result<String, String> {
     let file = security::readable_image(&path)?;
     tokio::task::spawn_blocking(move || {
-        core::generate_full_image_base64(&file, max_width, max_height).map_err(|e| e.to_string())
+        core::generate_full_image_base64(&file, max_width, max_height).map_err(|e| format!("{e:#}"))
     })
     .await
     .map_err(|e| e.to_string())?
@@ -284,7 +284,7 @@ pub async fn process_images(
     config: core::ProcessingConfig,
     exif_frame_config: Option<ExifFrameConfig>,
 ) -> Result<ProcessBatchResponse, String> {
-    core::validate_config(&config).map_err(|e| e.to_string())?;
+    core::validate_config(&config).map_err(|e| format!("{e:#}"))?;
 
     // 出力は利用者が明示的に許可したルート配下のみ。
     let output = security::writable_dir(&state.writable_roots, &output_folder)?;
@@ -593,7 +593,7 @@ pub fn cancel_processing(state: tauri::State<'_, ProcessingState>) -> Result<(),
 #[tauri::command]
 pub async fn get_exif_info(path: String) -> Result<core::ExifInfo, String> {
     let file = security::readable_image(&path)?;
-    tokio::task::spawn_blocking(move || core::read_exif_info(&file).map_err(|e| e.to_string()))
+    tokio::task::spawn_blocking(move || core::read_exif_info(&file).map_err(|e| format!("{e:#}")))
         .await
         .map_err(|e| e.to_string())?
 }
@@ -651,14 +651,14 @@ pub async fn save_preset(config: ExifFrameConfig) -> Result<(), String> {
     let mut config = config;
     security::preset_name(&config.name)?;
     resolve_font_path(&mut config)?;
-    exif_frame::preset::save_preset(&dir, &config).map_err(|e| e.to_string())
+    exif_frame::preset::save_preset(&dir, &config).map_err(|e| format!("{e:#}"))
 }
 
 #[tauri::command]
 pub async fn delete_preset(name: String) -> Result<(), String> {
     let dir = user_presets_dir()?;
     let name = security::preset_name(&name)?;
-    exif_frame::preset::delete_preset(&dir, &name).map_err(|e| e.to_string())
+    exif_frame::preset::delete_preset(&dir, &name).map_err(|e| format!("{e:#}"))
 }
 
 fn user_presets_dir() -> Result<PathBuf, String> {
@@ -721,7 +721,7 @@ fn scan_user_fonts(dir: &Path) -> Vec<FontInfo> {
 pub async fn read_image_metadata(path: String) -> Result<core::metadata::MetadataRead, String> {
     let file = security::readable_jpeg(&path)?;
     tokio::task::spawn_blocking(move || {
-        core::metadata::read_metadata_fast(&file).map_err(|e| e.to_string())
+        core::metadata::read_metadata_fast(&file).map_err(|e| format!("{e:#}"))
     })
     .await
     .map_err(|e| e.to_string())?
@@ -781,7 +781,7 @@ fn save_and_read_back(
     let saved = core::metadata::write_metadata(file, metadata).map_err(|e| format!("{e:#}"))?;
     // **読み戻しも入口を通す。** ここだけ経路が違うと、★の書き戻しの
     // 「値の出所」（絞り込み spec §5）がグリッドの★と別経路になる
-    let mut read = core::metadata::read_metadata_fast(file).map_err(|e| e.to_string())?;
+    let mut read = core::metadata::read_metadata_fast(file).map_err(|e| format!("{e:#}"))?;
     read.warnings.extend(saved);
     Ok(read)
 }
