@@ -604,8 +604,14 @@ pub fn generate_thumbnail_base64(path: &Path, max_dimension: u32) -> Result<Stri
     let img = open_image_oriented(path)
         .with_context(|| format!("Failed to open image for thumbnail: {}", path.display()))?;
 
-    let thumbnail = img.thumbnail(max_dimension, max_dimension);
-    let jpeg_bytes = encode::encode_jpeg(&thumbnail.to_rgb8(), 75, &encode::Embed::NONE)?;
+    // `thumbnail` は小さい画像を拡大するので、縮小が要るときだけ通す
+    let (w, h) = img.dimensions();
+    let thumbnail = if w > max_dimension || h > max_dimension {
+        img.thumbnail(max_dimension, max_dimension)
+    } else {
+        img
+    };
+    let jpeg_bytes = encode::encode_jpeg(&thumbnail.into_rgb8(), 75, &encode::Embed::NONE)?;
 
     Ok(base64::engine::general_purpose::STANDARD.encode(&jpeg_bytes))
 }
@@ -1397,6 +1403,24 @@ mod tests {
             w,
             h
         );
+    }
+
+    /// 上限より小さい画像は拡大しない（`generate_full_image_base64` と同じ）。
+    /// 拡大しても情報は増えず、転送とキャッシュの量だけが増える
+    #[test]
+    fn generate_thumbnail_does_not_enlarge_a_smaller_image() {
+        let dir = tempfile::tempdir().unwrap();
+        let input = dir.path().join("small.jpg");
+        create_test_image(&input, 200, 100);
+
+        let base64_str = generate_thumbnail_base64(&input, 1024).unwrap();
+
+        use base64::Engine as _;
+        let bytes = base64::engine::general_purpose::STANDARD
+            .decode(&base64_str)
+            .unwrap();
+        let thumb = image::load_from_memory(&bytes).unwrap();
+        assert_eq!(thumb.dimensions(), (200, 100));
     }
 
     #[test]
