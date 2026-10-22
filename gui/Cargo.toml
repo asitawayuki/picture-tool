@@ -13,7 +13,7 @@ serde.workspace = true
 serde_json.workspace = true
 anyhow.workspace = true
 tokio = { version = "1", features = ["rt"] }
-lru = "0.18"
+lru = "0.19"
 rayon.workspace = true
 
 # OS のテーマ追従で xdg-desktop-portal を読むためだけに使う。
