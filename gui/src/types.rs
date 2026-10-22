@@ -2,11 +2,9 @@ use picture_tool_core as core;
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct FileEntry {
+pub struct FolderEntry {
     pub name: String,
     pub path: String,
-    pub is_dir: bool,
-    pub is_image: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -228,14 +226,12 @@ mod contract {
     fn contract() -> String {
         let entries = vec![
             entry(
-                "fileEntry",
-                "FileEntry",
+                "folderEntry",
+                "FolderEntry",
                 "フォルダーツリーの 1 行",
-                FileEntry {
+                FolderEntry {
                     name: "photos".to_string(),
                     path: "/home/user/photos".to_string(),
-                    is_dir: true,
-                    is_image: false,
                 },
             ),
             entry(
@@ -527,7 +523,7 @@ mod contract {
                 "ExifFrameConfig",
                 "ExifInfo",
                 "ExifPosition",
-                "FileEntry",
+                "FolderEntry",
                 "FontInfo",
                 "ImageEntry",
                 "MetadataRead",

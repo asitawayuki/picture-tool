@@ -9,7 +9,7 @@ import * as dto from "../src/lib/dto.contract";
  * 以上、それは検査の網に開いた穴になる。**形は契約から、値だけをここで差し替える。**
  */
 const TEMPLATE = {
-  folder: dto.fileEntry,
+  folder: dto.folderEntry,
   image: dto.imageEntry,
   exif: dto.exifInfoFilled,
   // 帯の寸法だけは実際の既定値に戻す。契約側は f32 の丸め誤差を避けるために

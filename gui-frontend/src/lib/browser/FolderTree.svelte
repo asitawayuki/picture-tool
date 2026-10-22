@@ -2,7 +2,7 @@
   import { onMount } from "svelte";
   import { listDirectory, listDrives, loadFavorites, saveFavorites } from "../api";
   import { toast, describeError } from "../toasts.svelte";
-  import type { FileEntry } from "../types";
+  import type { FolderEntry } from "../types";
 
   interface Props {
     /**
@@ -18,7 +18,7 @@
   let { currentFolder, onSelectFolder }: Props = $props();
 
   interface TreeNode {
-    entry: FileEntry;
+    entry: FolderEntry;
     children: TreeNode[] | null;
     expanded: boolean;
     loading: boolean;
@@ -26,7 +26,7 @@
     error: string | null;
   }
 
-  function makeNode(entry: FileEntry): TreeNode {
+  function makeNode(entry: FolderEntry): TreeNode {
     return { entry, children: null, expanded: false, loading: false, error: null };
   }
 
@@ -37,7 +37,7 @@
 
   function buildFavoriteNodes(paths: string[]): TreeNode[] {
     return paths.map((path) =>
-      makeNode({ name: getFolderName(path), path, is_dir: true, is_image: false })
+      makeNode({ name: getFolderName(path), path })
     );
   }
 
@@ -66,7 +66,7 @@
     try {
       const drives = await listDrives();
       roots = drives.map((drive) =>
-        makeNode({ name: drive, path: drive, is_dir: true, is_image: false })
+        makeNode({ name: drive, path: drive })
       );
       if (roots.length > 0) {
         await expandNode(roots[0]);
@@ -77,14 +77,12 @@
   }
 
   async function expandNode(node: TreeNode) {
-    if (!node.entry.is_dir) return;
-
     if (node.children === null) {
       node.loading = true;
       node.error = null;
       try {
         const entries = await listDirectory(node.entry.path);
-        node.children = entries.filter((e) => e.is_dir).map(makeNode);
+        node.children = entries.map(makeNode);
       } catch (e) {
         // 「空のフォルダー」と見分けが付かなくなるため、失敗はノードに残して表示する
         node.children = [];

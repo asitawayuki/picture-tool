@@ -5,11 +5,9 @@
 // `cargo test` が落ち、契約を再生成すると今度はこのファイルを直すまで
 // `bun run typecheck` が落ちる。手順は `dto.contract.ts` の冒頭を読むこと。
 
-export interface FileEntry {
+export interface FolderEntry {
   name: string;
   path: string;
-  is_dir: boolean;
-  is_image: boolean;
 }
 
 export interface ImageEntry {

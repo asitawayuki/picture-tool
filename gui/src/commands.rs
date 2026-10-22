@@ -12,8 +12,10 @@ use tauri_plugin_dialog::{DialogExt, MessageDialogButtons, MessageDialogKind};
 use tauri_plugin_store::StoreExt;
 
 /// 各コマンドはこの関数を通したパスだけを触る。理由は `security` モジュール参照。
+///
+/// フォルダーツリーの子を返す。**ファイルは返さない**（ツリーが使わない）。
 #[tauri::command]
-pub fn list_directory(path: String) -> Result<Vec<FileEntry>, String> {
+pub fn list_directory(path: String) -> Result<Vec<FolderEntry>, String> {
     let dir = security::existing_dir(&path)?;
 
     let mut entries = Vec::new();
@@ -26,34 +28,28 @@ pub fn list_directory(path: String) -> Result<Vec<FileEntry>, String> {
             continue;
         };
         let name = entry.file_name().to_string_lossy().to_string();
-        let entry_path = entry.path();
-        let path_str = entry_path.to_string_lossy().to_string();
 
         // 隠しファイル/フォルダーをスキップ
         if name.starts_with('.') {
             continue;
         }
 
-        let is_image = if file_type.is_file() {
-            core::is_supported_image(&entry_path)
-        } else {
-            false
-        };
+        // `file_type` はシンボリックリンクを辿らないので、リンクだけは辿って確かめる。
+        // 辿らないとフォルダーへのリンク（`~/Pictures -> /mnt/photos`）がツリーから消える
+        let entry_path = entry.path();
+        let is_dir = file_type.is_dir()
+            || (file_type.is_symlink() && fs::metadata(&entry_path).is_ok_and(|m| m.is_dir()));
+        if !is_dir {
+            continue;
+        }
 
-        entries.push(FileEntry {
+        entries.push(FolderEntry {
             name,
-            path: path_str,
-            is_dir: file_type.is_dir(),
-            is_image,
+            path: entry_path.to_string_lossy().to_string(),
         });
     }
 
-    // フォルダーを先に、ファイルはアルファベット順
-    entries.sort_by(|a, b| {
-        b.is_dir
-            .cmp(&a.is_dir)
-            .then(a.name.to_lowercase().cmp(&b.name.to_lowercase()))
-    });
+    entries.sort_by_cached_key(|e| e.name.to_lowercase());
 
     Ok(entries)
 }
@@ -863,6 +859,30 @@ mod tests {
             size_limit_exceeded: false,
             warnings: Vec::new(),
         }
+    }
+
+    // --- フォルダーツリー: 子フォルダーだけを名前順で返す ---
+
+    /// フォルダーへのシンボリックリンク（`~/Pictures -> /mnt/photos` の形）もフォルダーとして出す。
+    /// ファイル・隠しフォルダー・リンク切れは出さない
+    #[cfg(unix)]
+    #[test]
+    fn list_directory_returns_subfolders_including_symlinked_ones() {
+        let dir = TempDir::new().unwrap();
+        let target = TempDir::new().unwrap();
+        fs::create_dir(dir.path().join("b-real")).unwrap();
+        fs::create_dir(dir.path().join(".hidden")).unwrap();
+        std::os::unix::fs::symlink(target.path(), dir.path().join("A-link")).unwrap();
+        std::os::unix::fs::symlink(dir.path().join("missing"), dir.path().join("broken")).unwrap();
+        write_real_jpeg(&dir.path().join("photo.jpg"));
+
+        let names: Vec<String> = list_directory(as_str(dir.path()))
+            .unwrap()
+            .into_iter()
+            .map(|e| e.name)
+            .collect();
+
+        assert_eq!(names, ["A-link", "b-real"]);
     }
 
     // --- 入力の仕分け: 通らなかった1件でバッチ全体を落とさない ---
