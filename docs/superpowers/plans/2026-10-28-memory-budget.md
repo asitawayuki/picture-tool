@@ -820,6 +820,13 @@ x66 × 20 枚は現行で約 40GB 以上を使うので、**利用者に他の�
 
 ### Task 1
 
+- Step 5: `cargo test -p picture-tool-core --lib budget::` → 7 passed。`make check` exit 0
+- Step 6: `can_take` の `ticket == st.serving` を `(ticket == st.serving || true)` にすると
+  `later_small_request_does_not_overtake_a_waiting_large_one` と `over_budget_request_runs_alone` の 2 件が落ちた
+  （どちらも `wait_until` の 10 秒の時間切れ。後から来た小さい 1 枚が待たずに借りるので `Wait` が 2 件にならない）。戻して 7 件 PASS
+- 計画からの変更: `mod budget;` の許可は `#[cfg_attr(not(test), allow(dead_code))]` ではなく `#[allow(dead_code)]`。
+  test ビルドでも `budget()`・`limit()` が未使用になり、`clippy --all-targets -D warnings` が落ちるため（Task 5 で外すのは同じ）
+
 ### Task 2
 
 ### Task 3: 入力・作業領域・現行の RSS・係数

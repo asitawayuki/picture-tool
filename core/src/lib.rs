@@ -34,6 +34,8 @@
 //! - 画像の読み込みに失敗したらスキップして次へ進む。1 枚の失敗でバッチを
 //!   止めない。
 
+#[allow(dead_code)] // 借りる場所を足すまでの一時的な許可
+mod budget;
 mod color;
 mod decode;
 mod encode;
