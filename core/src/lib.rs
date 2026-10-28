@@ -18,6 +18,12 @@
 //!
 //! # 呼び出し側が守ること
 //!
+//! - **画像を開く公開関数はメモリ予算を借りる**（spec 2026-10-28。[`process_image`]・[`process_batch`]・
+//!   [`open_image_oriented`]・[`generate_thumbnail_base64`]・[`generate_full_image_base64`]・
+//!   [`ExifFramePreviewSource::load`]）。**予算待ちで呼び出し元のスレッドが止まることがある。**
+//!   予算は物理メモリの半分で、プロセス全体で 1 つ。上限（物理メモリの 3/4）を超える 1 枚は
+//!   `OverMemoryLimit` の `Err` になる
+//!
 //! - **[`exif_frame::ExifAssets`] はバッチの前に 1 回だけ構築して使い回す。**
 //!   画像ごとに作るとモデルマップを毎回読み直す。
 //! - **このクレートは `eprintln!` しない。** 利用者に伝えるべき事象は
@@ -34,6 +40,7 @@
 //! - 画像の読み込みに失敗したらスキップして次へ進む。1 枚の失敗でバッチを
 //!   止めない。
 
+mod budget;
 mod color;
 mod decode;
 mod encode;
@@ -42,14 +49,20 @@ pub mod metadata;
 pub mod model_map;
 mod output_exif;
 
+/// メモリ予算の型。**計測とテスト用**（`core/examples/budget_batch.rs`）。CLI・GUI からは使わず、
+/// 利用者向けの設定手段でもない（spec 2026-10-28 §6）。[`OverMemoryLimit`] は、上限を超えて弾かれた
+/// 1 枚の `Err` を `downcast_ref` で見分けるのにも使える
+#[doc(hidden)]
+pub use budget::{Event, EventKind, MemoryBudget, OverMemoryLimit};
+
 use anyhow::{Context, Result};
+use budget::estimate::{Work, estimate};
 use image::{DynamicImage, GenericImageView};
 use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 use std::fs::{self, File};
 use std::io::{BufWriter, Write};
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use walkdir::WalkDir;
 
@@ -289,8 +302,33 @@ pub fn oriented_dimensions((width, height): (u32, u32), orientation: Option<u16>
 ///
 /// 生の `image::open` を直接使うと向きが正規化されず、プレビューと出力がずれる。
 /// 表示・処理を問わず、画像を開く入口はこの関数に揃えること。
+///
+/// メモリ予算を借りてから開く（予算待ちで呼び出し元のスレッドが止まることがある）。
 pub fn open_image_oriented(path: &Path) -> Result<DynamicImage> {
-    let img = decode::open(path, decode::sniff(path)?)?;
+    open_budgeted(budget::global(), path, &Work::View, |header| {
+        open_oriented_unbudgeted(path, header)
+    })
+}
+
+/// 1 枚を開く処理を、その 1 枚のピーク見積もりを予算から借りてから行う（spec 2026-10-28 §3）
+///
+/// `probe` → 借りる → `f`。返すのは `f` が戻ったとき（成功・失敗・panic のどれでも）。
+/// `probe` で寸法が読めないものは借りずに `Err` にする。**`f` の中で借りる版の公開関数を呼ばない**
+/// （入れ子で借りると到着順の下でデッドロックしうるので、`acquire` が `Err` にする）
+fn open_budgeted<T>(
+    budget: &MemoryBudget,
+    path: &Path,
+    work: &Work,
+    f: impl FnOnce(&decode::Header) -> Result<T>,
+) -> Result<T> {
+    let header = decode::probe(path)?;
+    let _lease = budget.acquire(estimate(&header, work))?;
+    f(&header)
+}
+
+/// [`open_image_oriented`] の借りない版
+fn open_oriented_unbudgeted(path: &Path, header: &decode::Header) -> Result<DynamicImage> {
+    let img = decode::open(path, header)?;
     let orientation = read_exif_info(path).ok().and_then(|info| info.orientation);
     Ok(apply_orientation(img, orientation))
 }
@@ -368,8 +406,47 @@ fn flatten_alpha(img: DynamicImage, bg: BackgroundColor) -> DynamicImage {
 }
 
 /// 画像を処理
+///
+/// メモリ予算を借りてから処理する（予算待ちで呼び出し元のスレッドが止まることがある）。
 pub fn process_image(
     input_path: &Path,
+    output_folder: &Path,
+    config: &ProcessingConfig,
+    exif_frame_config: Option<&exif_frame::ExifFrameConfig>,
+    assets: Option<&exif_frame::ExifAssets>,
+) -> Result<ProcessResult> {
+    let work = convert_work(config, exif_frame_config, assets);
+    open_budgeted(budget::global(), input_path, &work, |header| {
+        process_image_unbudgeted(
+            input_path,
+            header,
+            output_folder,
+            config,
+            exif_frame_config,
+            assets,
+        )
+    })
+}
+
+/// 変換の見積もりの作業。Exif フレームは実際に描く条件（設定と素材があり、pad）と同じにする
+fn convert_work(
+    config: &ProcessingConfig,
+    exif_frame_config: Option<&exif_frame::ExifFrameConfig>,
+    assets: Option<&exif_frame::ExifAssets>,
+) -> Work {
+    Work::Convert {
+        mode: config.mode,
+        max_width: config.max_width,
+        exif_frame: exif_frame_config.is_some()
+            && assets.is_some()
+            && config.mode == ConversionMode::Pad,
+    }
+}
+
+/// [`process_image`] の借りない版
+fn process_image_unbudgeted(
+    input_path: &Path,
+    header: &decode::Header,
     output_folder: &Path,
     config: &ProcessingConfig,
     exif_frame_config: Option<&exif_frame::ExifFrameConfig>,
@@ -394,9 +471,8 @@ pub fn process_image(
         }
     };
 
-    let format = decode::sniff(input_path)?;
     // 出力に載せる Exif の元。読めなければ Exif なしで書く（spec「付随処理の失敗」）
-    let source_exif = match output_exif::load(input_path, format) {
+    let source_exif = match output_exif::load(input_path, header.format) {
         Ok(exif) => exif,
         Err(e) => {
             warnings.push(format!(
@@ -408,7 +484,7 @@ pub fn process_image(
     };
 
     // ICC は sRGB へ変換済み（アルファを持ったまま変換してから、下で背景色へ合成する）
-    let (img, decode_warnings) = decode::open_with_warnings(input_path, format)?;
+    let (img, decode_warnings) = decode::open_with_warnings(input_path, header)?;
     warnings.extend(decode_warnings);
     let img = apply_orientation(img, exif.orientation);
     // JPEG にアルファは無い。モードを問わず、ここで背景色へ合成して確定させる
@@ -569,6 +645,15 @@ impl std::fmt::Display for Cancelled {
 impl std::error::Error for Cancelled {}
 
 /// バッチ処理（並列）
+///
+/// **専用の rayon プールで回す**（呼び出しのたびに作る。スレッド数はグローバルプールと同じ）。各ワーカーは
+/// 1 枚ごとにメモリ予算を借りてから変換し、予算を待つ間はそのスレッドが止まる。グローバルプールで回すと、
+/// 待っているワーカーがグローバルプールを塞ぎ、一括変換の最中に GUI のフォルダー一覧
+/// （`collect_image_entries` の `par_iter`）が出なくなる。
+///
+/// **1 枚の処理の中で rayon の並列 API（`par_iter`・`join`・`image` の `par_*`）を使わないこと。**
+/// 借りたワーカーが `join` の待ちで別のファイルの処理を盗むと、同じスレッドで入れ子に借りることになる
+/// （入れ子は到着順の下でデッドロックしうるので、借りる側が `Err` にする）。
 pub fn process_batch(
     files: &[PathBuf],
     output_folder: &Path,
@@ -577,29 +662,140 @@ pub fn process_batch(
     assets: Option<&exif_frame::ExifAssets>,
     on_progress: Option<ProgressCallback>,
 ) -> Vec<Result<ProcessResult>> {
+    process_batch_in(
+        budget::global(),
+        None,
+        files,
+        output_folder,
+        config,
+        exif_frame_config,
+        assets,
+        on_progress,
+    )
+}
+
+/// [`process_batch`] を、プロセス全体の予算の代わりに `budget` で回す。
+/// **計測とテスト用**（`core/examples/budget_batch.rs`）。CLI・GUI からは使わず、利用者向けの設定手段でもない
+/// （spec 2026-10-28 §6）
+#[doc(hidden)]
+pub fn process_batch_with_budget(
+    budget: &MemoryBudget,
+    files: &[PathBuf],
+    output_folder: &Path,
+    config: &ProcessingConfig,
+    exif_frame_config: Option<&exif_frame::ExifFrameConfig>,
+    assets: Option<&exif_frame::ExifAssets>,
+    on_progress: Option<ProgressCallback>,
+) -> Vec<Result<ProcessResult>> {
+    process_batch_in(
+        budget,
+        None,
+        files,
+        output_folder,
+        config,
+        exif_frame_config,
+        assets,
+        on_progress,
+    )
+}
+
+/// 1 枚の変換のピーク見積もり（バイト）。`exif_frame` は実際にフレームを描くか（pad のときだけ効く）。
+/// **計測用**（`core/examples/budget_batch.rs`）。CLI・GUI からは使わない
+#[doc(hidden)]
+pub fn estimate_conversion(
+    path: &Path,
+    config: &ProcessingConfig,
+    exif_frame: bool,
+) -> Result<u64> {
+    let work = Work::Convert {
+        mode: config.mode,
+        max_width: config.max_width,
+        exif_frame: exif_frame && config.mode == ConversionMode::Pad,
+    };
+    Ok(estimate(&decode::probe(path)?, &work))
+}
+
+/// [`process_batch`] の本体。予算と、プールのスレッド数（`None` で既定。テストだけが指定する）を受け取る
+///
+/// 各要素は ① 取り消しを確認 → 寸法を読む → ② 借りる → ③ もう一度取り消しを確認 → ④ 借りない版で変換、の順
+/// （spec 2026-10-28 §3）。③があるので、予算を待つ間に取り消されたワーカーは変換せずに抜ける。
+/// ①・③で抜けた要素は進捗のコールバックを呼ばない。寸法が読めない・上限を超えるなど②までの失敗は、
+/// その 1 枚の失敗として数える（従来の `process_image` の失敗と同じ扱い）。
+///
+/// **進捗のコールバックは借りたまま呼ぶ。** 予算で直列になっているとき、コールバックが決めた取り消しが、
+/// 次に借りるワーカーの③より先に見えるようにするため
+#[allow(clippy::too_many_arguments)]
+fn process_batch_in(
+    budget: &MemoryBudget,
+    threads: Option<usize>,
+    files: &[PathBuf],
+    output_folder: &Path,
+    config: &ProcessingConfig,
+    exif_frame_config: Option<&exif_frame::ExifFrameConfig>,
+    assets: Option<&exif_frame::ExifAssets>,
+    on_progress: Option<ProgressCallback>,
+) -> Vec<Result<ProcessResult>> {
+    let mut builder = rayon::ThreadPoolBuilder::new();
+    if let Some(n) = threads {
+        builder = builder.num_threads(n);
+    }
+    let pool = match builder.build() {
+        Ok(pool) => pool,
+        Err(e) => {
+            let reason = e.to_string();
+            return files
+                .iter()
+                .map(
+                    |_| Err(anyhow::anyhow!("{reason}").context("Failed to start the worker pool")),
+                )
+                .collect();
+        }
+    };
+
     let total = files.len();
-    let cancelled = Arc::new(AtomicBool::new(false));
+    let cancelled = AtomicBool::new(false);
     let processed_count = AtomicUsize::new(0);
+    let work = convert_work(config, exif_frame_config, assets);
 
-    files
-        .par_iter()
-        .map(|path| {
-            if cancelled.load(Ordering::Relaxed) {
-                return Err(anyhow::Error::new(Cancelled));
-            }
+    pool.install(|| {
+        files
+            .par_iter()
+            .map(|path| {
+                if cancelled.load(Ordering::Relaxed) {
+                    return Err(anyhow::Error::new(Cancelled));
+                }
 
-            let result = process_image(path, output_folder, config, exif_frame_config, assets);
+                let borrowed = decode::probe(path)
+                    .and_then(|header| Ok((budget.acquire(estimate(&header, &work))?, header)));
+                let (_lease, result) = match borrowed {
+                    Ok((lease, header)) => {
+                        if cancelled.load(Ordering::Relaxed) {
+                            return Err(anyhow::Error::new(Cancelled));
+                        }
+                        let result = process_image_unbudgeted(
+                            path,
+                            &header,
+                            output_folder,
+                            config,
+                            exif_frame_config,
+                            assets,
+                        );
+                        (Some(lease), result)
+                    }
+                    Err(e) => (None, Err(e)),
+                };
 
-            let current = processed_count.fetch_add(1, Ordering::SeqCst) + 1;
-            if let Some(ref cb) = on_progress
-                && !cb(current, total, path)
-            {
-                cancelled.store(true, Ordering::Relaxed);
-            }
+                let current = processed_count.fetch_add(1, Ordering::SeqCst) + 1;
+                if let Some(ref cb) = on_progress
+                    && !cb(current, total, path)
+                {
+                    cancelled.store(true, Ordering::Relaxed);
+                }
 
-            result
-        })
-        .collect()
+                result
+            })
+            .collect()
+    })
 }
 
 /// サムネイルの一辺の上限。これを超える要求は丸められる。
@@ -613,18 +809,21 @@ pub fn generate_thumbnail_base64(path: &Path, max_dimension: u32) -> Result<Stri
     use base64::Engine as _;
     let max_dimension = max_dimension.min(THUMBNAIL_MAX_DIMENSION);
 
-    // 出力と同じく Orientation を適用する。適用しないとサムネイルと変換結果の向きがずれる。
-    let img = open_image_oriented(path)
-        .with_context(|| format!("Failed to open image for thumbnail: {}", path.display()))?;
+    // 予算は縮小・エンコードまで借りる（原寸の画像がその間も生きている）
+    let jpeg_bytes = open_budgeted(budget::global(), path, &Work::View, |header| {
+        // 出力と同じく Orientation を適用する。適用しないとサムネイルと変換結果の向きがずれる。
+        let img = open_oriented_unbudgeted(path, header)
+            .with_context(|| format!("Failed to open image for thumbnail: {}", path.display()))?;
 
-    // `thumbnail` は小さい画像を拡大するので、縮小が要るときだけ通す
-    let (w, h) = img.dimensions();
-    let thumbnail = if w > max_dimension || h > max_dimension {
-        img.thumbnail(max_dimension, max_dimension)
-    } else {
-        img
-    };
-    let jpeg_bytes = encode::encode_jpeg(&thumbnail.into_rgb8(), 75, &encode::Embed::NONE)?;
+        // `thumbnail` は小さい画像を拡大するので、縮小が要るときだけ通す
+        let (w, h) = img.dimensions();
+        let thumbnail = if w > max_dimension || h > max_dimension {
+            img.thumbnail(max_dimension, max_dimension)
+        } else {
+            img
+        };
+        encode::encode_jpeg(&thumbnail.into_rgb8(), 75, &encode::Embed::NONE)
+    })?;
 
     Ok(base64::engine::general_purpose::STANDARD.encode(&jpeg_bytes))
 }
@@ -663,12 +862,15 @@ impl ExifFramePreviewSource {
         // 処理結果と食い違い、auto_placement が別の辺を選んでしまう。
         // Exif は 1 回だけ読んで向きとフレームの両方に使う（`open_image_oriented` と同じ扱い）
         let exif = read_exif_info(path).unwrap_or_default();
-        let img = apply_orientation(decode::open(path, decode::sniff(path)?)?, exif.orientation);
-        let image = img.resize(
-            max_dimension,
-            max_dimension,
-            image::imageops::FilterType::Triangle,
-        );
+        // 予算は縮小まで借りる（原寸の画像がその間も生きている）
+        let image = open_budgeted(budget::global(), path, &Work::View, |header| {
+            let img = apply_orientation(decode::open(path, header)?, exif.orientation);
+            Ok(img.resize(
+                max_dimension,
+                max_dimension,
+                image::imageops::FilterType::Triangle,
+            ))
+        })?;
         Ok(Self { image, exif })
     }
 }
@@ -719,17 +921,20 @@ pub fn generate_full_image_base64(path: &Path, max_width: u32, max_height: u32) 
     let max_width = max_width.min(2560);
     let max_height = max_height.min(1600);
 
-    let img = open_image_oriented(path)?;
+    // 予算は縮小・エンコードまで借りる（原寸の画像がその間も生きている）
+    let jpeg_bytes = open_budgeted(budget::global(), path, &Work::View, |header| {
+        let img = open_oriented_unbudgeted(path, header)?;
 
-    let (w, h) = img.dimensions();
+        let (w, h) = img.dimensions();
 
-    let resized = if w > max_width || h > max_height {
-        img.resize(max_width, max_height, image::imageops::FilterType::Lanczos3)
-    } else {
-        img
-    };
+        let resized = if w > max_width || h > max_height {
+            img.resize(max_width, max_height, image::imageops::FilterType::Lanczos3)
+        } else {
+            img
+        };
 
-    let jpeg_bytes = encode::encode_jpeg(&resized.to_rgb8(), 90, &encode::Embed::NONE)?;
+        encode::encode_jpeg(&resized.to_rgb8(), 90, &encode::Embed::NONE)
+    })?;
 
     Ok(base64::engine::general_purpose::STANDARD.encode(&jpeg_bytes))
 }
@@ -860,6 +1065,7 @@ mod tests {
     use super::*;
     use image::{ImageBuffer, Rgb};
     use std::fs;
+    use std::sync::Arc;
     use std::sync::atomic::AtomicUsize;
     use tempfile::TempDir;
 
@@ -2082,5 +2288,223 @@ mod tests {
             (input_w, input_h),
             "quality モードでは寸法が変わらない"
         );
+    }
+
+    // ---- メモリ予算（spec 2026-10-28 §3）。自分で作った予算を渡す ----
+
+    fn roomy_budget() -> MemoryBudget {
+        MemoryBudget::with_log(u64::MAX / 4, u64::MAX / 2)
+    }
+
+    #[test]
+    fn failed_open_returns_the_lease() {
+        // ヘッダだけ残した JPEG XL（probe は通り、デコードで Err）
+        let dir = TempDir::new().unwrap();
+        let jxl =
+            fs::read(Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/lossy_24mp.jxl"))
+                .unwrap();
+        let truncated = dir.path().join("head.jxl");
+        fs::write(&truncated, &jxl[..200]).unwrap();
+        let b = roomy_budget();
+        let r = open_budgeted(&b, &truncated, &Work::View, |h| {
+            open_oriented_unbudgeted(&truncated, h)
+        });
+        assert!(r.is_err());
+        assert!(
+            b.events().iter().any(|e| e.kind == EventKind::Acquire),
+            "前提: 借りてから失敗した"
+        );
+        assert_eq!(b.in_use(), 0);
+    }
+
+    #[test]
+    fn unreadable_file_is_rejected_without_borrowing() {
+        let dir = TempDir::new().unwrap();
+        let garbage = dir.path().join("garbage.jpg");
+        fs::write(&garbage, b"this is not an image at all").unwrap();
+        let b = roomy_budget();
+        assert!(
+            open_budgeted(&b, &garbage, &Work::View, |h| open_oriented_unbudgeted(
+                &garbage, h
+            ))
+            .is_err()
+        );
+        assert!(b.events().is_empty());
+    }
+
+    #[test]
+    fn image_over_the_limit_fails_with_the_memory_message() {
+        let dir = TempDir::new().unwrap();
+        let jpeg_64 = dir.path().join("a.jpg");
+        create_test_image(&jpeg_64, 64, 64);
+        let est = estimate(&decode::probe(&jpeg_64).unwrap(), &Work::View);
+        let b = MemoryBudget::new(est - 2, est - 1);
+        let err = open_budgeted(&b, &jpeg_64, &Work::View, |h| {
+            open_oriented_unbudgeted(&jpeg_64, h)
+        })
+        .unwrap_err();
+        assert!(err.downcast_ref::<OverMemoryLimit>().is_some(), "{err:#}");
+    }
+
+    fn waits(b: &MemoryBudget) -> usize {
+        b.events()
+            .iter()
+            .filter(|e| e.kind == EventKind::Wait)
+            .count()
+    }
+
+    fn acquires(b: &MemoryBudget) -> usize {
+        b.events()
+            .iter()
+            .filter(|e| e.kind == EventKind::Acquire)
+            .count()
+    }
+
+    fn wait_until(cond: impl Fn() -> bool) {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        while !cond() {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "条件が 10 秒以内に成り立たなかった"
+            );
+            std::thread::yield_now();
+        }
+    }
+
+    fn cancelled_count(results: &[Result<ProcessResult>]) -> usize {
+        results
+            .iter()
+            .filter(|r| matches!(r, Err(e) if e.downcast_ref::<Cancelled>().is_some()))
+            .count()
+    }
+
+    fn convert_estimate(path: &Path) -> u64 {
+        estimate(
+            &decode::probe(path).unwrap(),
+            &convert_work(&test_config(), None, None),
+        )
+    }
+
+    #[test]
+    fn cancel_while_waiting_writes_nothing() {
+        // 同じ大きさの JPEG 4 枚。予算は 1 枚ぶん（2 枚目は入らない）。プールは 2 スレッド
+        let dir = TempDir::new().unwrap();
+        let out = TempDir::new().unwrap();
+        let files: Vec<PathBuf> = (0..4)
+            .map(|i| {
+                let path = dir.path().join(format!("{i}.jpg"));
+                create_test_image(&path, 256, 256);
+                path
+            })
+            .collect();
+        let est = convert_estimate(&files[0]);
+        let b = Arc::new(MemoryBudget::with_log(est, est));
+        assert!(2 * est > b.budget(), "前提: 2 枚は同時に借りられない");
+        // 1 枚目の完了で呼ばれるコールバックは、誰かが待ちに入るまで待ってから false を返す
+        let cb: ProgressCallback = {
+            let b = Arc::clone(&b);
+            Box::new(move |_, _, _| {
+                wait_until(|| waits(&b) >= 1);
+                false
+            })
+        };
+        let results = process_batch_in(
+            &b,
+            Some(2),
+            &files,
+            out.path(),
+            &test_config(),
+            None,
+            None,
+            Some(cb),
+        );
+        assert_eq!(results.iter().filter(|r| r.is_ok()).count(), 1);
+        assert_eq!(cancelled_count(&results), 3);
+        assert_eq!(
+            fs::read_dir(out.path()).unwrap().count(),
+            1,
+            "待っていたワーカーは書いていない"
+        );
+        // 前提: 待ちに入ったワーカーが、③の確認を通って抜けた（待った後に借りてから抜けた）
+        assert!(acquires(&b) >= 2);
+        assert_eq!(b.in_use(), 0);
+    }
+
+    #[test]
+    fn waiting_batch_does_not_block_the_global_pool() {
+        let dir = TempDir::new().unwrap();
+        let out = TempDir::new().unwrap();
+        let n = rayon::current_num_threads();
+        let files: Vec<PathBuf> = (0..=n)
+            .map(|i| {
+                let path = dir.path().join(format!("{i}.jpg"));
+                create_test_image(&path, 64, 64);
+                path
+            })
+            .collect();
+        let est = convert_estimate(&files[0]);
+        let b = MemoryBudget::with_log(est, est);
+        // 予算をテストが全部借りておく
+        let held = b.acquire(est).unwrap();
+        std::thread::scope(|s| {
+            let batch = s.spawn(|| {
+                process_batch_in(
+                    &b,
+                    None,
+                    &files,
+                    out.path(),
+                    &test_config(),
+                    None,
+                    None,
+                    None,
+                )
+            });
+            // 一括変換の全ワーカー（グローバルプールと同じ n 本）が待ちに入った
+            wait_until(|| waits(&b) >= n);
+            // その最中に、グローバルプールで並列の処理（GUI のフォルダー一覧と同じ形）が終わる
+            let (tx, rx) = std::sync::mpsc::channel();
+            s.spawn(move || {
+                let sum: u64 = (0..10_000u64).into_par_iter().sum();
+                tx.send(sum).unwrap();
+            });
+            let sum = rx.recv_timeout(std::time::Duration::from_secs(10));
+            drop(held);
+            assert_eq!(
+                sum,
+                Ok(49_995_000),
+                "グローバルプールが一括変換の待ちで塞がれた"
+            );
+            let results = batch.join().unwrap();
+            assert!(results.iter().all(|r| r.is_ok()));
+        });
+    }
+
+    #[test]
+    fn image_over_the_limit_fails_and_the_rest_of_the_batch_continues() {
+        let dir = TempDir::new().unwrap();
+        let out = TempDir::new().unwrap();
+        let small = dir.path().join("small.jpg");
+        let big = dir.path().join("big.jpg");
+        create_test_image(&small, 64, 64);
+        create_test_image(&big, 2000, 2000);
+        let (small_est, big_est) = (convert_estimate(&small), convert_estimate(&big));
+        assert!(small_est < big_est);
+        // 予算・上限を 2 つの見積もりの間に置く
+        let limit = small_est + (big_est - small_est) / 2;
+        let b = MemoryBudget::new(limit, limit);
+        let results = process_batch_in(
+            &b,
+            Some(2),
+            &[small, big],
+            out.path(),
+            &test_config(),
+            None,
+            None,
+            None,
+        );
+        assert!(results[0].is_ok());
+        let err = results[1].as_ref().unwrap_err();
+        assert!(err.downcast_ref::<OverMemoryLimit>().is_some(), "{err:#}");
+        assert_eq!(fs::read_dir(out.path()).unwrap().count(), 1);
     }
 }

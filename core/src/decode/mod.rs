@@ -16,9 +16,18 @@
 //! 寸法だけ巨大に偽装したファイルで OOM になると abort で `catch_unwind` でも止まらないため、
 //! 画素を確保する前に宣言された寸法で弾く。
 //!
+//! **512MB の判定は [`probe`]（ヘッダだけを読む）で行い、[`open`] では行わない。** メモリ予算
+//! （spec 2026-10-28）は「probe → 見積もり → 借りる → open」の順で使うので、512MB を超えるものは
+//! 見積もりの前に弾かれる（メモリの少ない PC で単独処理の待ちに入ってから失敗させない）。[`open`] は
+//! デコーダが読んだ寸法・色型が [`Header`] と同じことを確かめるので、probe の判定が open にも効く。
+//!
 //! デコーダ内部の作業領域はこの 512MB に含めない（JPEG XL は 1 画素あたり出力の数倍を使い、
-//! 含めると 20MP 前後の普通の写真が開けなくなる）。ただし作業領域が宣言された寸法より
-//! 大きくなりうる箇所には、それぞれ別に上限を置く（[`JXL_WORKING_BYTES_PER_PIXEL`]）。
+//! 含めると 20MP 前後の普通の写真が開けなくなる）。作業領域とファイルの大きさは、メモリ予算の
+//! 見積もり（`budget::estimate`）に入れる:
+//! - **JPEG XL**: jxl-oxide の作業領域の上限（`max_alloc`）に、見積もりの作業領域の項
+//!   （`budget::estimate::jxl_working_bytes`）をそのまま渡す。作業領域は画像ヘッダではなくフレームの
+//!   寸法で確保され、フレームは画像より大きく宣言できる（`have_crop`）ので、上限が無いと画像 1x1・
+//!   フレーム巨大の数 KB のファイルで abort する
 //!
 //! AVIF は 2 段で判定する:
 //! 1. **デコード前**: AV1 のシーケンスヘッダが宣言する寸法（主画像とアルファのアイテムごと）から
@@ -28,9 +37,9 @@
 //! 2. **変換前**: 実際にデコードされた画像の大きさで、YUV→RGB 変換の出力が 512MB を
 //!    超えないか再度確かめる（`yuv.rs`）
 //!
-//! 残る上限: libdav1d 内部の作業領域（ピクチャ本体・フィルムグレインの複製・参照フレーム）は
-//! 「宣言寸法 × 深度 × 参照フレーム数」まで使いうるが、この 512MB には含めていない。
-//! 内部の作業領域を含めた予算は別の設計（姉妹 spec）で扱う。
+//! libdav1d 内部の作業領域（ピクチャ本体・フィルムグレインの複製・参照フレーム）は
+//! 「宣言寸法 × 深度 × 参照フレーム数」まで使いうる。この 512MB には含めず、メモリ予算の見積もりに
+//! 「宣言寸法 × 3 平面 × 深度 × 10 枚」と、ファイル全体の読み込みとアイテムの複製（ファイルの大きさの 2 倍）を入れる。
 
 mod av1;
 mod avif;
@@ -39,7 +48,7 @@ mod jxl;
 mod yuv;
 
 use anyhow::{Context, Result, anyhow, ensure};
-use image::{DynamicImage, ImageDecoder as _, ImageReader};
+use image::{ColorType, DynamicImage, ImageDecoder as _, ImageReader};
 use jxl_oxide::integration::JxlDecoder;
 use std::fs::File;
 use std::io::{BufReader, Cursor, Read};
@@ -87,11 +96,102 @@ fn sniff_bytes(head: &[u8]) -> Format {
     Format::Other
 }
 
+/// ヘッダだけから読んだ 1 枚の素性（[`probe`]）。メモリ予算の見積もり（`budget::estimate`）の入力で、
+/// デコード（[`open`]）はこれと同じ寸法・色型であることを確かめてから画素を読む
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct Header {
+    pub(crate) format: Format,
+    /// JPEG XL・AVIF は向き適用後、他は生の寸法（[`dimensions`] と同じ意味）
+    pub(crate) width: u32,
+    pub(crate) height: u32,
+    /// 出力の色型。AVIF は主画像の深度とアルファの有無から決めた上限（4:0:0 でも RGB とみなす）
+    pub(crate) color: ColorType,
+    pub(crate) file_len: u64,
+    pub(crate) avif: Option<AvifDeclared>,
+}
+
+/// AVIF のシーケンスヘッダの宣言（主画像とアルファ）。デコーダの `frame_size_limit` の根拠
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct AvifDeclared {
+    pub(crate) primary_pixels: u64,
+    pub(crate) alpha_pixels: Option<u64>,
+    pub(crate) bit_depth: u8,
+}
+
+const CHANGED: &str = "image changed between probing and decoding";
+
+/// 画素を読まずに 1 枚の素性を得る。**出力 512MB の上限の判定もここで済ませる**
+///
+/// 見積もり → 予算を借りる → デコード、の順で使う。512MB を超えるものを見積もりの前に弾くのは、
+/// メモリの少ない PC で「単独処理」の待ち（全員を止める）に入ってから失敗させないため。
+/// 寸法が読めなければ `Err`（fail-closed。見積もりを経ずにデコードへ入る経路を作らない）
+pub(crate) fn probe(path: &Path) -> Result<Header> {
+    let format = sniff(path)?;
+    guarded(|| match format {
+        Format::Jxl => {
+            let decoder = jxl_decoder(path)?;
+            image::Limits::default().reserve(decoder.total_bytes())?;
+            let (width, height) = decoder.dimensions();
+            Ok(Header {
+                format,
+                width,
+                height,
+                color: decoder.color_type(),
+                file_len: std::fs::metadata(path)?.len(),
+                avif: None,
+            })
+        }
+        // ファイル全体を読むのは、宣言がアイテムのデータ（シーケンスヘッダ）にあるため。
+        // 読んだバイト列はデコードへ持ち越さない: 予算を待つワーカーが予算外のバイト列を抱えて並ぶことになる
+        Format::Avif => {
+            let data = std::fs::read(path)?;
+            let layout = avif::read_layout(Cursor::new(&data))?;
+            let (primary, alpha) = avif_items(&data)?;
+            frame_size_limits(primary, alpha)?;
+            let (width, height) = layout.oriented_dimensions();
+            let color = match (primary.bit_depth > 8, alpha.is_some()) {
+                (false, false) => ColorType::Rgb8,
+                (false, true) => ColorType::Rgba8,
+                (true, false) => ColorType::Rgb16,
+                (true, true) => ColorType::Rgba16,
+            };
+            Ok(Header {
+                format,
+                width,
+                height,
+                color,
+                file_len: data.len() as u64,
+                avif: Some(AvifDeclared {
+                    primary_pixels: primary.pixels,
+                    alpha_pixels: alpha.map(|a| a.pixels),
+                    bit_depth: primary.bit_depth,
+                }),
+            })
+        }
+        Format::Other => {
+            let decoder = ImageReader::open(path)?
+                .with_guessed_format()?
+                .into_decoder()?;
+            image::Limits::default().reserve(decoder.total_bytes())?;
+            let (width, height) = decoder.dimensions();
+            Ok(Header {
+                format,
+                width,
+                height,
+                color: decoder.color_type(),
+                file_len: std::fs::metadata(path)?.len(),
+                avif: None,
+            })
+        }
+    })
+    .with_context(|| format!("Failed to open image: {}", path.display()))
+}
+
 /// 画像をデコードする。JPEG XL / AVIF は形式固有の向きを適用済み、それ以外は向き未適用
 ///
 /// [`open_with_warnings`] の警告を捨てる包み（サムネイル・プレビュー用）。
-pub(crate) fn open(path: &Path, format: Format) -> Result<DynamicImage> {
-    open_with_warnings(path, format).map(|(img, _)| img)
+pub(crate) fn open(path: &Path, header: &Header) -> Result<DynamicImage> {
+    open_with_warnings(path, header).map(|(img, _)| img)
 }
 
 /// [`open`] と同じくデコードし、ICC の扱いで起きた事象を警告として返す
@@ -100,31 +200,45 @@ pub(crate) fn open(path: &Path, format: Format) -> Result<DynamicImage> {
 /// ICC の失敗は警告にして続け、`Err` にしない（spec 2026-10-20「付随処理の失敗」）。
 /// JPEG XL / AVIF は色管理をしない（spec「やらないこと」）ので警告は常に空。
 ///
-/// **`into_decoder` は `ImageReader::decode` と違ってメモリ予算を `reserve` しない。**
-/// 画素を確保する前に、JPEG XL と同じく自分で `reserve` する（寸法だけ巨大な PNG で 512MiB を外さない）。
+/// **出力 512MB の上限は [`probe`] が判定済みで、ここでは判定しない。** 代わりに、デコーダが読んだ
+/// 寸法・色型（AVIF は宣言とファイルの大きさ）が `header` と同じことを確かめる。ヘッダを 2 回読むので、
+/// その間にファイルが差し替わると、見積もりと無関係な大きさを開くことになるため
 pub(crate) fn open_with_warnings(
     path: &Path,
-    format: Format,
+    header: &Header,
 ) -> Result<(DynamicImage, Vec<String>)> {
     let mut warnings = Vec::new();
-    let img = match format {
+    let img = match header.format {
         Format::Jxl => guarded(|| {
-            let decoder = jxl_decoder(path)?;
-            image::Limits::default().reserve(decoder.total_bytes())?;
+            let mut decoder = jxl_decoder(path)?;
+            ensure!(
+                decoder.dimensions() == (header.width, header.height)
+                    && decoder.color_type() == header.color,
+                CHANGED
+            );
+            // 作業領域の上限は見積もりの作業領域の項そのもの。デコードを始める前に設定すれば効く
+            let mut limits = image::Limits::no_limits();
+            limits.max_alloc = Some(crate::budget::estimate::jxl_working_bytes(header));
+            decoder.set_limits(limits)?;
             Ok(DynamicImage::from_decoder(decoder)?)
         }),
         Format::Avif => guarded(|| {
             let data = std::fs::read(path)?;
             let layout = avif::read_layout(Cursor::new(&data))?;
             let parsed = avif_parse::read_avif(&mut data.as_slice())?;
-            let limits = frame_size_limits(
-                avif::declared(&parsed.primary_item)?,
-                parsed
-                    .alpha_item
-                    .as_deref()
-                    .map(avif::declared)
-                    .transpose()?,
-            )?;
+            let (primary, alpha) = declared_items(&parsed)?;
+            ensure!(
+                data.len() as u64 == header.file_len
+                    && layout.oriented_dimensions() == (header.width, header.height)
+                    && header.avif
+                        == Some(AvifDeclared {
+                            primary_pixels: primary.pixels,
+                            alpha_pixels: alpha.map(|a| a.pixels),
+                            bit_depth: primary.bit_depth,
+                        }),
+                CHANGED
+            );
+            let limits = frame_size_limits(primary, alpha)?;
             let color = av1::decode(&parsed.primary_item, limits.primary)?;
             let alpha = match (&parsed.alpha_item, limits.alpha) {
                 (Some(a), Some(limit)) => Some(av1::decode(a, limit)?),
@@ -142,6 +256,11 @@ pub(crate) fn open_with_warnings(
             let mut decoder = ImageReader::open(path)?
                 .with_guessed_format()?
                 .into_decoder()?;
+            ensure!(
+                decoder.dimensions() == (header.width, header.height)
+                    && decoder.color_type() == header.color,
+                CHANGED
+            );
             let icc = decoder.icc_profile().unwrap_or_else(|e| {
                 warnings.push(format!(
                     "Ignoring unreadable ICC profile in {}: {e}",
@@ -149,7 +268,6 @@ pub(crate) fn open_with_warnings(
                 ));
                 None
             });
-            image::Limits::default().reserve(decoder.total_bytes())?;
             let img = DynamicImage::from_decoder(decoder)?;
             Ok(crate::color::to_srgb(
                 img,
@@ -208,32 +326,29 @@ fn jxl_decoder(path: &Path) -> Result<JxlDecoder<impl Read>> {
         signature == JXL_CODESTREAM,
         "JPEG XL container does not hold a bare codestream"
     );
-    let mut decoder = JxlDecoder::with_thread_pool(
+    Ok(JxlDecoder::with_thread_pool(
         Cursor::new(signature).chain(codestream),
         jxl_oxide::JxlThreadPool::none(),
-    )?;
-    let (width, height) = decoder.dimensions();
-    let mut limits = image::Limits::no_limits();
-    // 上限値そのものの見直しは別の spec で扱う。ここでは算術が溢れないようにするだけ
-    limits.max_alloc = Some(
-        (u64::from(width) * u64::from(height))
-            .saturating_mul(JXL_WORKING_BYTES_PER_PIXEL)
-            .saturating_add(JXL_WORKING_BASE),
-    );
-    decoder.set_limits(limits)?;
-    Ok(decoder)
+    )?)
 }
 
-/// jxl-oxide の作業領域の上限（画像の 1 画素あたり）
-///
-/// 作業領域は画像ヘッダの寸法ではなくフレームの寸法で確保される。フレームは画像より
-/// 大きく宣言できる（`have_crop`）ので、出力の 512MB 判定だけでは、画像 1x1・フレーム
-/// 巨大の数 KB のファイルで abort する。上限を画像の寸法に比例させて、超えたら jxl-oxide に
-/// Err を返させる。6000x4000 で実測した必要量は、非可逆 RGB 8bit で 24〜32B、
-/// 16bit RGBA で 32〜40B（可逆はこれ以下）。余裕を見て 64B
-const JXL_WORKING_BYTES_PER_PIXEL: u64 = 64;
-/// 寸法によらない作業領域（小さい画像でも要るぶん）
-const JXL_WORKING_BASE: u64 = 64 << 20;
+/// AVIF の主画像とアルファのアイテムが宣言する寸法と深度
+fn declared_items(
+    parsed: &avif_parse::AvifData,
+) -> Result<(avif::Declared, Option<avif::Declared>)> {
+    Ok((
+        avif::declared(&parsed.primary_item)?,
+        parsed
+            .alpha_item
+            .as_deref()
+            .map(avif::declared)
+            .transpose()?,
+    ))
+}
+
+fn avif_items(data: &[u8]) -> Result<(avif::Declared, Option<avif::Declared>)> {
+    declared_items(&avif_parse::read_avif(&mut &data[..])?)
+}
 
 /// AVIF のデコーダに渡す `frame_size_limit`（画素数）。主画像とアルファで別々に持つ
 #[derive(Debug)]
@@ -315,6 +430,95 @@ mod tests {
         );
         assert_eq!(sniff_bytes(&[0xFF, 0xD8, 0xFF]), Format::Other);
         assert_eq!(sniff_bytes(&[]), Format::Other);
+    }
+
+    fn fixture(name: &str) -> std::path::PathBuf {
+        Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/fixtures")
+            .join(name)
+    }
+
+    fn write_png(path: &Path, width: u32, height: u32) {
+        image::RgbImage::from_pixel(width, height, image::Rgb([128, 96, 64]))
+            .save(path)
+            .unwrap();
+    }
+
+    #[test]
+    fn decode_rejects_a_file_changed_after_probe() {
+        let dir = tempfile::tempdir().unwrap();
+        let png_a = dir.path().join("a.png");
+        let png_b = dir.path().join("b.png");
+        write_png(&png_a, 64, 64);
+        write_png(&png_b, 32, 32);
+        // 形式ごとに (A, 寸法の違う B)
+        let pairs = [
+            (fixture("rotated.jxl"), fixture("lossy_24mp.jxl"), "a.jxl"),
+            (
+                fixture("orient_1.avif"),
+                fixture("avif/p8_420_lim_unspec.avif"),
+                "a.avif",
+            ),
+            (png_a, png_b, "a2.png"),
+        ];
+        for (a, b, name) in pairs {
+            // 前提: B は単独なら開ける
+            open(&b, &probe(&b).unwrap()).unwrap();
+            let path = dir.path().join(name);
+            std::fs::copy(&a, &path).unwrap();
+            let header = probe(&path).unwrap();
+            std::fs::copy(&b, &path).unwrap();
+            let err = open(&path, &header).unwrap_err();
+            assert!(
+                format!("{err:#}").contains("image changed between probing and decoding"),
+                "{name}: {err:#}"
+            );
+        }
+    }
+
+    #[test]
+    fn over_output_limit_is_rejected_by_probe_before_borrowing() {
+        for name in ["over_limit.jxl", "over_limit.png", "avif/over_limit.avif"] {
+            let path = fixture(name);
+            // 前提: 寸法はヘッダから読める（壊れたファイルとして落ちているのではない）
+            assert!(dimensions(&path, sniff(&path).unwrap()).is_ok(), "{name}");
+            assert!(probe(&path).is_err(), "{name}");
+        }
+        let err = probe(&fixture("avif/over_limit.avif")).unwrap_err();
+        assert!(
+            format!("{err:#}").contains("AVIF declares a size over the 512MB output limit"),
+            "{err:#}"
+        );
+    }
+
+    #[test]
+    fn unreadable_dimensions_fail_closed() {
+        let dir = tempfile::tempdir().unwrap();
+        let garbage = dir.path().join("garbage.jpg");
+        std::fs::write(&garbage, b"this is not an image at all").unwrap();
+        let empty = dir.path().join("empty.jxl");
+        std::fs::write(&empty, b"").unwrap();
+        // ftyp の途中で切った AVIF（meta も mdat も無い）
+        let avif = std::fs::read(fixture("orient_1.avif")).unwrap();
+        let cut = dir.path().join("cut.avif");
+        std::fs::write(&cut, &avif[..16]).unwrap();
+        for path in [garbage, empty, cut] {
+            assert!(probe(&path).is_err(), "{}", path.display());
+        }
+    }
+
+    #[test]
+    fn header_only_files_pass_probe_and_fail_to_decode() {
+        // ヘッダが読める壊れたファイルを、見積もりの前に落とさない（デコードで 1 枚の Err になる）
+        let dir = tempfile::tempdir().unwrap();
+        let jxl = std::fs::read(fixture("lossy_24mp.jxl")).unwrap();
+        let head = dir.path().join("head.jxl");
+        std::fs::write(&head, &jxl[..200]).unwrap();
+        // crash.avif はタイルデータの中を壊したもの（宣言は読める）
+        for path in [head, fixture("avif/crash.avif")] {
+            let header = probe(&path).unwrap();
+            assert!(open(&path, &header).is_err(), "{}", path.display());
+        }
     }
 
     fn d(pixels: u64, bit_depth: u8) -> avif::Declared {
