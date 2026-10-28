@@ -152,7 +152,7 @@ fn property_indices(iprp: &[([u8; 4], &[u8])], item: u32) -> Result<Vec<usize>> 
 }
 
 /// アイテムの AV1 データが宣言するフレームの寸法とビット深度（シーケンスヘッダの値）
-#[derive(Debug)]
+#[derive(Debug, Clone, Copy)]
 pub(super) struct Declared {
     /// `max_frame_width × max_frame_height`
     pub pixels: u64,

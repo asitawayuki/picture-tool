@@ -13,6 +13,8 @@
 //! - **入れ子で借りない。** 1 枚の処理の中で 2 度借りると、到着順の下でデッドロックしうる。
 //!   同じスレッドが借りたまま再び借りようとしたら `Err` にする（予算が別でも同じ）
 
+pub(crate) mod estimate;
+
 use anyhow::{Result, bail};
 use std::cell::Cell;
 use std::fmt;

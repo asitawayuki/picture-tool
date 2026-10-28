@@ -292,7 +292,7 @@ pub fn oriented_dimensions((width, height): (u32, u32), orientation: Option<u16>
 /// 生の `image::open` を直接使うと向きが正規化されず、プレビューと出力がずれる。
 /// 表示・処理を問わず、画像を開く入口はこの関数に揃えること。
 pub fn open_image_oriented(path: &Path) -> Result<DynamicImage> {
-    let img = decode::open(path, decode::sniff(path)?)?;
+    let img = decode::open(path, &decode::probe(path)?)?;
     let orientation = read_exif_info(path).ok().and_then(|info| info.orientation);
     Ok(apply_orientation(img, orientation))
 }
@@ -396,9 +396,9 @@ pub fn process_image(
         }
     };
 
-    let format = decode::sniff(input_path)?;
+    let header = decode::probe(input_path)?;
     // 出力に載せる Exif の元。読めなければ Exif なしで書く（spec「付随処理の失敗」）
-    let source_exif = match output_exif::load(input_path, format) {
+    let source_exif = match output_exif::load(input_path, header.format) {
         Ok(exif) => exif,
         Err(e) => {
             warnings.push(format!(
@@ -410,7 +410,7 @@ pub fn process_image(
     };
 
     // ICC は sRGB へ変換済み（アルファを持ったまま変換してから、下で背景色へ合成する）
-    let (img, decode_warnings) = decode::open_with_warnings(input_path, format)?;
+    let (img, decode_warnings) = decode::open_with_warnings(input_path, &header)?;
     warnings.extend(decode_warnings);
     let img = apply_orientation(img, exif.orientation);
     // JPEG にアルファは無い。モードを問わず、ここで背景色へ合成して確定させる
@@ -665,7 +665,7 @@ impl ExifFramePreviewSource {
         // 処理結果と食い違い、auto_placement が別の辺を選んでしまう。
         // Exif は 1 回だけ読んで向きとフレームの両方に使う（`open_image_oriented` と同じ扱い）
         let exif = read_exif_info(path).unwrap_or_default();
-        let img = apply_orientation(decode::open(path, decode::sniff(path)?)?, exif.orientation);
+        let img = apply_orientation(decode::open(path, &decode::probe(path)?)?, exif.orientation);
         let image = img.resize(
             max_dimension,
             max_dimension,

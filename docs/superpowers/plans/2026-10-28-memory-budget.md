@@ -1012,6 +1012,36 @@ j33 0.18、j33p 6.13、p33 0.00、p33a 0.00、p33x16 0.00、w33 1.50、w33a 6.50
 
 ### Task 4: 見積もりの値とガードを外したとき
 
+- `cargo test -p picture-tool-core --lib` → 318 passed。`make check` exit 0
+- **x66 の見積もり**（6656×9984、ファイル 5,100,000 バイト、`Work::Convert { Pad, None, exif_frame: true }`。実装から取った値。
+  どちらも最大の区間はデコード中）:
+  - 16bit RGB: **2,530,988,512**（うち `jxl_working_bytes` 2,127,167,488）
+  - 16bit RGBA: **3,328,430,560**（うち `jxl_working_bytes` 2,791,702,528）
+  - どちらも 8GB の PC の予算 4,026,531,840 以下（RGBA で約 17% の余裕）
+- **寸法の比較を外す**（`open_with_warnings` の `ensure!(.., CHANGED)` を形式ごとに `true ||` にする）→ 3 形式とも
+  `decode_rejects_a_file_changed_after_probe` が落ちた。AVIF・PNG は差し替え後のファイルが `Ok` で開けて `unwrap_err` で落ち、
+  JPEG XL は `Err` だが理由が `failed to allocate 96000028 byte(s)`（20×40 の `Header` から導いた `max_alloc` が 6000×4000 の
+  デコードを止めた）で、文言の照合で落ちた。戻して PASS
+- **`max_alloc` を x66 の最小値の 1/2（810,024,960）に固定**して release の `avif_probe` で x66 を開くと
+  `Err ... failed to allocate 265814044 byte(s)`（終了コード 1）。戻すと `Ok 6656x9984 Rgb16`（x66a も `Ok 6656x9984 Rgba16`）
+- 計画から変えたこと:
+  - **縮小の中間バッファを区間に足した**（Task 3 Step 5）。pad の前段縮小・crop の最終縮小・Exif フレームの写真の縮小・
+    ビューアーの縮小。`estimates_cover_the_measured_peaks` に `--max-width` の 2 件を入れた
+  - **`flatten_alpha` の区間は「O ＋ 4P」と「7P」の大きいほう**（計画は P×4 ＋ P×3 だけ）。16bit RGBA は `into_rgba8` が
+    元の 8P を残したまま 4P を作る
+  - **変換の区間・エンコードの区間はキャンバス 1 画素あたり 3 ＋ 12 = 15B**（`into_rgb8` の複製とエンコーダ）。
+    フレームの RGBA キャンバスから RGB8 へ移す間（4 ＋ 3 = 7B）はこれ以下
+  - **AVIF は向きの複製（`Layout::apply`）をデコード中の区間に常に足す**（`Header` に向きを持たせない）。アルファのアイテムの
+    深度は宣言に無いので 2 バイトとみなす
+  - **AVIF の `open` はファイルの大きさも `Header` と比べる**（見積もりのファイルの項 2F の根拠を保つ）
+  - **差し替えの AVIF の組は `orient_1.avif` → `avif/p8_420_lim_unspec.avif`（33×17）**。計画の `avif/base_64x32.avif` は
+    `orient_1.avif` と同じ 64×32 で、寸法の比較では検知できない（寸法が同じなら見積もりも成り立つので検知しなくてよい）
+  - **ヘッダだけ残した AVIF（mdat の中身を切ったもの）は `probe` が `Err`**（宣言がアイテムのデータにあるので読めない。
+    fail-closed のとおり）。`probe` は通り `open` で落ちる AVIF には、タイルデータを壊した `avif/crash.avif` を使った
+    （`header_only_files_pass_probe_and_fail_to_decode`。既存の結合テストは公開 API しか呼べないので単体テストに置いた）
+  - 計画のテストに加えて、spec の「参照フレーム 8 枚」（`avif_estimate_covers_eight_reference_frames`）と「見積もりは実際の
+    ピーク以上」（`estimates_cover_the_measured_peaks`: Task 3 で測った 22 件の最大 RSS を下回らない）を置いた
+
 ### Task 5
 
 ### Task 6: 罠を戻したとき・プールのコスト
