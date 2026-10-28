@@ -1,7 +1,7 @@
 # メモリ予算 設計
 
 - 日付: 2026-10-28
-- 状態: 設計（実装計画は未作成）
+- 状態: 実装済み（計画と実施メモ: [plans/2026-10-28-memory-budget.md](../plans/2026-10-28-memory-budget.md)）
 - 関連: [AVIF デコーダの差し替え spec](2026-10-14-avif-decoder-replacement-design.md) の「やらないこと」で
   **姉妹 spec** として切り出したもの。同 spec と `core/src/decode/mod.rs` 冒頭の「メモリの上限」節が
   「別の設計（姉妹 spec）で扱う」と書いているのが本書

@@ -18,6 +18,12 @@
 //!
 //! # 呼び出し側が守ること
 //!
+//! - **画像を開く公開関数はメモリ予算を借りる**（spec 2026-10-28。[`process_image`]・[`process_batch`]・
+//!   [`open_image_oriented`]・[`generate_thumbnail_base64`]・[`generate_full_image_base64`]・
+//!   [`ExifFramePreviewSource::load`]）。**予算待ちで呼び出し元のスレッドが止まることがある。**
+//!   予算は物理メモリの半分で、プロセス全体で 1 つ。上限（物理メモリの 3/4）を超える 1 枚は
+//!   `OverMemoryLimit` の `Err` になる
+//!
 //! - **[`exif_frame::ExifAssets`] はバッチの前に 1 回だけ構築して使い回す。**
 //!   画像ごとに作るとモデルマップを毎回読み直す。
 //! - **このクレートは `eprintln!` しない。** 利用者に伝えるべき事象は

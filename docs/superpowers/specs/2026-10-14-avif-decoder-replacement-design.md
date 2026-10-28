@@ -4,7 +4,7 @@
 **対象**: `core/src/decode/`（AVIF のデコード経路）、`core/Cargo.toml`、CI、README のビルド要件と既知の制限
 **前提**: JPEG XL / AVIF 入力対応（`f1c88fd`〜`f3f8d26`、マージ `593a630`）。同機能には spec がなく、
 設計意図はコミット本文と `core/src/decode/mod.rs` 冒頭のモジュールコメントにある
-**姉妹 spec（未作成）**: メモリ予算（JPEG XL の作業領域上限が実効的でない・一括変換の並列数が無制限）。
+**姉妹 spec**: [メモリ予算](2026-10-28-memory-budget-design.md)（JPEG XL の作業領域上限が実効的でない・一括変換の並列数が無制限）。
 本 spec の範囲外。理由は「スコープ」
 
 ## 背景と目的
