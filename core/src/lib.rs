@@ -57,7 +57,6 @@ use serde::{Deserialize, Serialize};
 use std::fs::{self, File};
 use std::io::{BufWriter, Write};
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use walkdir::WalkDir;
 
@@ -640,6 +639,15 @@ impl std::fmt::Display for Cancelled {
 impl std::error::Error for Cancelled {}
 
 /// バッチ処理（並列）
+///
+/// **専用の rayon プールで回す**（呼び出しのたびに作る。スレッド数はグローバルプールと同じ）。各ワーカーは
+/// 1 枚ごとにメモリ予算を借りてから変換し、予算を待つ間はそのスレッドが止まる。グローバルプールで回すと、
+/// 待っているワーカーがグローバルプールを塞ぎ、一括変換の最中に GUI のフォルダー一覧
+/// （`collect_image_entries` の `par_iter`）が出なくなる。
+///
+/// **1 枚の処理の中で rayon の並列 API（`par_iter`・`join`・`image` の `par_*`）を使わないこと。**
+/// 借りたワーカーが `join` の待ちで別のファイルの処理を盗むと、同じスレッドで入れ子に借りることになる
+/// （入れ子は到着順の下でデッドロックしうるので、借りる側が `Err` にする）。
 pub fn process_batch(
     files: &[PathBuf],
     output_folder: &Path,
@@ -648,29 +656,99 @@ pub fn process_batch(
     assets: Option<&exif_frame::ExifAssets>,
     on_progress: Option<ProgressCallback>,
 ) -> Vec<Result<ProcessResult>> {
+    process_batch_in(
+        budget::global(),
+        None,
+        files,
+        output_folder,
+        config,
+        exif_frame_config,
+        assets,
+        on_progress,
+    )
+}
+
+/// [`process_batch`] の本体。予算と、プールのスレッド数（`None` で既定。テストだけが指定する）を受け取る
+///
+/// 各要素は ① 取り消しを確認 → 寸法を読む → ② 借りる → ③ もう一度取り消しを確認 → ④ 借りない版で変換、の順
+/// （spec 2026-10-28 §3）。③があるので、予算を待つ間に取り消されたワーカーは変換せずに抜ける。
+/// ①・③で抜けた要素は進捗のコールバックを呼ばない。寸法が読めない・上限を超えるなど②までの失敗は、
+/// その 1 枚の失敗として数える（従来の `process_image` の失敗と同じ扱い）。
+///
+/// **進捗のコールバックは借りたまま呼ぶ。** 予算で直列になっているとき、コールバックが決めた取り消しが、
+/// 次に借りるワーカーの③より先に見えるようにするため
+#[allow(clippy::too_many_arguments)]
+fn process_batch_in(
+    budget: &MemoryBudget,
+    threads: Option<usize>,
+    files: &[PathBuf],
+    output_folder: &Path,
+    config: &ProcessingConfig,
+    exif_frame_config: Option<&exif_frame::ExifFrameConfig>,
+    assets: Option<&exif_frame::ExifAssets>,
+    on_progress: Option<ProgressCallback>,
+) -> Vec<Result<ProcessResult>> {
+    let mut builder = rayon::ThreadPoolBuilder::new();
+    if let Some(n) = threads {
+        builder = builder.num_threads(n);
+    }
+    let pool = match builder.build() {
+        Ok(pool) => pool,
+        Err(e) => {
+            let reason = e.to_string();
+            return files
+                .iter()
+                .map(
+                    |_| Err(anyhow::anyhow!("{reason}").context("Failed to start the worker pool")),
+                )
+                .collect();
+        }
+    };
+
     let total = files.len();
-    let cancelled = Arc::new(AtomicBool::new(false));
+    let cancelled = AtomicBool::new(false);
     let processed_count = AtomicUsize::new(0);
+    let work = convert_work(config, exif_frame_config, assets);
 
-    files
-        .par_iter()
-        .map(|path| {
-            if cancelled.load(Ordering::Relaxed) {
-                return Err(anyhow::Error::new(Cancelled));
-            }
+    pool.install(|| {
+        files
+            .par_iter()
+            .map(|path| {
+                if cancelled.load(Ordering::Relaxed) {
+                    return Err(anyhow::Error::new(Cancelled));
+                }
 
-            let result = process_image(path, output_folder, config, exif_frame_config, assets);
+                let borrowed = decode::probe(path)
+                    .and_then(|header| Ok((budget.acquire(estimate(&header, &work))?, header)));
+                let (_lease, result) = match borrowed {
+                    Ok((lease, header)) => {
+                        if cancelled.load(Ordering::Relaxed) {
+                            return Err(anyhow::Error::new(Cancelled));
+                        }
+                        let result = process_image_unbudgeted(
+                            path,
+                            &header,
+                            output_folder,
+                            config,
+                            exif_frame_config,
+                            assets,
+                        );
+                        (Some(lease), result)
+                    }
+                    Err(e) => (None, Err(e)),
+                };
 
-            let current = processed_count.fetch_add(1, Ordering::SeqCst) + 1;
-            if let Some(ref cb) = on_progress
-                && !cb(current, total, path)
-            {
-                cancelled.store(true, Ordering::Relaxed);
-            }
+                let current = processed_count.fetch_add(1, Ordering::SeqCst) + 1;
+                if let Some(ref cb) = on_progress
+                    && !cb(current, total, path)
+                {
+                    cancelled.store(true, Ordering::Relaxed);
+                }
 
-            result
-        })
-        .collect()
+                result
+            })
+            .collect()
+    })
 }
 
 /// サムネイルの一辺の上限。これを超える要求は丸められる。
@@ -940,6 +1018,7 @@ mod tests {
     use super::*;
     use image::{ImageBuffer, Rgb};
     use std::fs;
+    use std::sync::Arc;
     use std::sync::atomic::AtomicUsize;
     use tempfile::TempDir;
 
@@ -2218,5 +2297,167 @@ mod tests {
         })
         .unwrap_err();
         assert!(err.downcast_ref::<OverMemoryLimit>().is_some(), "{err:#}");
+    }
+
+    fn waits(b: &MemoryBudget) -> usize {
+        b.events()
+            .iter()
+            .filter(|e| e.kind == EventKind::Wait)
+            .count()
+    }
+
+    fn acquires(b: &MemoryBudget) -> usize {
+        b.events()
+            .iter()
+            .filter(|e| e.kind == EventKind::Acquire)
+            .count()
+    }
+
+    fn wait_until(cond: impl Fn() -> bool) {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        while !cond() {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "条件が 10 秒以内に成り立たなかった"
+            );
+            std::thread::yield_now();
+        }
+    }
+
+    fn cancelled_count(results: &[Result<ProcessResult>]) -> usize {
+        results
+            .iter()
+            .filter(|r| matches!(r, Err(e) if e.downcast_ref::<Cancelled>().is_some()))
+            .count()
+    }
+
+    fn convert_estimate(path: &Path) -> u64 {
+        estimate(
+            &decode::probe(path).unwrap(),
+            &convert_work(&test_config(), None, None),
+        )
+    }
+
+    #[test]
+    fn cancel_while_waiting_writes_nothing() {
+        // 同じ大きさの JPEG 4 枚。予算は 1 枚ぶん（2 枚目は入らない）。プールは 2 スレッド
+        let dir = TempDir::new().unwrap();
+        let out = TempDir::new().unwrap();
+        let files: Vec<PathBuf> = (0..4)
+            .map(|i| {
+                let path = dir.path().join(format!("{i}.jpg"));
+                create_test_image(&path, 256, 256);
+                path
+            })
+            .collect();
+        let est = convert_estimate(&files[0]);
+        let b = Arc::new(MemoryBudget::with_log(est, est));
+        assert!(2 * est > b.budget(), "前提: 2 枚は同時に借りられない");
+        // 1 枚目の完了で呼ばれるコールバックは、誰かが待ちに入るまで待ってから false を返す
+        let cb: ProgressCallback = {
+            let b = Arc::clone(&b);
+            Box::new(move |_, _, _| {
+                wait_until(|| waits(&b) >= 1);
+                false
+            })
+        };
+        let results = process_batch_in(
+            &b,
+            Some(2),
+            &files,
+            out.path(),
+            &test_config(),
+            None,
+            None,
+            Some(cb),
+        );
+        assert_eq!(results.iter().filter(|r| r.is_ok()).count(), 1);
+        assert_eq!(cancelled_count(&results), 3);
+        assert_eq!(
+            fs::read_dir(out.path()).unwrap().count(),
+            1,
+            "待っていたワーカーは書いていない"
+        );
+        // 前提: 待ちに入ったワーカーが、③の確認を通って抜けた（待った後に借りてから抜けた）
+        assert!(acquires(&b) >= 2);
+        assert_eq!(b.in_use(), 0);
+    }
+
+    #[test]
+    fn waiting_batch_does_not_block_the_global_pool() {
+        let dir = TempDir::new().unwrap();
+        let out = TempDir::new().unwrap();
+        let n = rayon::current_num_threads();
+        let files: Vec<PathBuf> = (0..=n)
+            .map(|i| {
+                let path = dir.path().join(format!("{i}.jpg"));
+                create_test_image(&path, 64, 64);
+                path
+            })
+            .collect();
+        let est = convert_estimate(&files[0]);
+        let b = MemoryBudget::with_log(est, est);
+        // 予算をテストが全部借りておく
+        let held = b.acquire(est).unwrap();
+        std::thread::scope(|s| {
+            let batch = s.spawn(|| {
+                process_batch_in(
+                    &b,
+                    None,
+                    &files,
+                    out.path(),
+                    &test_config(),
+                    None,
+                    None,
+                    None,
+                )
+            });
+            // 一括変換の全ワーカー（グローバルプールと同じ n 本）が待ちに入った
+            wait_until(|| waits(&b) >= n);
+            // その最中に、グローバルプールで並列の処理（GUI のフォルダー一覧と同じ形）が終わる
+            let (tx, rx) = std::sync::mpsc::channel();
+            s.spawn(move || {
+                let sum: u64 = (0..10_000u64).into_par_iter().sum();
+                tx.send(sum).unwrap();
+            });
+            let sum = rx.recv_timeout(std::time::Duration::from_secs(10));
+            drop(held);
+            assert_eq!(
+                sum,
+                Ok(49_995_000),
+                "グローバルプールが一括変換の待ちで塞がれた"
+            );
+            let results = batch.join().unwrap();
+            assert!(results.iter().all(|r| r.is_ok()));
+        });
+    }
+
+    #[test]
+    fn image_over_the_limit_fails_and_the_rest_of_the_batch_continues() {
+        let dir = TempDir::new().unwrap();
+        let out = TempDir::new().unwrap();
+        let small = dir.path().join("small.jpg");
+        let big = dir.path().join("big.jpg");
+        create_test_image(&small, 64, 64);
+        create_test_image(&big, 2000, 2000);
+        let (small_est, big_est) = (convert_estimate(&small), convert_estimate(&big));
+        assert!(small_est < big_est);
+        // 予算・上限を 2 つの見積もりの間に置く
+        let limit = small_est + (big_est - small_est) / 2;
+        let b = MemoryBudget::new(limit, limit);
+        let results = process_batch_in(
+            &b,
+            Some(2),
+            &[small, big],
+            out.path(),
+            &test_config(),
+            None,
+            None,
+            None,
+        );
+        assert!(results[0].is_ok());
+        let err = results[1].as_ref().unwrap_err();
+        assert!(err.downcast_ref::<OverMemoryLimit>().is_some(), "{err:#}");
+        assert_eq!(fs::read_dir(out.path()).unwrap().count(), 1);
     }
 }

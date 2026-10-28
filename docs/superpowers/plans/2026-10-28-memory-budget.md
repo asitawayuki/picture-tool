@@ -1053,4 +1053,31 @@ j33 0.18、j33p 6.13、p33 0.00、p33a 0.00、p33x16 0.00、w33 1.50、w33a 6.50
 
 ### Task 6: 罠を戻したとき・プールのコスト
 
+- `cargo test -p picture-tool-core --lib` → 324 passed。`make check` exit 0
+- **`install` を外す**（グローバルプールで回す）→ `waiting_batch_does_not_block_the_global_pool` が
+  `left: Err(Timeout)`（10 秒の `recv_timeout`）で落ちた。戻して PASS
+- **③を外す**（`if false && cancelled...`）→ `cancel_while_waiting_writes_nothing` が出力 `left: 2, right: 1` で落ちた。戻して PASS
+- **専用プールを作るコスト**（release、20 スレッド、`process_batch` を 100 回。1 枚は 64×64 の JPEG、出力はその都度消す。3 回）:
+
+```text
+0 files x100: 0.119 s (1.194 ms/call)
+1 files x100: 0.176 s (1.761 ms/call)
+0 files x100: 0.118 s (1.179 ms/call)
+1 files x100: 0.166 s (1.664 ms/call)
+0 files x100: 0.120 s (1.197 ms/call)
+1 files x100: 0.105 s (1.051 ms/call)
+```
+
+  0 枚で 1 回あたり約 1.2ms（プールの作成と破棄）。1 枚でも 1.1〜1.8ms
+- **1 枚の処理の経路に rayon の並列 API が無いこと**（D-6）: `grep -rn "par_\|rayon::join\|rayon::scope" core/src` の
+  該当はコメント 2 行、`process_batch_in` の `par_iter`（要素の振り分けそのもの）、テストの `into_par_iter` だけ。
+  `image` 0.25.10 で rayon を使うのは `src/images/buffer_par.rs`（`par_pixels` などの明示的な API）だけで、core は呼んでいない。
+  `image` の `rayon` 機能は `exr?/rayon` も有効にするが、`exr` は無効（有効な形式は jpeg・png・webp）。
+  `cargo tree -p picture-tool-core -i rayon -e normal` で rayon に依存するのは `image` と core だけ
+- 計画から変えたこと: **進捗のコールバックは借りたまま呼ぶ。** 返してから呼ぶと、予算で直列になっているときに、
+  待っていたワーカーがコールバックの決めた取り消しより先に③を通り、取り消し後に 1 枚変換しうる。
+  `cancel_while_waiting_writes_nothing` もこの順序に依って決定的になる（借りたまま呼ばないと、2 本目のワーカーが待つ前に
+  1 本目が返し終えることがあり、テストが「待ち」を作れない）。②までの失敗（寸法が読めない・上限超え）は従来の
+  `process_image` の失敗と同じく進捗に数える
+
 ### Task 8: 完了の確かめ方
