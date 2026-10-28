@@ -17,10 +17,36 @@ use anyhow::{Result, bail};
 use std::cell::Cell;
 use std::fmt;
 use std::marker::PhantomData;
-use std::sync::{Condvar, Mutex, MutexGuard};
+use std::sync::{Condvar, Mutex, MutexGuard, OnceLock};
 use std::time::{Duration, Instant};
 
 const GB: f64 = 1e9;
+
+/// 総量が取れないときにみなす物理メモリの総量。「8GB の PC」（OS が報告する総量 7.5GiB。spec §1）と同じ
+const FALLBACK_TOTAL: u64 = 7 * (1 << 30) + (1 << 29);
+
+/// 物理メモリの総量から `(予算, 上限)` を決める。予算は総量の 1/2、上限は 3/4。
+/// 総量が取れない（`None`）ときは [`FALLBACK_TOTAL`] とみなす
+pub(crate) fn from_total(total: Option<u64>) -> (u64, u64) {
+    let total = total.unwrap_or(FALLBACK_TOTAL);
+    (total / 2, total / 4 * 3)
+}
+
+/// プロセス全体で 1 つの予算。初回に 1 回だけ物理メモリの総量を読む
+/// （「空き」ではなく「総量」を使うのは、結果を実行のたびに変えないため。spec §1）。
+/// テストはこれを差し替えず、自分で作った [`MemoryBudget`] を渡す
+pub(crate) fn global() -> &'static MemoryBudget {
+    static GLOBAL: OnceLock<MemoryBudget> = OnceLock::new();
+    GLOBAL.get_or_init(|| {
+        use sysinfo::{MemoryRefreshKind, RefreshKind, System};
+        let sys = System::new_with_specifics(
+            RefreshKind::nothing().with_memory(MemoryRefreshKind::nothing().with_ram()),
+        );
+        let total = Some(sys.total_memory()).filter(|&t| t > 0);
+        let (budget, limit) = from_total(total);
+        MemoryBudget::new(budget, limit)
+    })
+}
 
 /// 3/4 の上限を超える見積もりで弾いたときの `Err`。呼び出し側は `downcast_ref` で見分けられる
 #[derive(Debug)]
@@ -255,6 +281,23 @@ mod tests {
         ev.iter()
             .position(|e| e.kind == kind && e.estimate == estimate)
             .unwrap_or_else(|| panic!("{kind:?} {estimate} が記録に無い"))
+    }
+
+    #[test]
+    fn budget_is_half_and_limit_is_three_quarters_of_total() {
+        assert_eq!(
+            from_total(Some(62_000_000_000)),
+            (31_000_000_000, 46_500_000_000)
+        );
+    }
+
+    #[test]
+    fn unknown_total_is_treated_as_a_7_5_gib_machine() {
+        assert_eq!(from_total(None), (4_026_531_840, 6_039_797_760));
+        assert_eq!(
+            from_total(None),
+            from_total(Some(7 * (1 << 30) + (1 << 29)))
+        );
     }
 
     #[test]

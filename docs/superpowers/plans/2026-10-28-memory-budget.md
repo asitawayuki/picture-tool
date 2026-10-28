@@ -829,6 +829,20 @@ x66 × 20 枚は現行で約 40GB 以上を使うので、**利用者に他の�
 
 ### Task 2
 
+- `cargo test -p picture-tool-core --lib budget::` → 9 passed。`make check` exit 0
+- API は sysinfo 0.39.6 のソース（`src/common/system.rs`）で確かめた:
+  `System::new_with_specifics(RefreshKind::nothing().with_memory(MemoryRefreshKind::nothing().with_ram())).total_memory()`
+- `cargo tree -p picture-tool-core -e features -i sysinfo`（`--workspace` でも同じ。有効な機能は `system` だけ）:
+
+```text
+sysinfo v0.39.6
+└── sysinfo feature "system"
+    └── picture-tool-core v0.1.0 (/home/biwak/myShrimp/picture-tool/core)
+        ├── picture-tool-core feature "bundled-font"
+        │   └── picture-tool-core feature "default" (command-line)
+        └── picture-tool-core feature "default" (command-line)
+```
+
 ### Task 3: 入力・作業領域・現行の RSS・係数
 
 ### Task 4: 見積もりの値とガードを外したとき
