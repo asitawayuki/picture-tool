@@ -1044,6 +1044,13 @@ j33 0.18、j33p 6.13、p33 0.00、p33a 0.00、p33x16 0.00、w33 1.50、w33a 6.50
 
 ### Task 5
 
+- `cargo test -p picture-tool-core --lib` → 321 passed。`make check` exit 0（`mod budget;` の `allow(dead_code)` を外した状態）
+- 計画から変えたこと: **`#[doc(hidden)] pub use budget::{Event, EventKind, MemoryBudget, OverMemoryLimit};` を Task 7 から前倒しした。**
+  本番コード（非テストのビルド）では `with_log`・`events`・`budget`・`limit`・`in_use` を呼ぶのが Task 7 の example だけなので、
+  再公開が無いと `allow` を外した clippy が `never used` で落ちる
+- サムネイルの `with_context`（`Failed to open image for thumbnail: ...`）はデコードの失敗に残した。`probe` の失敗は
+  `probe` 自身の文脈（`Failed to open image: <path>`）で出る。この文言に依存しているコード・テストは無い（grep で確認）
+
 ### Task 6: 罠を戻したとき・プールのコスト
 
 ### Task 8: 完了の確かめ方

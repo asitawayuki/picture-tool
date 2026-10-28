@@ -34,7 +34,6 @@
 //! - 画像の読み込みに失敗したらスキップして次へ進む。1 枚の失敗でバッチを
 //!   止めない。
 
-#[allow(dead_code)] // 借りる場所を足すまでの一時的な許可
 mod budget;
 mod color;
 mod decode;
@@ -44,7 +43,14 @@ pub mod metadata;
 pub mod model_map;
 mod output_exif;
 
+/// メモリ予算の型。**計測とテスト用**（`core/examples/budget_batch.rs`）。CLI・GUI からは使わず、
+/// 利用者向けの設定手段でもない（spec 2026-10-28 §6）。[`OverMemoryLimit`] は、上限を超えて弾かれた
+/// 1 枚の `Err` を `downcast_ref` で見分けるのにも使える
+#[doc(hidden)]
+pub use budget::{Event, EventKind, MemoryBudget, OverMemoryLimit};
+
 use anyhow::{Context, Result};
+use budget::estimate::{Work, estimate};
 use image::{DynamicImage, GenericImageView};
 use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
@@ -291,8 +297,33 @@ pub fn oriented_dimensions((width, height): (u32, u32), orientation: Option<u16>
 ///
 /// 生の `image::open` を直接使うと向きが正規化されず、プレビューと出力がずれる。
 /// 表示・処理を問わず、画像を開く入口はこの関数に揃えること。
+///
+/// メモリ予算を借りてから開く（予算待ちで呼び出し元のスレッドが止まることがある）。
 pub fn open_image_oriented(path: &Path) -> Result<DynamicImage> {
-    let img = decode::open(path, &decode::probe(path)?)?;
+    open_budgeted(budget::global(), path, &Work::View, |header| {
+        open_oriented_unbudgeted(path, header)
+    })
+}
+
+/// 1 枚を開く処理を、その 1 枚のピーク見積もりを予算から借りてから行う（spec 2026-10-28 §3）
+///
+/// `probe` → 借りる → `f`。返すのは `f` が戻ったとき（成功・失敗・panic のどれでも）。
+/// `probe` で寸法が読めないものは借りずに `Err` にする。**`f` の中で借りる版の公開関数を呼ばない**
+/// （入れ子で借りると到着順の下でデッドロックしうるので、`acquire` が `Err` にする）
+fn open_budgeted<T>(
+    budget: &MemoryBudget,
+    path: &Path,
+    work: &Work,
+    f: impl FnOnce(&decode::Header) -> Result<T>,
+) -> Result<T> {
+    let header = decode::probe(path)?;
+    let _lease = budget.acquire(estimate(&header, work))?;
+    f(&header)
+}
+
+/// [`open_image_oriented`] の借りない版
+fn open_oriented_unbudgeted(path: &Path, header: &decode::Header) -> Result<DynamicImage> {
+    let img = decode::open(path, header)?;
     let orientation = read_exif_info(path).ok().and_then(|info| info.orientation);
     Ok(apply_orientation(img, orientation))
 }
@@ -370,8 +401,47 @@ fn flatten_alpha(img: DynamicImage, bg: BackgroundColor) -> DynamicImage {
 }
 
 /// 画像を処理
+///
+/// メモリ予算を借りてから処理する（予算待ちで呼び出し元のスレッドが止まることがある）。
 pub fn process_image(
     input_path: &Path,
+    output_folder: &Path,
+    config: &ProcessingConfig,
+    exif_frame_config: Option<&exif_frame::ExifFrameConfig>,
+    assets: Option<&exif_frame::ExifAssets>,
+) -> Result<ProcessResult> {
+    let work = convert_work(config, exif_frame_config, assets);
+    open_budgeted(budget::global(), input_path, &work, |header| {
+        process_image_unbudgeted(
+            input_path,
+            header,
+            output_folder,
+            config,
+            exif_frame_config,
+            assets,
+        )
+    })
+}
+
+/// 変換の見積もりの作業。Exif フレームは実際に描く条件（設定と素材があり、pad）と同じにする
+fn convert_work(
+    config: &ProcessingConfig,
+    exif_frame_config: Option<&exif_frame::ExifFrameConfig>,
+    assets: Option<&exif_frame::ExifAssets>,
+) -> Work {
+    Work::Convert {
+        mode: config.mode,
+        max_width: config.max_width,
+        exif_frame: exif_frame_config.is_some()
+            && assets.is_some()
+            && config.mode == ConversionMode::Pad,
+    }
+}
+
+/// [`process_image`] の借りない版
+fn process_image_unbudgeted(
+    input_path: &Path,
+    header: &decode::Header,
     output_folder: &Path,
     config: &ProcessingConfig,
     exif_frame_config: Option<&exif_frame::ExifFrameConfig>,
@@ -396,7 +466,6 @@ pub fn process_image(
         }
     };
 
-    let header = decode::probe(input_path)?;
     // 出力に載せる Exif の元。読めなければ Exif なしで書く（spec「付随処理の失敗」）
     let source_exif = match output_exif::load(input_path, header.format) {
         Ok(exif) => exif,
@@ -410,7 +479,7 @@ pub fn process_image(
     };
 
     // ICC は sRGB へ変換済み（アルファを持ったまま変換してから、下で背景色へ合成する）
-    let (img, decode_warnings) = decode::open_with_warnings(input_path, &header)?;
+    let (img, decode_warnings) = decode::open_with_warnings(input_path, header)?;
     warnings.extend(decode_warnings);
     let img = apply_orientation(img, exif.orientation);
     // JPEG にアルファは無い。モードを問わず、ここで背景色へ合成して確定させる
@@ -615,18 +684,21 @@ pub fn generate_thumbnail_base64(path: &Path, max_dimension: u32) -> Result<Stri
     use base64::Engine as _;
     let max_dimension = max_dimension.min(THUMBNAIL_MAX_DIMENSION);
 
-    // 出力と同じく Orientation を適用する。適用しないとサムネイルと変換結果の向きがずれる。
-    let img = open_image_oriented(path)
-        .with_context(|| format!("Failed to open image for thumbnail: {}", path.display()))?;
+    // 予算は縮小・エンコードまで借りる（原寸の画像がその間も生きている）
+    let jpeg_bytes = open_budgeted(budget::global(), path, &Work::View, |header| {
+        // 出力と同じく Orientation を適用する。適用しないとサムネイルと変換結果の向きがずれる。
+        let img = open_oriented_unbudgeted(path, header)
+            .with_context(|| format!("Failed to open image for thumbnail: {}", path.display()))?;
 
-    // `thumbnail` は小さい画像を拡大するので、縮小が要るときだけ通す
-    let (w, h) = img.dimensions();
-    let thumbnail = if w > max_dimension || h > max_dimension {
-        img.thumbnail(max_dimension, max_dimension)
-    } else {
-        img
-    };
-    let jpeg_bytes = encode::encode_jpeg(&thumbnail.into_rgb8(), 75, &encode::Embed::NONE)?;
+        // `thumbnail` は小さい画像を拡大するので、縮小が要るときだけ通す
+        let (w, h) = img.dimensions();
+        let thumbnail = if w > max_dimension || h > max_dimension {
+            img.thumbnail(max_dimension, max_dimension)
+        } else {
+            img
+        };
+        encode::encode_jpeg(&thumbnail.into_rgb8(), 75, &encode::Embed::NONE)
+    })?;
 
     Ok(base64::engine::general_purpose::STANDARD.encode(&jpeg_bytes))
 }
@@ -665,12 +737,15 @@ impl ExifFramePreviewSource {
         // 処理結果と食い違い、auto_placement が別の辺を選んでしまう。
         // Exif は 1 回だけ読んで向きとフレームの両方に使う（`open_image_oriented` と同じ扱い）
         let exif = read_exif_info(path).unwrap_or_default();
-        let img = apply_orientation(decode::open(path, &decode::probe(path)?)?, exif.orientation);
-        let image = img.resize(
-            max_dimension,
-            max_dimension,
-            image::imageops::FilterType::Triangle,
-        );
+        // 予算は縮小まで借りる（原寸の画像がその間も生きている）
+        let image = open_budgeted(budget::global(), path, &Work::View, |header| {
+            let img = apply_orientation(decode::open(path, header)?, exif.orientation);
+            Ok(img.resize(
+                max_dimension,
+                max_dimension,
+                image::imageops::FilterType::Triangle,
+            ))
+        })?;
         Ok(Self { image, exif })
     }
 }
@@ -721,17 +796,20 @@ pub fn generate_full_image_base64(path: &Path, max_width: u32, max_height: u32) 
     let max_width = max_width.min(2560);
     let max_height = max_height.min(1600);
 
-    let img = open_image_oriented(path)?;
+    // 予算は縮小・エンコードまで借りる（原寸の画像がその間も生きている）
+    let jpeg_bytes = open_budgeted(budget::global(), path, &Work::View, |header| {
+        let img = open_oriented_unbudgeted(path, header)?;
 
-    let (w, h) = img.dimensions();
+        let (w, h) = img.dimensions();
 
-    let resized = if w > max_width || h > max_height {
-        img.resize(max_width, max_height, image::imageops::FilterType::Lanczos3)
-    } else {
-        img
-    };
+        let resized = if w > max_width || h > max_height {
+            img.resize(max_width, max_height, image::imageops::FilterType::Lanczos3)
+        } else {
+            img
+        };
 
-    let jpeg_bytes = encode::encode_jpeg(&resized.to_rgb8(), 90, &encode::Embed::NONE)?;
+        encode::encode_jpeg(&resized.to_rgb8(), 90, &encode::Embed::NONE)
+    })?;
 
     Ok(base64::engine::general_purpose::STANDARD.encode(&jpeg_bytes))
 }
@@ -2084,5 +2162,61 @@ mod tests {
             (input_w, input_h),
             "quality モードでは寸法が変わらない"
         );
+    }
+
+    // ---- メモリ予算（spec 2026-10-28 §3）。自分で作った予算を渡す ----
+
+    fn roomy_budget() -> MemoryBudget {
+        MemoryBudget::with_log(u64::MAX / 4, u64::MAX / 2)
+    }
+
+    #[test]
+    fn failed_open_returns_the_lease() {
+        // ヘッダだけ残した JPEG XL（probe は通り、デコードで Err）
+        let dir = TempDir::new().unwrap();
+        let jxl =
+            fs::read(Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/lossy_24mp.jxl"))
+                .unwrap();
+        let truncated = dir.path().join("head.jxl");
+        fs::write(&truncated, &jxl[..200]).unwrap();
+        let b = roomy_budget();
+        let r = open_budgeted(&b, &truncated, &Work::View, |h| {
+            open_oriented_unbudgeted(&truncated, h)
+        });
+        assert!(r.is_err());
+        assert!(
+            b.events().iter().any(|e| e.kind == EventKind::Acquire),
+            "前提: 借りてから失敗した"
+        );
+        assert_eq!(b.in_use(), 0);
+    }
+
+    #[test]
+    fn unreadable_file_is_rejected_without_borrowing() {
+        let dir = TempDir::new().unwrap();
+        let garbage = dir.path().join("garbage.jpg");
+        fs::write(&garbage, b"this is not an image at all").unwrap();
+        let b = roomy_budget();
+        assert!(
+            open_budgeted(&b, &garbage, &Work::View, |h| open_oriented_unbudgeted(
+                &garbage, h
+            ))
+            .is_err()
+        );
+        assert!(b.events().is_empty());
+    }
+
+    #[test]
+    fn image_over_the_limit_fails_with_the_memory_message() {
+        let dir = TempDir::new().unwrap();
+        let jpeg_64 = dir.path().join("a.jpg");
+        create_test_image(&jpeg_64, 64, 64);
+        let est = estimate(&decode::probe(&jpeg_64).unwrap(), &Work::View);
+        let b = MemoryBudget::new(est - 2, est - 1);
+        let err = open_budgeted(&b, &jpeg_64, &Work::View, |h| {
+            open_oriented_unbudgeted(&jpeg_64, h)
+        })
+        .unwrap_err();
+        assert!(err.downcast_ref::<OverMemoryLimit>().is_some(), "{err:#}");
     }
 }
