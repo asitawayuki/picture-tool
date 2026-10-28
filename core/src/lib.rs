@@ -668,6 +668,47 @@ pub fn process_batch(
     )
 }
 
+/// [`process_batch`] を、プロセス全体の予算の代わりに `budget` で回す。
+/// **計測とテスト用**（`core/examples/budget_batch.rs`）。CLI・GUI からは使わず、利用者向けの設定手段でもない
+/// （spec 2026-10-28 §6）
+#[doc(hidden)]
+pub fn process_batch_with_budget(
+    budget: &MemoryBudget,
+    files: &[PathBuf],
+    output_folder: &Path,
+    config: &ProcessingConfig,
+    exif_frame_config: Option<&exif_frame::ExifFrameConfig>,
+    assets: Option<&exif_frame::ExifAssets>,
+    on_progress: Option<ProgressCallback>,
+) -> Vec<Result<ProcessResult>> {
+    process_batch_in(
+        budget,
+        None,
+        files,
+        output_folder,
+        config,
+        exif_frame_config,
+        assets,
+        on_progress,
+    )
+}
+
+/// 1 枚の変換のピーク見積もり（バイト）。`exif_frame` は実際にフレームを描くか（pad のときだけ効く）。
+/// **計測用**（`core/examples/budget_batch.rs`）。CLI・GUI からは使わない
+#[doc(hidden)]
+pub fn estimate_conversion(
+    path: &Path,
+    config: &ProcessingConfig,
+    exif_frame: bool,
+) -> Result<u64> {
+    let work = Work::Convert {
+        mode: config.mode,
+        max_width: config.max_width,
+        exif_frame: exif_frame && config.mode == ConversionMode::Pad,
+    };
+    Ok(estimate(&decode::probe(path)?, &work))
+}
+
 /// [`process_batch`] の本体。予算と、プールのスレッド数（`None` で既定。テストだけが指定する）を受け取る
 ///
 /// 各要素は ① 取り消しを確認 → 寸法を読む → ② 借りる → ③ もう一度取り消しを確認 → ④ 借りない版で変換、の順
